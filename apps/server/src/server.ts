@@ -87,6 +87,7 @@ import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
+import * as GitExplorer from "./git/GitExplorer.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -420,6 +421,9 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(VcsProvisioningService.layer.pipe(Layer.provide(layerVcsDriverRegistry))),
   Layer.provideMerge(layerGitWorkflow),
   Layer.provideMerge(layerReview),
+  Layer.provideMerge(
+    GitExplorer.layer.pipe(Layer.provide(GitVcsDriver.layer), Layer.provide(ProjectStore.layer)),
+  ),
   Layer.provideMerge(layerSourceControlRepositoryService),
   Layer.provideMerge(
     SourceControlSignIn.layer.pipe(Layer.provide(layerSourceControlProviderRegistry)),

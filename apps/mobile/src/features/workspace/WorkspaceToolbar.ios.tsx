@@ -1,6 +1,6 @@
 import { useActiveNewTask } from "../../state/active-new-task";
 import { Toolbar } from "../../components/ui/Toolbar";
-import { useFocusEffect, useIsFocused } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { isDuoDevice } from "../../lib/device-type";
@@ -30,6 +30,7 @@ export function WorkspaceToolbar(props: {
   readonly sidebar?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
+  const navigation = useNavigation();
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
   const sidebarTabs = useSidebarWorkspaceTabs();
@@ -184,6 +185,11 @@ export function WorkspaceToolbar(props: {
           header's own items, so an empty one would hide the Settings scope filter. */}
       {workspace.settingsOpen && !foldedSearch ? null : (
         <Toolbar placement="right">
+          <Toolbar.Button
+            accessibilityLabel="Git Explorer"
+            icon="point.topleft.down.curvedto.point.bottomright.up"
+            onPress={() => navigation.navigate("GitRepositories")}
+          />
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}

@@ -63,6 +63,10 @@ import { BrowserPreviewRouteScreen } from "./features/browser/BrowserPreviewRout
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
+import {
+  GitExplorerScreen,
+  GitRepositoriesScreen,
+} from "./features/git-explorer/GitExplorerScreen";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
@@ -910,6 +914,16 @@ const RootStackConfig = createWorkspaceStackNavigator({
         sheetAllowedDetents: formSheetDetents(0.5, 0.9),
         sheetGrabberVisible: true,
       },
+    }),
+    GitRepositories: createNativeStackScreen({
+      screen: GitRepositoriesScreen,
+      linking: "git",
+      options: SOLID_HEADER_OPTIONS,
+    }),
+    GitExplorer: createNativeStackScreen({
+      screen: GitExplorerScreen,
+      linking: "environments/:environmentId/projects/:projectId/git",
+      options: SOLID_HEADER_OPTIONS,
     }),
     GitOverview: createNativeStackScreen({
       screen: GitOverviewSheet,

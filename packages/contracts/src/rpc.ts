@@ -149,6 +149,17 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  GitExplorerOverviewInput,
+  GitExplorerOverviewResult,
+  GitExplorerHistoryInput,
+  GitExplorerHistoryResult,
+  GitExplorerDetailsInput,
+  GitExplorerDetailsResult,
+  GitExplorerPatchInput,
+  GitExplorerPatchResult,
+  GitExplorerError,
+} from "./gitExplorer.ts";
+import {
   ReviewBranchCommitsInput,
   ReviewBranchCommitsResult,
   ReviewDiffFileContentsInput,
@@ -451,6 +462,10 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  gitExplorerOverview: "git.explorerOverview",
+  gitExplorerHistory: "git.explorerHistory",
+  gitExplorerDetails: "git.explorerDetails",
+  gitExplorerPatch: "git.explorerPatch",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -1487,6 +1502,30 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsGitExplorerOverviewRpc = Rpc.make(WS_METHODS.gitExplorerOverview, {
+  payload: GitExplorerOverviewInput,
+  success: GitExplorerOverviewResult,
+  error: Schema.Union([GitExplorerError, EnvironmentAuthorizationError]),
+});
+
+const WsGitExplorerHistoryRpc = Rpc.make(WS_METHODS.gitExplorerHistory, {
+  payload: GitExplorerHistoryInput,
+  success: GitExplorerHistoryResult,
+  error: Schema.Union([GitExplorerError, EnvironmentAuthorizationError]),
+});
+
+const WsGitExplorerDetailsRpc = Rpc.make(WS_METHODS.gitExplorerDetails, {
+  payload: GitExplorerDetailsInput,
+  success: GitExplorerDetailsResult,
+  error: Schema.Union([GitExplorerError, EnvironmentAuthorizationError]),
+});
+
+const WsGitExplorerPatchRpc = Rpc.make(WS_METHODS.gitExplorerPatch, {
+  payload: GitExplorerPatchInput,
+  success: GitExplorerPatchResult,
+  error: Schema.Union([GitExplorerError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
@@ -2117,6 +2156,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
+  WsGitExplorerOverviewRpc,
+  WsGitExplorerHistoryRpc,
+  WsGitExplorerDetailsRpc,
+  WsGitExplorerPatchRpc,
+
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,

@@ -32,7 +32,8 @@ import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { SlidersHorizontalIcon } from "lucide-react";
+import { GitForkIcon, SlidersHorizontalIcon } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -222,6 +223,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   <div className="flex flex-col">
                     {show.branch ? (
                       <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
+                    ) : null}
+                    {show.branch ? (
+                      <ThreadDetailsControl
+                        render={
+                          <Link
+                            to="/git"
+                            search={{
+                              environmentId: props.environmentId,
+                              projectId: props.projectId,
+                              ...(props.worktreePath ? { worktreePath: props.worktreePath } : {}),
+                            }}
+                          />
+                        }
+                      >
+                        <GitForkIcon />
+                        Git Explorer
+                      </ThreadDetailsControl>
                     ) : null}
                     {show.git ? (
                       <GitActionsControl

@@ -68,6 +68,17 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("keeps repository history and patches behind filesystem read permission", () => {
+    for (const method of [
+      WS_METHODS.gitExplorerOverview,
+      WS_METHODS.gitExplorerHistory,
+      WS_METHODS.gitExplorerDetails,
+      WS_METHODS.gitExplorerPatch,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthFilesystemReadScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

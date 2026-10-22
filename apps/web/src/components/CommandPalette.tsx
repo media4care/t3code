@@ -1555,6 +1555,25 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:git-explorer",
+    searchTerms: ["git", "history", "graph", "commits", "branches", "diff", "working tree"],
+    title: "Open Git Explorer",
+    icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({
+        to: "/git",
+        search: contextualProjectRef
+          ? {
+              environmentId: contextualProjectRef.environmentId,
+              projectId: contextualProjectRef.projectId,
+            }
+          : {},
+      });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
     value: "action:usage",
     searchTerms: ["usage", "use", "tokens", "cost", "spend", "limits", "stats", "analytics"],
     title: "Open usage",

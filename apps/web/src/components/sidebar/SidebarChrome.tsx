@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, GitForkIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -242,6 +242,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
   };
+  const handleGitExplorerClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/git" });
+  };
 
   const handleUsageClick = () => {
     if (isMobile) {
@@ -278,6 +282,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handlePullRequestsClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<GitForkIcon />}
+            label="Git Explorer"
+            onClick={handleGitExplorerClick}
+          />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

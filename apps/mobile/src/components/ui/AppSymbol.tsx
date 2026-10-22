@@ -116,6 +116,7 @@ import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
 import IconShieldQuestion from "@tabler/icons-react-native/IconShieldQuestion";
+import IconTag from "@tabler/icons-react-native/IconTag";
 import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
@@ -187,6 +188,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "face.smiling": IconMoodPlus,
   tag: IconTag,
   ticket: IconTicket,
+  tag: IconTag,
   cloud: IconCloud,
   cube: IconBox,
   "chevron.down": IconChevronDown,

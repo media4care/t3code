@@ -518,6 +518,14 @@
     "./provider-clients": {
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
+    },
+    "./git-explorer": {
+      "types": "./src/gitExplorer.ts",
+      "default": "./src/gitExplorer.ts"
+    },
+    "./state/git-explorer": {
+      "types": "./src/state/gitExplorer.ts",
+      "default": "./src/state/gitExplorer.ts"
     }
   },
   "scripts": {

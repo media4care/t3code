@@ -20,6 +20,23 @@ commit links follow your **Open links in** setting; on web, when that opens a ne
 shows an **Open link** button. Command/Ctrl+Click always opens the link in your browser. Commit links follow the **Open pull requests in T3 Code**
 setting in **Settings → Diffs**.
 
+## Explore repository history
+
+Open **Git Explorer** from the sidebar on web or desktop, or the workspace toolbar on mobile,
+and choose a project. The graph includes local branches, remote-tracking branches, tags, and worktree
+HEADs. Select a commit to review its files and diffs; merge commits compare with their first
+parent. Select **Working Tree** to review staged, unstaged, and untracked files. Changing the
+review worktree does not check out a branch or change any files.
+
+Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
+base commit, including saved untracked files. Stashes are listed separately from the graph.
+Reviewing a stash does not apply or remove it.
+
+Ahead and behind counts compare each branch with its configured upstream using locally stored
+refs. The last recorded fetch time, when available, describes local fetch information; it does
+not confirm the remote's current state. **Refresh** rereads local Git data. Ask an agent to fetch
+if you need newer remote-tracking information. Git Explorer only reads the repository.
+
 ## Connect an account
 
 Install Git and configure authentication on the machine running your T3 Code server. For a remote
