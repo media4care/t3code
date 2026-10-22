@@ -5097,6 +5097,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     remoteBranchExists,
     resolveRemoteTrackingCommit,
     resolveWorktreeBaseRemote,
+    invalidateRefs: invalidateListRefsSnapshot,
     fetchWorktreeBaseCommit: Effect.fnUntraced(function* (input) {
       return yield* withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input));
     }),

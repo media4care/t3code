@@ -1,17 +1,30 @@
-import { RegistryContext } from "@effect/atom-react";
-import type { EnvironmentId, GitExplorerOverviewInput, ProjectId } from "@t3tools/contracts";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import type {
+  EnvironmentId,
+  GitExplorerBranchStatus,
+  GitExplorerOverviewInput,
+  GitExplorerRef,
+  ProjectId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FolderGit2Icon, GitBranchIcon } from "lucide-react";
 import { useContext, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
+import { ensureLocalApi } from "~/localApi";
 import { observeResize } from "~/lib/observeResize";
 import { inferProjectTitleFromPath } from "~/lib/projectPaths";
 import { cn } from "~/lib/utils";
 import { Route } from "~/routes/git";
 import { useProjects } from "~/state/entities";
-import { useEnvironments } from "~/state/environments";
+import { useEnvironment, useEnvironments } from "~/state/environments";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Button } from "../ui/button";
@@ -19,12 +32,14 @@ import { RefreshIcon } from "../ui/refresh-icon";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { toastManager } from "../ui/toast";
 import { GitExplorerHistory } from "./GitExplorerHistory";
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerReview } from "./GitExplorerReview";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
+import { prepareGitExplorerBranchDeletion } from "./gitExplorerBranches.logic";
 
 function HistoryReviewDivider({
   share,
@@ -86,6 +101,19 @@ function RepositoryExplorer({
 }) {
   const registry = useContext(RegistryContext);
   const navigate = useNavigate();
+  const environment = useEnvironment(environmentId);
+  const canDelete = useAtomValue(gitExplorerEnvironment.deleteBranch.permissionAtom(environmentId));
+  const deleteBranch = useAtomCommand(gitExplorerEnvironment.deleteBranch, {
+    reportFailure: false,
+  });
+  const deletionInFlight = useRef(false);
+  const [pendingBranch, setPendingBranch] = useState<string | null>(null);
+  const deleteUnavailable =
+    environment?.connection.phase !== "connected"
+      ? "Connect to this environment before deleting a branch."
+      : !canDelete
+        ? "Source-control write permission is required to delete branches."
+        : null;
   const input: GitExplorerOverviewInput = { projectId, ...(worktreePath ? { worktreePath } : {}) };
   const target = { environmentId, input };
   const overviewQuery = useGitExplorerQuery(gitExplorerEnvironment.overview(target));
@@ -100,6 +128,36 @@ function RepositoryExplorer({
   const refresh = () => {
     gitExplorerEnvironment.refresh(registry, target);
     setRefreshRevision((revision) => revision + 1);
+  };
+  const handleDeleteBranch = async (
+    reference: GitExplorerRef,
+    branchStatus: GitExplorerBranchStatus,
+  ) => {
+    if (deletionInFlight.current || deleteUnavailable !== null) return;
+    const review = prepareGitExplorerBranchDeletion(reference, branchStatus);
+    if (!review) return;
+    deletionInFlight.current = true;
+    setPendingBranch(reference.name);
+    const confirmed = await settlePromise(() =>
+      ensureLocalApi().dialogs.confirm(review.confirmation, { variant: "destructive" }),
+    );
+    if (confirmed._tag === "Success" && confirmed.value) {
+      const result = await deleteBranch({ environmentId, input: { ...input, ...review.input } });
+      if (result._tag === "Success") {
+        toastManager.add({ type: "success", title: `Deleted local branch ${reference.shortName}` });
+      } else if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Could not delete branch",
+          description:
+            error instanceof Error ? error.message : "Refresh Git Explorer and try again.",
+        });
+      }
+      refresh();
+    }
+    deletionInFlight.current = false;
+    setPendingBranch(null);
   };
   const status = useGitExplorerQuery(
     overview
@@ -216,9 +274,18 @@ function RepositoryExplorer({
               )}
             >
               <GitExplorerBranches
+                environmentId={environmentId}
+                input={input}
                 overview={overview}
                 selectedRevision={selectedRevision}
                 onSelect={selectRevision}
+                active={split || showBranches}
+                actions={{
+                  deleteUnavailable,
+                  pendingBranch,
+                  onDelete: (reference, branchStatus) =>
+                    void handleDeleteBranch(reference, branchStatus),
+                }}
               />
             </aside>
             <div
@@ -328,7 +395,6 @@ export function GitExplorerPage() {
         <WorkspacePageHeader electron={isElectron}>
           <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <h1 className="shrink-0 text-sm font-medium">Git Explorer</h1>
-          <span className="hidden text-2xs text-muted-foreground sm:block">Read-only</span>
           <div className="ml-auto min-w-0 max-w-72 flex-1">
             <Select
               value={selectedProject ? projectKey(selectedProject) : null}

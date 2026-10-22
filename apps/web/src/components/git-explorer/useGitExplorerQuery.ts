@@ -16,9 +16,12 @@ function serverVisibility() {
   return false;
 }
 
-export function useGitExplorerQuery<A, E>(atom: Atom.Atom<AsyncResult.AsyncResult<A, E>> | null) {
+export function useGitExplorerQuery<A, E>(
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, E>> | null,
+  enabled = true,
+) {
   const visible = useSyncExternalStore(subscribeVisibility, readVisibility, serverVisibility);
-  const query = useEnvironmentQuery(visible ? atom : null);
+  const query = useEnvironmentQuery(visible && enabled ? atom : null);
   const [kept, setKept] = useState<{
     atom: typeof atom;
     data: A;

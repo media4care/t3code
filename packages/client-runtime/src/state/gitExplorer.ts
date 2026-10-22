@@ -8,7 +8,8 @@ import {
 import { Atom, type AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 
 interface ExplorerTarget<Input = GitExplorerOverviewInput> {
   readonly environmentId: EnvironmentId;
@@ -70,6 +71,22 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
   return {
     overview,
     history,
+    branchStatuses: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:git-explorer:branch-statuses",
+      tag: WS_METHODS.gitExplorerBranchStatuses,
+      idleTtlMs: 60_000,
+      staleTimeMs: 60_000,
+      refreshTrigger,
+    }),
+    deleteBranch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git-explorer:delete-branch",
+      tag: WS_METHODS.gitExplorerDeleteBranch,
+      scheduler: vcsCommandScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
+      },
+    }),
     details: (target: ExplorerTarget<GitExplorerDetailsInput>) =>
       (target.input.revision === null ? workingDetails : commitDetails)(target),
     patch: (target: ExplorerTarget<GitExplorerPatchInput>) =>

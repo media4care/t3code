@@ -1,6 +1,10 @@
 import {
   GitExplorerError,
   type GitExplorerCommit,
+  type GitExplorerBranchStatus,
+  type GitExplorerBranchStatusesInput,
+  type GitExplorerBranchStatusesResult,
+  type GitExplorerDeleteBranchInput,
   type GitExplorerDetailsInput,
   type GitExplorerDetailsResult,
   type GitExplorerFile,
@@ -25,6 +29,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
@@ -34,6 +39,12 @@ export class GitExplorer extends Context.Service<
     readonly overview: (
       input: GitExplorerOverviewInput,
     ) => Effect.Effect<GitExplorerOverviewResult, GitExplorerError>;
+    readonly branchStatuses: (
+      input: GitExplorerBranchStatusesInput,
+    ) => Effect.Effect<GitExplorerBranchStatusesResult, GitExplorerError>;
+    readonly deleteBranch: (
+      input: GitExplorerDeleteBranchInput,
+    ) => Effect.Effect<void, GitExplorerError>;
     readonly history: (
       input: GitExplorerHistoryInput,
     ) => Effect.Effect<GitExplorerHistoryResult, GitExplorerError>;
@@ -60,6 +71,7 @@ const MAX_FILES = 2_000;
 const MAX_STASHES = 200;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_ANCESTORS = 25_000;
+const MAX_MERGE_COMMITS = 4_000;
 const SNAPSHOT_TTL_MS = 30 * 60_000;
 
 type Snapshot = {
@@ -70,6 +82,10 @@ type Snapshot = {
   commonDirectory: string;
   tips: readonly string[];
   touchedAt: number;
+  mergeConfig: { signature: string; remotes: string[]; bases: Map<string, string> };
+  remoteHeads: Map<string, string>;
+  refsByName: Map<string, GitExplorerRef>;
+  branchStatuses: Map<string, GitExplorerBranchStatus>;
   ancestors?: {
     local: Set<string>;
     upstream: Set<string>;
@@ -196,6 +212,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const snapshots = new Map<string, Snapshot>();
+  const deletionLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
 
   const run = Effect.fn("GitExplorer.readGit")(function* (
     cwd: string,
@@ -218,7 +235,12 @@ const make = Effect.gen(function* () {
           "maintenance.auto=false",
           ...args,
         ],
-        env: { GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
+        env: {
+          GIT_OPTIONAL_LOCKS: "0",
+          GIT_NO_LAZY_FETCH: "1",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_NO_REPLACE_OBJECTS: "1",
+        },
         timeoutMs: 15_000,
         maxOutputBytes: options?.maxBytes ?? 4 * 1024 * 1024,
         appendTruncationMarker: options?.truncate ?? false,
@@ -338,6 +360,37 @@ const make = Effect.gen(function* () {
     }
     return null;
   });
+  const readMergeConfig = Effect.fn("GitExplorer.readMergeConfig")(function* (cwd: string) {
+    const result = yield* run(
+      cwd,
+      [
+        "config",
+        "--null",
+        "--get-regexp",
+        "^(branch\\..*\\.(t3-merge-base-ref|gh-merge-base)|remote\\..*\\.url)$",
+      ],
+      { allowNonZero: true, maxBytes: 256 * 1024 },
+    );
+    if (result.exitCode !== 0 && result.exitCode !== 1)
+      return yield* new GitExplorerError({ operation: "branch-config", reason: "read-failed" });
+    const bases = new Map<string, string>();
+    const remotes = new Set<string>();
+    const records = result.stdout.split("\0").flatMap((record) => {
+      const split = record.indexOf("\n");
+      return split < 0 ? [] : [[record.slice(0, split), record.slice(split + 1)] as const];
+    });
+    for (const [key, value] of records) {
+      const remote = /^remote\.(.*)\.url$/.exec(key);
+      if (remote) remotes.add(remote[1]!);
+      const branch = /^branch\.(.*)\.gh-merge-base$/.exec(key);
+      if (branch) bases.set(`refs/heads/${branch[1]}`, value);
+    }
+    for (const [key, value] of records) {
+      const branch = /^branch\.(.*)\.t3-merge-base-ref$/.exec(key);
+      if (branch) bases.set(`refs/heads/${branch[1]}`, value);
+    }
+    return { signature: result.stdout, remotes: [...remotes], bases };
+  });
   const readOverviewState = Effect.fn("GitExplorer.readOverviewState")(function* (
     input: GitExplorerOverviewInput,
   ) {
@@ -372,6 +425,7 @@ const make = Effect.gen(function* () {
       const { context, output } = yield* readOverviewState(input);
       const { cwd, root, commonDirectory, worktrees, selected } = context;
       const shallowBoundary = yield* readShallowBoundary(commonDirectory);
+      const mergeConfig = yield* readMergeConfig(cwd);
       if (output.stdout.split("\n").filter(Boolean).length > 2048)
         return yield* new GitExplorerError({ operation: "refs", reason: "too-large" });
       const records = output.stdout
@@ -447,6 +501,7 @@ const make = Effect.gen(function* () {
         output.stdout,
         shallowBoundary,
         stashSignature,
+        mergeConfig.signature,
       ]
         .map((value) => `${value.length}:${value}`)
         .join("");
@@ -523,6 +578,12 @@ const make = Effect.gen(function* () {
       snapshots.set(snapshotId, {
         signature: signatureHash,
         shallowBoundary,
+        mergeConfig,
+        remoteHeads: new Map(
+          records.flatMap(([name, , , symbolic]) => (name && symbolic ? [[name, symbolic]] : [])),
+        ),
+        branchStatuses: new Map(),
+        refsByName: new Map(refs.map((ref) => [ref.name, ref])),
         overview: result,
         projectId: input.projectId,
         commonDirectory,
@@ -537,6 +598,473 @@ const make = Effect.gen(function* () {
       return result;
     },
   );
+  const baseForBranch = (snapshot: Snapshot, branch: string): string | null => {
+    const refs = snapshot.refsByName;
+    const remotes = snapshot.mergeConfig.remotes;
+    const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+    const configured = snapshot.mergeConfig.bases.get(branch);
+    if (configured) {
+      const short = configured.replace(/^refs\/heads\//, "");
+      const candidates = configured.startsWith("refs/remotes/")
+        ? [configured]
+        : [
+            ...(remote ? [`refs/remotes/${remote}/${short}`] : []),
+            `refs/remotes/${configured}`,
+            ...(remotes.length === 0 ? [`refs/heads/${short}`] : []),
+          ];
+      return candidates.find((candidate) => refs.has(candidate)) ?? null;
+    }
+    if (remote) {
+      const head = snapshot.remoteHeads.get(`refs/remotes/${remote}/HEAD`);
+      if (head && refs.has(head)) return head;
+    }
+    const candidates = remote
+      ? [`refs/remotes/${remote}/main`, `refs/remotes/${remote}/master`]
+      : remotes.length === 0
+        ? ["refs/heads/main", "refs/heads/master"]
+        : [];
+    const available = candidates.filter((candidate) => refs.has(candidate));
+    return available.length === 1 ? available[0]! : null;
+  };
+  const protectedBranch = (snapshot: Snapshot, ref: GitExplorerRef) => {
+    if (ref.shortName === "main" || ref.shortName === "master") return true;
+    const bases = new Set([
+      ...snapshot.remoteHeads.values(),
+      ...snapshot.overview.refs
+        .filter((candidate) => candidate.kind === "local")
+        .flatMap((candidate) => {
+          const base = baseForBranch(snapshot, candidate.name);
+          return base ? [base] : [];
+        }),
+    ]);
+    return [...bases].some(
+      (base) =>
+        base === ref.name ||
+        snapshot.mergeConfig.remotes.some(
+          (remote) => base === `refs/remotes/${remote}/${ref.shortName}`,
+        ),
+    );
+  };
+  const computeBranchStatus = Effect.fn("GitExplorer.computeBranchStatus")(function* (
+    snapshot: Snapshot,
+    ref: GitExplorerRef,
+  ) {
+    const targetRef = baseForBranch(snapshot, ref.name);
+    const targetHash = targetRef ? (snapshot.refsByName.get(targetRef)?.hash ?? null) : null;
+    const result: GitExplorerBranchStatus = {
+      name: ref.name,
+      hash: ref.hash,
+      targetRef,
+      targetHash,
+      mergeStatus: "unknown",
+      reason: null,
+      deleteBlockedReason: protectedBranch(snapshot, ref)
+        ? "protected"
+        : snapshot.overview.worktrees.some((worktree) => worktree.branch === ref.shortName)
+          ? "checked-out"
+          : null,
+    };
+    const classify = Effect.gen(function* (): Effect.fn.Return<
+      Pick<GitExplorerBranchStatus, "mergeStatus" | "reason">,
+      GitExplorerError
+    > {
+      if (!targetHash) return { mergeStatus: "unknown", reason: "missing-base" };
+      if (snapshot.shallowBoundary) return { mergeStatus: "unknown", reason: "shallow" };
+      const cwd = snapshot.overview.selectedWorktreePath;
+      const ancestry = yield* run(cwd, ["merge-base", "--is-ancestor", ref.hash, targetHash], {
+        allowNonZero: true,
+      });
+      if (ancestry.exitCode === 0) return { mergeStatus: "merged", reason: null };
+      if (ancestry.exitCode !== 1) return { mergeStatus: "unknown", reason: "read-failed" };
+      const common = yield* run(cwd, ["merge-base", ref.hash, targetHash], { allowNonZero: true });
+      if (common.exitCode === 1) return { mergeStatus: "unknown", reason: "unrelated" };
+      if (common.exitCode !== 0) return { mergeStatus: "unknown", reason: "read-failed" };
+      const range = `${targetHash}...${ref.hash}`;
+      const walk = yield* run(cwd, [
+        "rev-list",
+        "--left-right",
+        "--parents",
+        `--max-count=${MAX_MERGE_COMMITS + 1}`,
+        range,
+        "--",
+      ]);
+      const commits = walk.stdout.trim().split("\n").filter(Boolean);
+      if (commits.length > MAX_MERGE_COMMITS) return { mergeStatus: "unknown", reason: "limit" };
+      // Patch IDs omit merge conflict resolutions. A unique merge prevents proving equivalence.
+      if (commits.some((commit) => commit.startsWith(">") && commit.split(" ").length > 2))
+        return { mergeStatus: "unknown", reason: "merge-commits" };
+      const patches = yield* Effect.forEach(
+        [`${ref.hash}..${targetHash}`, `${targetHash}..${ref.hash}`],
+        (range) =>
+          run(
+            cwd,
+            [
+              "log",
+              "--format=commit %H",
+              "--no-merges",
+              "--patch",
+              "--binary",
+              "--full-index",
+              "--no-renames",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--no-color",
+              "--no-show-signature",
+              range,
+              "--",
+            ],
+            { maxBytes: 2 * 1024 * 1024, truncate: true },
+          ),
+        { concurrency: 2 },
+      );
+      if (patches.some((patch) => patch.stdoutTruncated))
+        return { mergeStatus: "unknown", reason: "limit" };
+      // Git's ordinary cherry comparison ignores whitespace, which can change Python control flow.
+      const patchIds = yield* Effect.forEach(
+        patches,
+        (patch) => run(cwd, ["patch-id", "--verbatim"], { stdin: patch.stdout }),
+        { concurrency: 2 },
+      );
+      const basePatches = new Set(
+        patchIds[0]!.stdout
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => line.split(" ")[0]),
+      );
+      const unique = patchIds[1]!.stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .some((line) => !basePatches.has(line.split(" ")[0]));
+      return { mergeStatus: unique ? "unmerged" : "equivalent", reason: null };
+    }).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.catch(() =>
+        Effect.succeed({ mergeStatus: "unknown" as const, reason: "read-failed" as const }),
+      ),
+    );
+    const status = { ...result, ...(yield* classify) };
+    return {
+      ...status,
+      deleteBlockedReason:
+        status.deleteBlockedReason ??
+        (status.mergeStatus === "unknown"
+          ? "unknown"
+          : status.mergeStatus === "unmerged"
+            ? "unmerged"
+            : null),
+    } satisfies GitExplorerBranchStatus;
+  });
+  const branchStatuses: GitExplorer["Service"]["branchStatuses"] = Effect.fn(
+    "GitExplorer.branchStatuses",
+  )(function* (input) {
+    const context = yield* resolve(input);
+    const snapshot = snapshots.get(input.snapshotId);
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (
+      !snapshot ||
+      snapshot.projectId !== input.projectId ||
+      snapshot.commonDirectory !== context.commonDirectory ||
+      snapshot.overview.selectedWorktreePath !== context.cwd ||
+      now - snapshot.touchedAt > SNAPSHOT_TTL_MS ||
+      (yield* readShallowBoundary(context.commonDirectory)) !== snapshot.shallowBoundary ||
+      (yield* readMergeConfig(context.cwd)).signature !== snapshot.mergeConfig.signature
+    )
+      return yield* new GitExplorerError({
+        operation: "branch-statuses",
+        reason: "snapshot-expired",
+      });
+    if (input.branches.length > 32)
+      return yield* new GitExplorerError({ operation: "branch-statuses", reason: "too-large" });
+    const refs: GitExplorerRef[] = [];
+    for (const name of new Set(input.branches)) {
+      const ref = snapshot.overview.refs.find(
+        (candidate) => candidate.kind === "local" && candidate.name === name,
+      );
+      if (!ref)
+        return yield* new GitExplorerError({
+          operation: "branch-statuses",
+          reason: "invalid-branch",
+        });
+      refs.push(ref);
+    }
+    snapshot.touchedAt = now;
+    const branches = yield* Effect.forEach(
+      refs,
+      (ref) =>
+        Effect.gen(function* () {
+          const cached = snapshot.branchStatuses.get(ref.name);
+          if (cached) return cached;
+          const result = yield* computeBranchStatus(snapshot, ref);
+          if (result.reason !== "read-failed") snapshot.branchStatuses.set(ref.name, result);
+          return result;
+        }),
+      { concurrency: 4 },
+    );
+    return { branches };
+  });
+  const deleteBranch: GitExplorer["Service"]["deleteBranch"] = Effect.fn(
+    "GitExplorer.deleteBranch",
+  )(function* (input) {
+    if (
+      !input.branchName.startsWith("refs/heads/") ||
+      !HASH.test(input.expectedHash) ||
+      !HASH.test(input.expectedTargetHash)
+    )
+      return yield* new GitExplorerError({ operation: "delete-branch", reason: "invalid-branch" });
+    const context = yield* resolve(input);
+    let lock = deletionLocks.get(context.commonDirectory);
+    if (!lock) {
+      lock = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+      deletionLocks.set(context.commonDirectory, lock);
+    }
+    lock.users++;
+    const activeLock = lock;
+    return yield* Effect.gen(function* () {
+      const current = yield* overview(input);
+      const snapshot = snapshots.get(current.snapshotId);
+      if (!snapshot)
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "snapshot-expired",
+        });
+      const ref = current.refs.find(
+        (candidate) => candidate.kind === "local" && candidate.name === input.branchName,
+      );
+      if (!ref)
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "invalid-branch",
+        });
+      if (ref.hash !== input.expectedHash)
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-changed",
+        });
+      const status = yield* computeBranchStatus(snapshot, ref);
+      if (
+        status.targetRef !== input.expectedTargetRef ||
+        status.targetHash !== input.expectedTargetHash
+      )
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-changed",
+        });
+      if (status.deleteBlockedReason === "protected")
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-protected",
+        });
+      if (status.deleteBlockedReason === "checked-out")
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-checked-out",
+        });
+      if (
+        status.mergeStatus !== "merged" &&
+        !(status.mergeStatus === "equivalent" && input.allowEquivalent)
+      )
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-not-merged",
+        });
+      const latest = yield* resolve(input);
+      if (latest.worktrees.some((worktree) => worktree.branch === ref.shortName))
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-checked-out",
+        });
+      const hashes = (yield* run(latest.cwd, [
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)",
+        input.branchName,
+        input.expectedTargetRef,
+      ])).stdout
+        .split("\n")
+        .map((line) => line.split("\0"));
+      if (
+        hashes.find(([name]) => name === input.branchName)?.[1] !== input.expectedHash ||
+        hashes.find(([name]) => name === input.expectedTargetRef)?.[1] !==
+          input.expectedTargetHash ||
+        (yield* readMergeConfig(latest.cwd)).signature !== snapshot.mergeConfig.signature ||
+        (yield* readShallowBoundary(latest.commonDirectory)) !== snapshot.shallowBoundary
+      )
+        return yield* new GitExplorerError({
+          operation: "delete-branch",
+          reason: "branch-changed",
+        });
+      const heads = yield* Effect.forEach(
+        latest.worktrees.filter((worktree) => !worktree.bare),
+        (worktree) =>
+          Effect.gen(function* () {
+            const gitDirectory = yield* canonical(
+              (yield* run(worktree.path, [
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-dir",
+              ])).stdout.trim(),
+            );
+            const relative = path.relative(latest.commonDirectory, gitDirectory);
+            if (relative !== "" && path.dirname(relative) !== "worktrees")
+              return yield* new GitExplorerError({
+                operation: "delete-branch",
+                reason: "invalid-worktree",
+              });
+            return { filePath: path.join(gitDirectory, "HEAD"), worktree };
+          }),
+        { concurrency: 4 },
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          // Git cannot verify another worktree's HEAD in an update-ref transaction.
+          // Its standard exclusive lock keeps existing worktrees from checking out this branch while we delete it.
+          for (const head of heads.toSorted((a, b) => a.filePath.localeCompare(b.filePath))) {
+            const lockPath = `${head.filePath}.lock`;
+            yield* Effect.acquireRelease(
+              Effect.scoped(fs.open(lockPath, { flag: "wx" }).pipe(Effect.asVoid)).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitExplorerError({
+                      operation: "delete-branch-lock",
+                      reason: "write-failed",
+                      cause,
+                    }),
+                ),
+              ),
+              () => fs.remove(lockPath).pipe(Effect.ignore),
+            );
+            const reserved = yield* Effect.forEach(
+              ["rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"],
+              (relative) =>
+                fs.readFileString(path.join(path.dirname(head.filePath), relative)).pipe(
+                  Effect.catchIf(
+                    (cause) => cause.reason._tag === "NotFound",
+                    () => Effect.succeed(""),
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new GitExplorerError({
+                        operation: "delete-branch-reserved",
+                        reason: "read-failed",
+                        cause,
+                      }),
+                  ),
+                ),
+              { concurrency: 3 },
+            );
+            if (
+              reserved.some(
+                (value) => value.trim() === input.branchName || value.trim() === ref.shortName,
+              )
+            )
+              return yield* new GitExplorerError({
+                operation: "delete-branch",
+                reason: "branch-checked-out",
+              });
+            const value = yield* fs.readFileString(head.filePath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitExplorerError({
+                    operation: "delete-branch-head",
+                    reason: "read-failed",
+                    cause,
+                  }),
+              ),
+            );
+            if (value.trim() === `ref: ${input.branchName}`)
+              return yield* new GitExplorerError({
+                operation: "delete-branch",
+                reason: "branch-checked-out",
+              });
+            if (
+              value.trim() !==
+              (head.worktree.branch
+                ? `ref: refs/heads/${head.worktree.branch}`
+                : head.worktree.headHash)
+            )
+              return yield* new GitExplorerError({
+                operation: "delete-branch",
+                reason: "branch-changed",
+              });
+          }
+          const lockedContext = yield* resolve(input);
+          if (lockedContext.worktreeOutput !== latest.worktreeOutput)
+            return yield* new GitExplorerError({
+              operation: "delete-branch",
+              reason: "branch-changed",
+            });
+          const result = yield* git
+            .execute({
+              operation: "GitExplorer.deleteBranch",
+              cwd: latest.cwd,
+              args: [
+                "-c",
+                `core.hooksPath=${platform === "win32" ? "NUL" : "/dev/null"}`,
+                "update-ref",
+                "--no-deref",
+                "--stdin",
+              ],
+              stdin: [
+                "start",
+                `verify ${input.expectedTargetRef} ${input.expectedTargetHash}`,
+                `delete ${input.branchName} ${input.expectedHash}`,
+                "prepare",
+                "commit",
+                "",
+              ].join("\n"),
+              env: {
+                GIT_NO_LAZY_FETCH: "1",
+                GIT_TERMINAL_PROMPT: "0",
+                GIT_NO_REPLACE_OBJECTS: "1",
+              },
+              timeoutMs: 15_000,
+              maxOutputBytes: 64 * 1024,
+              allowNonZeroExit: true,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitExplorerError({
+                    operation: "delete-branch",
+                    reason: "write-failed",
+                    cause,
+                  }),
+              ),
+            );
+          if (result.exitCode !== 0) {
+            const fresh = yield* readOverviewState(input);
+            const rows = fresh.output.stdout.split("\n").map((line) => line.split("\0"));
+            if (
+              rows.find(([name]) => name === input.branchName)?.[1] !== input.expectedHash ||
+              rows.find(([name]) => name === input.expectedTargetRef)?.[1] !==
+                input.expectedTargetHash
+            )
+              return yield* new GitExplorerError({
+                operation: "delete-branch",
+                reason: "branch-changed",
+              });
+            return yield* new GitExplorerError({
+              operation: "delete-branch",
+              reason: "write-failed",
+            });
+          }
+        }),
+      );
+      // Keep branch config: a separate remove-section could erase configuration of a concurrently recreated branch.
+      for (const [id, cached] of snapshots)
+        if (cached.commonDirectory === context.commonDirectory) snapshots.delete(id);
+      yield* git.invalidateRefs(latest.cwd).pipe(Effect.ignore);
+    }).pipe(
+      activeLock.semaphore.withPermits(1),
+      Effect.ensuring(
+        Effect.sync(() => {
+          activeLock.users--;
+          if (activeLock.users === 0) deletionLocks.delete(context.commonDirectory);
+        }),
+      ),
+    );
+  });
   const ancestors = Effect.fn("GitExplorer.ancestors")(function* (
     cwd: string,
     hash: string | null,
@@ -820,7 +1348,7 @@ const make = Effect.gen(function* () {
       truncated: result.stdoutTruncated,
     };
   });
-  return GitExplorer.of({ overview, history, details, patch });
+  return GitExplorer.of({ overview, history, details, patch, branchStatuses, deleteBranch });
 });
 
 export const layer = Layer.effect(GitExplorer, make);

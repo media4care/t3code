@@ -74,9 +74,16 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.gitExplorerHistory,
       WS_METHODS.gitExplorerDetails,
       WS_METHODS.gitExplorerPatch,
+      WS_METHODS.gitExplorerBranchStatuses,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthFilesystemReadScope);
     }
+  });
+
+  it("requires source control write permission to delete a local explorer branch", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.gitExplorerDeleteBranch)).toBe(
+      AuthSourceControlWriteScope,
+    );
   });
 
   it("rejects unknown RPC method names", () => {

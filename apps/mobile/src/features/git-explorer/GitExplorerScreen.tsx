@@ -224,6 +224,9 @@ function GitExplorerRepository(props: {
                 <View style={{ height: 240 }} className="border-b border-border bg-card">
                   <GitExplorerBranches
                     overview={overview}
+                    params={params}
+                    active={explorer.active}
+                    onRefresh={explorer.refresh}
                     selectedRevision={selectedRevision}
                     tablet={split}
                     onSelect={(hash) => {
@@ -238,6 +241,9 @@ function GitExplorerRepository(props: {
                   <View style={{ width: 190 }} className="border-r border-border bg-card">
                     <GitExplorerBranches
                       overview={overview}
+                      params={params}
+                      active={explorer.active}
+                      onRefresh={explorer.refresh}
                       selectedRevision={selectedRevision}
                       tablet
                       onSelect={selectRevision}
