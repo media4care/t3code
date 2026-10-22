@@ -10,6 +10,23 @@ rebases, the files Git brought in are left out. A file stays in the list when th
 committed it, or fixed a conflict in it. Use the branch comparison to review everything that changed
 against your base branch. Restore still returns the complete saved workspace.
 
+## Explore repository history
+
+Open **Git Explorer** from the sidebar on web or desktop, or the workspace toolbar on mobile,
+and choose a project. The graph includes local branches, remote-tracking branches, tags, and worktree
+HEADs. Select a commit to review its files and diffs; merge commits compare with their first
+parent. Select **Working Tree** to review staged, unstaged, and untracked files. Changing the
+review worktree does not check out a branch or change any files.
+
+Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
+base commit, including saved untracked files. Stashes are listed separately from the graph.
+Reviewing a stash does not apply or remove it.
+
+Ahead and behind counts compare each branch with its configured upstream using locally stored
+refs. The last recorded fetch time, when available, describes local fetch information; it does
+not confirm the remote's current state. **Refresh** rereads local Git data. Ask an agent to fetch
+if you need newer remote-tracking information. Git Explorer only reads the repository.
+
 ## Connect an account
 
 Install Git and configure authentication on the machine running your T3 Code server. For a remote

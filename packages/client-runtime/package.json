@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./git-explorer": {
+      "types": "./src/gitExplorer.ts",
+      "default": "./src/gitExplorer.ts"
+    },
+    "./state/git-explorer": {
+      "types": "./src/state/gitExplorer.ts",
+      "default": "./src/state/gitExplorer.ts"
+    },
     "./workspace-basename-lookup": {
       "types": "./src/workspaceBasenameLookup.ts",
       "default": "./src/workspaceBasenameLookup.ts"

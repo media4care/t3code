@@ -22,6 +22,9 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { Link } from "@tanstack/react-router";
+import { GitForkIcon } from "lucide-react";
+import { ThreadDetailsControl } from "./ThreadDetailsControl";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -167,6 +170,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               <div className="flex flex-col">
                 {props.isGitRepo ? (
                   <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
+                ) : null}
+                {props.isGitRepo ? (
+                  <ThreadDetailsControl
+                    render={
+                      <Link
+                        to="/git"
+                        search={{
+                          environmentId: props.environmentId,
+                          projectId: props.projectId,
+                          ...(props.worktreePath ? { worktreePath: props.worktreePath } : {}),
+                        }}
+                      />
+                    }
+                  >
+                    <GitForkIcon />
+                    Git Explorer
+                  </ThreadDetailsControl>
                 ) : null}
                 {props.activeProjectName ? (
                   <GitActionsControl

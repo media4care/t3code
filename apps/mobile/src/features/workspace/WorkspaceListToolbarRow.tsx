@@ -1,3 +1,4 @@
+import { useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import { View } from "react-native";
 import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader";
@@ -23,6 +24,7 @@ export function WorkspaceListToolbarRow(props: {
   readonly filter: ReactNode;
 }) {
   const { height } = useToolbarLayout();
+  const navigation = useNavigation();
   return (
     <View className="flex-row items-center gap-1" style={{ minHeight: height }}>
       {props.searching ? (
@@ -50,6 +52,11 @@ export function WorkspaceListToolbarRow(props: {
               }
             />
           </View>
+          <AndroidHeaderIconButton
+            accessibilityLabel="Git Explorer"
+            icon="point.topleft.down.curvedto.point.bottomright.up"
+            onPress={() => navigation.navigate("GitRepositories")}
+          />
           <AndroidHeaderIconButton
             accessibilityLabel={props.searchAccessibilityLabel}
             icon="magnifyingglass"

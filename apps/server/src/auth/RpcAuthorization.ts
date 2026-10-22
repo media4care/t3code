@@ -171,6 +171,11 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.gitResolvePullRequest]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsListRefs]: AuthOrchestrationReadScope,
+  [WS_METHODS.gitExplorerOverview]: AuthFilesystemReadScope,
+  [WS_METHODS.gitExplorerHistory]: AuthFilesystemReadScope,
+  [WS_METHODS.gitExplorerDetails]: AuthFilesystemReadScope,
+  [WS_METHODS.gitExplorerPatch]: AuthFilesystemReadScope,
+
   [WS_METHODS.reviewGetDiffPreview]: AuthFilesystemReadScope,
   [WS_METHODS.reviewGetDiffFileContents]: AuthFilesystemReadScope,
   [WS_METHODS.terminalOpen]: AuthTerminalOperateScope,
