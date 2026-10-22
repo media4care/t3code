@@ -67,6 +67,34 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination source control grant to delete an explorer branch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const remove = createCommandPermissions(runtime, WS_METHODS.gitExplorerDeleteBranch);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(remove.permissionAtom(env))).toBe(false);
+        expect((yield* remove.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+          AuthSourceControlWriteScope,
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSourceControlWriteScope],
+            permissions: [AuthSourceControlWriteScope],
+          }),
+        );
+        expect(registry.get(remove.permissionAtom(env))).toBe(true);
+        yield* remove.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(remove.permissionAtom(other))).toBe(false);
+        expect(
+          (yield* remove.authorize(registry, other).pipe(Effect.flip)).requiredPermission,
+        ).toBe(AuthSourceControlWriteScope);
+      }),
+    ),
+  );
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

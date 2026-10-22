@@ -418,6 +418,7 @@ export class GitVcsDriver extends Context.Service<
       readonly cwd: string;
     }) => Effect.Effect<void, GitCommandError>;
     readonly listWorktreePaths: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+    readonly invalidateRefs: (cwd: string) => Effect.Effect<void, GitCommandError>;
     readonly deleteLocalBranch: (
       input: GitDeleteLocalBranchInput,
     ) => Effect.Effect<void, GitCommandError>;
