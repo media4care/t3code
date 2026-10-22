@@ -277,6 +277,25 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
           />
         ) : null}
         <ListRow
+          icon="point.topleft.down.curvedto.point.bottomright.up"
+          label="Git Explorer"
+          description="Review repository history, branches, and working-tree changes"
+          disabled={!isRepo || !selectedThreadProject}
+          onPress={() => {
+            if (!selectedThreadProject) return;
+            const params = {
+              environmentId: String(environmentId),
+              projectId: String(selectedThreadProject.id),
+              ...(currentWorktreePath ? { worktreePath: currentWorktreePath } : {}),
+            };
+            navigation.dispatch(
+              presentation === "sheet"
+                ? StackActions.replace("GitExplorer", params)
+                : CommonActions.navigate("GitExplorer", params),
+            );
+          }}
+        />
+        <ListRow
           icon="text.bubble"
           label="Review changes"
           description="Inspect changes, uncommitted edits, and turn diffs"

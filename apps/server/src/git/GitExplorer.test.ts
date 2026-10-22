@@ -1,0 +1,699 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import { ProjectId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import * as ServerConfig from "../config.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as GitExplorer from "./GitExplorer.ts";
+
+const projectId = ProjectId.make("git-explorer-test");
+const scope = { projectId };
+const layer = GitVcsDriver.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-git-explorer-" })),
+  Layer.provideMerge(VcsProcess.layer),
+  Layer.provideMerge(NodeServices.layer),
+);
+const fixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-explorer-repo-" });
+  const git = Effect.fn("GitExplorer.test.git")(function* (args: readonly string[]) {
+    return (yield* driver.execute({ operation: "GitExplorer.test", cwd, args })).stdout.trim();
+  });
+  const write = (name: string, contents: string) =>
+    fs.writeFileString(path.join(cwd, name), contents);
+  yield* git(["init", "--initial-branch=main"]);
+  yield* git(["config", "user.email", "test@example.com"]);
+  yield* git(["config", "user.name", "Test Author"]);
+  yield* git(["config", "core.autocrlf", "false"]);
+  yield* write("hello.txt", "first\n");
+  yield* git(["add", "."]);
+  yield* git(["commit", "-m", "root"]);
+  const root = yield* git(["rev-parse", "HEAD"]);
+  const projectStore = Layer.mock(ProjectStore.ProjectStoreV2)({
+    get: (id) =>
+      Effect.succeed(
+        id === projectId
+          ? Option.some({
+              projectId,
+              title: "Git",
+              workspaceRoot: cwd,
+              defaultModelSelection: null,
+              defaultThreadEnvMode: null,
+              autoPull: false,
+              faviconPath: null,
+              projectIcon: null,
+              scripts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              deletedAt: null,
+            })
+          : Option.none(),
+      ),
+  });
+  const explorer = yield* GitExplorer.GitExplorer.pipe(
+    Effect.provide(GitExplorer.layer.pipe(Layer.provide(projectStore))),
+  );
+  return { fs, path, cwd, git, write, root, explorer, projectStore };
+});
+
+it.layer(layer)("GitExplorer", (it) => {
+  it.effect("reviews root commits and paginates immutable tips across concurrent commits", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      const details = yield* explorer.details({ ...scope, revision: root });
+      assert.equal(details.comparisonParent, null);
+      assert.equal(details.files[0]?.status, "added");
+      assert.equal(details.files[0]?.additions, 1);
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: root,
+        path: "hello.txt",
+        stage: "committed",
+      });
+      assert.include(patch.patch, "+first");
+      yield* write("hello.txt", "second\n");
+      yield* git(["commit", "-am", "second"]);
+      const overview = yield* explorer.overview(scope);
+      const first = yield* explorer.history({
+        ...scope,
+        snapshotId: overview.snapshotId,
+        limit: 1,
+      });
+      yield* write("hello.txt", "third\n");
+      yield* git(["commit", "-am", "third"]);
+      const second = yield* explorer.history({
+        ...scope,
+        snapshotId: overview.snapshotId,
+        cursor: first.nextCursor!,
+        limit: 1,
+      });
+      assert.equal(first.commits[0]?.subject, "second");
+      assert.equal(second.commits[0]?.hash, root);
+      assert.equal(second.nextCursor, null);
+    }),
+  );
+
+  it.effect(
+    "separates staged, unstaged, untracked and binary changes without touching the index",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, fs, path, cwd } = yield* fixture;
+        yield* write("hello.txt", "staged\n");
+        yield* git(["add", "hello.txt"]);
+        yield* write("hello.txt", "unstaged\n");
+        yield* write("untracked.txt", "new\n");
+        yield* fs.writeFile(path.join(cwd, "binary.dat"), new Uint8Array([0, 1, 2]));
+        const before = yield* fs.readFile(path.join(cwd, ".git", "index"));
+        const details = yield* explorer.details({ ...scope, revision: null });
+        assert.sameMembers(
+          details.files.filter((file) => file.path === "hello.txt").map((file) => file.stage),
+          ["staged", "unstaged"],
+        );
+        assert.equal(
+          details.files.find((file) => file.path === "untracked.txt")?.stage,
+          "untracked",
+        );
+        const patch = yield* explorer.patch({
+          ...scope,
+          revision: null,
+          path: "untracked.txt",
+          stage: "untracked",
+        });
+        assert.include(patch.patch, "+new");
+        const binary = yield* explorer.patch({
+          ...scope,
+          revision: null,
+          path: "binary.dat",
+          stage: "untracked",
+        });
+        assert.isTrue(binary.binary);
+        assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git", "index")), before);
+      }),
+  );
+
+  it.effect("rejects unrelated worktrees, path traversal and revision option injection", () =>
+    Effect.gen(function* () {
+      const { explorer, fs, root } = yield* fixture;
+      const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-explorer-other-" });
+      assert.equal(
+        (yield* explorer.overview({ ...scope, worktreePath: other }).pipe(Effect.flip)).reason,
+        "invalid-worktree",
+      );
+      assert.equal(
+        (yield* explorer
+          .patch({ ...scope, revision: null, path: "../secret", stage: "untracked" })
+          .pipe(Effect.flip)).reason,
+        "invalid-path",
+      );
+      assert.equal(
+        (yield* explorer.details({ ...scope, revision: "--all" }).pipe(Effect.flip)).reason,
+        "invalid-revision",
+      );
+      assert.equal(
+        (yield* explorer
+          .patch({ ...scope, revision: root, path: ":(glob)*", stage: "committed" })
+          .pipe(Effect.flip)).reason,
+        "invalid-path",
+      );
+    }),
+  );
+  it.effect(
+    "uses upstream ancestry for diverged, synchronized, missing and unconfigured branches",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root } = yield* fixture;
+        yield* git(["config", "remote.origin.url", "https://invalid.example/never-contact.git"]);
+        yield* git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+        yield* git(["switch", "-c", "remote-work"]);
+        yield* write("remote.txt", "remote\n");
+        yield* git(["add", "."]);
+        yield* git(["commit", "-m", "remote-only"]);
+        const remote = yield* git(["rev-parse", "HEAD"]);
+        yield* git(["update-ref", "refs/remotes/origin/main", remote]);
+        yield* git(["switch", "main"]);
+        yield* write("local.txt", "local\n");
+        yield* git(["add", "."]);
+        yield* git(["commit", "-m", "local-only"]);
+        const local = yield* git(["rev-parse", "HEAD"]);
+        yield* git(["branch", "--set-upstream-to=origin/main", "main"]);
+        yield* git(["branch", "synced", remote]);
+        yield* git(["branch", "--set-upstream-to=origin/main", "synced"]);
+        yield* git(["branch", "unconfigured", root]);
+        yield* git(["branch", "missing", root]);
+        yield* git(["config", "branch.missing.remote", "origin"]);
+        yield* git(["config", "branch.missing.merge", "refs/heads/gone"]);
+        const overview = yield* explorer.overview(scope);
+        const main = overview.refs.find((ref) => ref.shortName === "main")!;
+        assert.equal(main.ahead, 1);
+        assert.equal(main.behind, 1);
+        assert.equal(overview.refs.find((ref) => ref.shortName === "synced")?.ahead, 0);
+        assert.equal(overview.refs.find((ref) => ref.shortName === "synced")?.behind, 0);
+        assert.equal(overview.refs.find((ref) => ref.shortName === "unconfigured")?.upstream, null);
+        assert.isTrue(overview.refs.find((ref) => ref.shortName === "missing")!.upstreamMissing);
+        assert.equal(overview.lastFetchAt, null);
+        assert.equal((yield* explorer.overview(scope)).snapshotId, overview.snapshotId);
+        const history = yield* explorer.history({ ...scope, snapshotId: overview.snapshotId });
+        assert.equal(
+          history.commits.find((commit) => commit.hash === local)?.upstreamStatus,
+          "local-only",
+        );
+        assert.equal(
+          history.commits.find((commit) => commit.hash === remote)?.upstreamStatus,
+          "upstream-only",
+        );
+        assert.equal(
+          history.commits.find((commit) => commit.hash === root)?.upstreamStatus,
+          "shared",
+        );
+      }),
+  );
+
+  it.effect(
+    "includes detached worktree HEADs and isolates working tree review without checkout",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreeParent = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-git-explorer-worktree-",
+        });
+        const worktree = path.join(worktreeParent, "linked");
+        yield* git(["worktree", "add", "--detach", worktree, root]);
+        yield* fs.writeFileString(path.join(worktree, "detached.txt"), "detached\n");
+        yield* driver.execute({ operation: "GitExplorer.test", cwd: worktree, args: ["add", "."] });
+        yield* driver.execute({
+          operation: "GitExplorer.test",
+          cwd: worktree,
+          args: ["commit", "-m", "detached commit"],
+        });
+        yield* write("main-only.txt", "main\n");
+        yield* fs.writeFileString(path.join(worktree, "linked-only.txt"), "linked\n");
+        const main = yield* explorer.overview(scope);
+        const history = yield* explorer.history({ ...scope, snapshotId: main.snapshotId });
+        assert.isTrue(history.commits.some((commit) => commit.subject === "detached commit"));
+        const selected = yield* explorer.overview({ ...scope, worktreePath: worktree });
+        assert.equal(selected.headBranch, null);
+        assert.equal(selected.worktrees.length, 2);
+        assert.notEqual(selected.headHash, main.headHash);
+        const details = yield* explorer.details({
+          ...scope,
+          worktreePath: worktree,
+          revision: null,
+        });
+        assert.sameMembers(
+          details.files.map((file) => file.path),
+          ["linked-only.txt"],
+        );
+        assert.equal(yield* git(["rev-parse", "HEAD"]), root);
+        assert.equal(yield* git(["symbolic-ref", "--short", "HEAD"]), "main");
+        const mainDetails = yield* explorer.details({
+          ...scope,
+          worktreePath: cwd,
+          revision: null,
+        });
+        assert.sameMembers(
+          mainDetails.files.map((file) => file.path),
+          ["main-only.txt"],
+        );
+      }),
+  );
+
+  it.effect("preserves rename paths and compares merge commits to their first parent", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, fs, path, cwd } = yield* fixture;
+      const oldName = "old\tname.txt";
+      const newName = "new\nname.txt";
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join("");
+      yield* write(oldName, lines);
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "before rename"]);
+      yield* fs.rename(path.join(cwd, oldName), path.join(cwd, newName));
+      yield* write(newName, lines + "added line\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-m", "rename"]);
+      const renamed = yield* git(["rev-parse", "HEAD"]);
+      const details = yield* explorer.details({ ...scope, revision: renamed });
+      assert.equal(details.files[0]?.status, "renamed");
+      assert.equal(details.files[0]?.oldPath, oldName);
+      assert.equal(details.files[0]?.path, newName);
+      assert.equal(details.files[0]?.additions, 1);
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: renamed,
+        stage: "committed",
+        path: newName,
+      });
+      assert.include(patch.patch, "rename from");
+      assert.include(patch.patch, "+added line");
+      assert.notInclude(patch.patch, "+line 0");
+      yield* git(["switch", "-c", "topic"]);
+      yield* write("topic.txt", "topic\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "topic"]);
+      yield* git(["switch", "main"]);
+      yield* git(["merge", "--no-ff", "topic", "-m", "merge topic"]);
+      const merge = yield* git(["rev-parse", "HEAD"]);
+      const merged = yield* explorer.details({ ...scope, revision: merge });
+      assert.equal(merged.commit?.parents.length, 2);
+      assert.equal(merged.stash, null);
+      assert.equal(merged.comparisonParent, renamed);
+      assert.sameMembers(
+        merged.files.map((file) => file.path),
+        ["topic.txt"],
+      );
+    }),
+  );
+
+  it.effect("bounds large patches and disables external diff helpers", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, fs, path, cwd } = yield* fixture;
+      yield* write("huge.txt", "x".repeat(600_000));
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "large"]);
+      const revision = yield* git(["rev-parse", "HEAD"]);
+      const large = yield* explorer.patch({
+        ...scope,
+        revision,
+        stage: "committed",
+        path: "huge.txt",
+      });
+      assert.isTrue(large.truncated);
+      assert.equal(large.patch, "");
+      yield* git(["config", "diff.external", "this-executable-must-never-run"]);
+      yield* git(["config", "log.showSignature", "true"]);
+      yield* write("hello.txt", "changed\n");
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: null,
+        stage: "unstaged",
+        path: "hello.txt",
+      });
+      assert.include(patch.patch, "+changed");
+      const overview = yield* explorer.overview(scope);
+      const history = yield* explorer.history({ ...scope, snapshotId: overview.snapshotId });
+      assert.equal(history.commits.length, 2);
+      assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "index.lock")));
+    }),
+  );
+
+  it.effect("represents an unborn repository without inventing commits", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write } = yield* fixture;
+      yield* git(["switch", "--orphan", "unborn"]);
+      yield* git(["branch", "-D", "main"]);
+      const overview = yield* explorer.overview(scope);
+      assert.equal(overview.headHash, null);
+      assert.equal(overview.headBranch, "unborn");
+      assert.deepEqual(
+        (yield* explorer.history({ ...scope, snapshotId: overview.snapshotId })).commits,
+        [],
+      );
+      yield* write("new.txt", "new\n");
+      yield* git(["add", "new.txt"]);
+      const details = yield* explorer.details({ ...scope, revision: null });
+      assert.equal(details.files[0]?.status, "added");
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: null,
+        stage: "staged",
+        path: "new.txt",
+      });
+      assert.include(patch.patch, "+new");
+    }),
+  );
+  it.effect("reports gitlink changes instead of hiding submodule revisions", () =>
+    Effect.gen(function* () {
+      const { explorer, git, root } = yield* fixture;
+      yield* git(["update-index", "--add", "--cacheinfo", `160000,${root},dependency`]);
+      yield* git(["commit", "-m", "add gitlink"]);
+      const revision = yield* git(["rev-parse", "HEAD"]);
+      const details = yield* explorer.details({ ...scope, revision });
+      assert.equal(details.files.find((file) => file.path === "dependency")?.status, "added");
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision,
+        stage: "committed",
+        path: "dependency",
+      });
+      assert.include(patch.patch, `+Subproject commit ${root}`);
+    }),
+  );
+
+  it.effect("keeps conflicted paths unique and renders the working file against ours", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, cwd } = yield* fixture;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* git(["switch", "-c", "topic"]);
+      yield* write("hello.txt", "topic\n");
+      yield* git(["commit", "-am", "topic"]);
+      yield* git(["switch", "main"]);
+      yield* write("hello.txt", "main\n");
+      yield* git(["commit", "-am", "main"]);
+      yield* driver.execute({
+        operation: "GitExplorer.test",
+        cwd,
+        args: ["merge", "topic"],
+        allowNonZeroExit: true,
+      });
+      const details = yield* explorer.details({ ...scope, revision: null });
+      const unstaged = details.files.filter((file) => file.stage === "unstaged");
+      assert.equal(unstaged.length, 1);
+      assert.equal(unstaged[0]?.status, "unmerged");
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: null,
+        stage: "unstaged",
+        path: "hello.txt",
+      });
+      assert.include(patch.patch, "diff --git a/hello.txt b/hello.txt");
+      assert.include(patch.patch, "+<<<<<<< HEAD");
+    }),
+  );
+
+  it.effect("expires inactive snapshots and reports only locally observed fetch timestamps", () =>
+    Effect.gen(function* () {
+      const { explorer, fs, path, cwd } = yield* fixture;
+      const overview = yield* explorer.overview(scope);
+      assert.equal(overview.lastFetchAt, null);
+      yield* fs.writeFileString(
+        path.join(cwd, ".git", "FETCH_HEAD"),
+        "recorded by a different git process\n",
+      );
+      const refreshed = yield* explorer.overview(scope);
+      assert.isNotNull(refreshed.lastFetchAt);
+      assert.equal(refreshed.snapshotId, overview.snapshotId);
+      yield* TestClock.adjust("31 minutes");
+      const expired = yield* explorer
+        .history({ ...scope, snapshotId: overview.snapshotId })
+        .pipe(Effect.flip);
+      assert.equal(expired.reason, "snapshot-expired");
+      const renewed = yield* explorer.overview(scope);
+      assert.notEqual(renewed.snapshotId, overview.snapshotId);
+      assert.equal(
+        (yield* explorer.history({ ...scope, snapshotId: renewed.snapshotId })).commits.length,
+        1,
+      );
+    }),
+  );
+  it.effect("invalidates ancestry snapshots when shallow history deepens with unchanged tips", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+      yield* write("hello.txt", "second\n");
+      yield* git(["commit", "-am", "second"]);
+      const boundary = yield* git(["rev-parse", "HEAD"]);
+      yield* write("hello.txt", "third\n");
+      yield* git(["commit", "-am", "third"]);
+      yield* git(["config", "remote.origin.url", "https://invalid.example/never-contact.git"]);
+      yield* git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+      yield* git(["update-ref", "refs/remotes/origin/main", root]);
+      yield* git(["branch", "--set-upstream-to=origin/main", "main"]);
+      yield* fs.writeFileString(path.join(cwd, ".git", "shallow"), `${boundary}\n`);
+      const shallow = yield* explorer.overview(scope);
+      assert.equal(shallow.refs.find((ref) => ref.shortName === "main")?.behind, 1);
+      const before = yield* explorer.history({ ...scope, snapshotId: shallow.snapshotId });
+      assert.equal(
+        before.commits.find((commit) => commit.hash === root)?.upstreamStatus,
+        "upstream-only",
+      );
+      assert.deepEqual(before.commits.find((commit) => commit.hash === boundary)?.parents, []);
+      yield* fs.remove(path.join(cwd, ".git", "shallow"));
+      assert.equal(
+        (yield* explorer.history({ ...scope, snapshotId: shallow.snapshotId }).pipe(Effect.flip))
+          .reason,
+        "snapshot-expired",
+      );
+      const complete = yield* explorer.overview(scope);
+      assert.equal(complete.headHash, shallow.headHash);
+      assert.notEqual(complete.snapshotId, shallow.snapshotId);
+      assert.equal(complete.refs.find((ref) => ref.shortName === "main")?.behind, 0);
+      const after = yield* explorer.history({ ...scope, snapshotId: complete.snapshotId });
+      assert.equal(after.commits.find((commit) => commit.hash === root)?.upstreamStatus, "shared");
+      assert.deepEqual(after.commits.find((commit) => commit.hash === boundary)?.parents, [root]);
+    }),
+  );
+
+  it.effect.each([false, true])(
+    "bounds worktree HEAD rereads during concurrent commits (continuous=%s)",
+    (continuous) =>
+      Effect.gen(function* () {
+        const { cwd, projectStore } = yield* fixture;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        let worktreeReads = 0;
+        const racingDriver = Layer.succeed(GitVcsDriver.GitVcsDriver, {
+          ...driver,
+          execute: Effect.fn("GitExplorer.test.concurrentCommit")(function* (input) {
+            const result = yield* driver.execute(input);
+            if (input.args.includes("worktree") && input.args.includes("list")) {
+              worktreeReads++;
+              if (continuous || worktreeReads === 1)
+                yield* driver.execute({
+                  operation: "GitExplorer.test",
+                  cwd,
+                  args: ["commit", "--allow-empty", "-m", "concurrent"],
+                });
+            }
+            return result;
+          }),
+        });
+        const explorer = yield* GitExplorer.GitExplorer.pipe(
+          Effect.provide(
+            GitExplorer.layer.pipe(Layer.provide(Layer.merge(projectStore, racingDriver))),
+          ),
+        );
+        if (continuous) {
+          assert.equal(
+            (yield* explorer.overview(scope).pipe(Effect.flip)).operation,
+            "concurrent-head-change",
+          );
+        } else {
+          const overview = yield* explorer.overview(scope);
+          assert.equal(
+            overview.headHash,
+            overview.refs.find((ref) => ref.shortName === "main")?.hash,
+          );
+        }
+        assert.equal(worktreeReads, 2);
+      }),
+  );
+
+  it.effect("does not report an empty FETCH_HEAD from a failed fetch as a known fetch", () =>
+    Effect.gen(function* () {
+      const { explorer, fs, path, cwd } = yield* fixture;
+      yield* fs.writeFileString(path.join(cwd, ".git", "FETCH_HEAD"), "");
+      assert.equal((yield* explorer.overview(scope)).lastFetchAt, null);
+    }),
+  );
+  it.effect("shows peeled commit tags and tagged-only history while skipping non-commit tags", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      const original = yield* explorer.overview(scope);
+      yield* git(["tag", "lightweight", root]);
+      yield* git(["tag", "-a", "annotated", root, "-m", "release"]);
+      yield* git(["tag", "-a", "nested", "annotated", "-m", "nested tag"]);
+      const blob = yield* git(["rev-parse", "HEAD:hello.txt"]);
+      const tree = yield* git(["rev-parse", "HEAD^{tree}"]);
+      yield* git(["tag", "blob", blob]);
+      yield* git(["tag", "-a", "annotated-blob", blob, "-m", "blob tag"]);
+      yield* git(["tag", "tree", tree]);
+      yield* git(["switch", "--orphan", "tag-only"]);
+      yield* write("release.txt", "release\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "tag-only history"]);
+      const taggedOnly = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["tag", "release-only", taggedOnly]);
+      yield* git(["switch", "main"]);
+      yield* git(["branch", "-D", "tag-only"]);
+      const overview = yield* explorer.overview(scope);
+      assert.notEqual(overview.snapshotId, original.snapshotId);
+      assert.deepEqual(overview.stashes, []);
+      const tags = overview.refs.filter((ref) => ref.kind === "tag");
+      assert.sameMembers(
+        tags.map((ref) => ref.shortName),
+        ["lightweight", "annotated", "nested", "release-only"],
+      );
+      for (const tag of tags.filter((ref) => ref.shortName !== "release-only"))
+        assert.equal(tag.hash, root);
+      assert.isTrue(
+        tags.every((tag) => tag.upstream === null && tag.ahead === null && tag.behind === null),
+      );
+      const history = yield* explorer.history({ ...scope, snapshotId: overview.snapshotId });
+      assert.isTrue(history.commits.some((commit) => commit.hash === taggedOnly));
+      assert.sameMembers(
+        history.commits.map((commit) => commit.hash),
+        [root, taggedOnly],
+      );
+    }),
+  );
+
+  it.effect(
+    "reviews multiple stashes and their saved untracked objects without touching Git state",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        yield* write("hello.txt", "staged version\n");
+        yield* git(["add", "hello.txt"]);
+        yield* write("hello.txt", "saved working version\n");
+        yield* write("loose.txt", "saved untracked version\n");
+        yield* fs.writeFile(path.join(cwd, "loose.bin"), new Uint8Array([0, 1, 2]));
+        yield* git(["stash", "push", "--include-untracked", "-m", "first stash"]);
+        const first = yield* git(["rev-parse", "refs/stash"]);
+        yield* write("hello.txt", "second stash version\n");
+        yield* git(["stash", "push", "-m", "second stash"]);
+        const second = yield* git(["rev-parse", "refs/stash"]);
+        yield* write("hello.txt", "current working version\n");
+        yield* write("loose.txt", "current untracked version\n");
+        const indexBefore = yield* fs.readFile(path.join(cwd, ".git", "index"));
+        const stashLogBefore = yield* fs.readFile(path.join(cwd, ".git", "logs", "refs", "stash"));
+        const refsBefore = yield* git(["show-ref"]);
+        const statusBefore = yield* git(["--no-optional-locks", "status", "--porcelain=v2", "-z"]);
+        const overview = yield* explorer.overview(scope);
+        assert.deepEqual(
+          overview.stashes.map((stash) => [stash.name, stash.hash]),
+          [
+            ["stash@{0}", second],
+            ["stash@{1}", first],
+          ],
+        );
+        assert.include(overview.stashes[1]!.subject, "first stash");
+        assert.match(overview.stashes[0]!.createdAt, /^\d{4}-/);
+        const history = yield* explorer.history({ ...scope, snapshotId: overview.snapshotId });
+        assert.deepEqual(
+          history.commits.map((commit) => commit.hash),
+          [root],
+        );
+        const details = yield* explorer.details({ ...scope, revision: first });
+        assert.equal(details.stash?.hash, first);
+        assert.equal(details.stash?.name, "stash@{1}");
+        assert.equal(details.comparisonParent, root);
+        assert.equal(details.files.find((file) => file.path === "hello.txt")?.stage, "committed");
+        const loose = details.files.find((file) => file.path === "loose.txt");
+        assert.equal(loose?.stage, "stash-untracked");
+        assert.equal(loose?.status, "untracked");
+        assert.equal(loose?.additions, 1);
+        const trackedPatch = yield* explorer.patch({
+          ...scope,
+          revision: first,
+          stage: "committed",
+          path: "hello.txt",
+        });
+        assert.include(trackedPatch.patch, "+saved working version");
+        assert.notInclude(trackedPatch.patch, "current working version");
+        assert.notInclude(trackedPatch.patch, "staged version");
+        const loosePatch = yield* explorer.patch({
+          ...scope,
+          revision: first,
+          stage: "stash-untracked",
+          path: "loose.txt",
+        });
+        assert.include(loosePatch.patch, "+saved untracked version");
+        assert.notInclude(loosePatch.patch, "current untracked version");
+        assert.isTrue(
+          (yield* explorer.patch({
+            ...scope,
+            revision: first,
+            stage: "stash-untracked",
+            path: "loose.bin",
+          })).binary,
+        );
+        assert.equal((yield* explorer.details({ ...scope, revision: second })).files.length, 1);
+        assert.equal((yield* explorer.details({ ...scope, revision: root })).stash, null);
+        assert.equal(
+          (yield* explorer
+            .patch({ ...scope, revision: root, stage: "stash-untracked", path: "hello.txt" })
+            .pipe(Effect.flip)).reason,
+          "invalid-path",
+        );
+        assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git", "index")), indexBefore);
+        assert.deepEqual(
+          yield* fs.readFile(path.join(cwd, ".git", "logs", "refs", "stash")),
+          stashLogBefore,
+        );
+        assert.equal(yield* git(["show-ref"]), refsBefore);
+        assert.equal(
+          yield* git(["--no-optional-locks", "status", "--porcelain=v2", "-z"]),
+          statusBefore,
+        );
+      }),
+  );
+
+  it.effect("keeps stash selection pinned to its hash through reflog reordering and removal", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write } = yield* fixture;
+      yield* write("loose.txt", "original saved content\n");
+      yield* git(["stash", "push", "--include-untracked", "-m", "original"]);
+      const first = yield* git(["rev-parse", "refs/stash"]);
+      yield* write("hello.txt", "newer\n");
+      yield* git(["stash", "push", "-m", "newer"]);
+      const initial = yield* explorer.overview(scope);
+      yield* git(["stash", "drop", "stash@{0}"]);
+      const reordered = yield* explorer.overview(scope);
+      assert.notEqual(reordered.snapshotId, initial.snapshotId);
+      const details = yield* explorer.details({ ...scope, revision: first });
+      assert.equal(details.stash?.name, "stash@{0}");
+      assert.equal(details.stash?.hash, first);
+      yield* git(["stash", "drop", "stash@{0}"]);
+      const removed = yield* explorer.overview(scope);
+      assert.deepEqual(removed.stashes, []);
+      const captured = yield* explorer.details({ ...scope, revision: first });
+      assert.equal(captured.stash?.hash, first);
+      assert.include(
+        (yield* explorer.patch({
+          ...scope,
+          revision: first,
+          stage: "stash-untracked",
+          path: "loose.txt",
+        })).patch,
+        "+original saved content",
+      );
+    }),
+  );
+});
