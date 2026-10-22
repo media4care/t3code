@@ -40,22 +40,6 @@ export const RelayObservability = Effect.gen(function* () {
     })),
   });
 
-  const mobileIngestToken = yield* Axiom.ApiToken("RelayMobileAxiomIngestToken", {
-    name: relayResourceNameForStage("t3-code-mobile-otel-ingest", stage),
-    description: "Owned by Alchemy. Scoped OTLP ingest token for T3 Code mobile spans.",
-    datasetCapabilities: Output.map(traces.name, (dataset) => ({
-      [dataset]: { ingest: ["create" as const] },
-    })),
-  });
-
-  const clientIngestToken = yield* Axiom.ApiToken("RelayClientAxiomIngestToken", {
-    name: relayResourceNameForStage("t3-code-relay-client-otel-ingest", stage),
-    description: "Owned by Alchemy. Scoped OTLP ingest token for first-party relay client spans.",
-    datasetCapabilities: Output.map(traces.name, (dataset) => ({
-      [dataset]: { ingest: ["create" as const] },
-    })),
-  });
-
   yield* Axiom.View("RelayRecentSpansView", {
     name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
     description: "Recent relay HTTP request spans.",
@@ -65,7 +49,7 @@ export const RelayObservability = Effect.gen(function* () {
 
   yield* RelayMonitoring(traces);
 
-  return { traces, workerIngestToken, mobileIngestToken, clientIngestToken } as const;
+  return { traces, workerIngestToken } as const;
 });
 
 export const withSpanAttributes =

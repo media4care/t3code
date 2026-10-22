@@ -4,11 +4,8 @@
 
 The relay Alchemy stack owns a shared Axiom trace setup:
 
-- `t3-code-relay-traces-prod`, the OpenTelemetry trace dataset shared by the Worker, mobile app, and
-  first-party relay clients
+- `t3-code-relay-traces-prod`, the OpenTelemetry trace dataset for the Worker
 - `t3-code-relay-otel-ingest-prod`, the dataset-scoped Worker ingest token
-- `t3-code-mobile-otel-ingest-prod`, the dataset-scoped mobile ingest token
-- `t3-code-relay-client-otel-ingest-prod`, the dataset-scoped first-party relay-client ingest token
 - `t3-code-relay-recent-spans-prod`, a view of recent request and endpoint spans
 
 Alchemy stages append their sanitized stage name to isolate resources, for example
@@ -21,8 +18,8 @@ vp run deploy
 ```
 
 Alchemy resolves account-level Axiom deployment credentials through its provider. At runtime, the
-Worker receives only its scoped ingest token. Mobile and relay clients use their own separately
-provisioned scoped ingest tokens.
+Worker receives only its scoped ingest token. Client builds do not receive ingest credentials or
+automatically export traces.
 
 The Worker emits Effect's built-in HTTP server spans plus endpoint and database child spans.
 Effect's OpenTelemetry exporter stores semantic HTTP attributes below the `attributes.` prefix.
@@ -70,8 +67,8 @@ managed endpoint, and with it the environment. On a forward, `relay.hook.upstrea
 `x-t3-hook-outcome` response header. A held request's delivery records the same on its
 `relay.inbox.deliver` span. The relay sends its own `traceparent` with each forward and drops any a
 sender supplied, and signs each forward (`x-t3-relay-delivery`) so the environment trusts the
-relay's delivery id, receive time and trace context only from the relay, so on environments that export to T3 Connect, the environment's
-`ScheduledTaskService.triggerWebhook` span lands in the same trace. `relay.hook.rate_limit` says which
+relay's delivery id, receive time and trace context only from the relay. The environment records
+`ScheduledTaskService.triggerWebhook` locally or in its explicitly configured diagnostic receiver. `relay.hook.rate_limit` says which
 budget ran out: `endpoint` or `hook`. `relay.hook.rate_limiter_failed_open` is set when the
 Cloudflare rate limiter was unavailable and the request went through unlimited.
 
@@ -121,11 +118,8 @@ Monitors count HTTP status codes, not span errors. A request the relay cuts off 
 ends as an interrupted span without an error flag, but still answers 504. `/connect` 502s are
 normal: offline hosts produce most of them, retried by their clients every few seconds.
 
-The dashboard's "Connecting" charts show connections as users see them. Web, desktop, and mobile
-export a root `relay.connection.attempt` span per attempt, which lasts until initial sync finishes, in
-the same trace as the relay's and the host's spans. Most reconnects reuse a cached relay token and go
-straight to the host, so relay latency only affects cold connects. A slow total with fast phases
-usually means the client waited out an unreachable direct (LAN) route before falling back to the relay.
+Client connection-attempt spans are not exported automatically. Client-side failures must be
+investigated from local diagnostics or an explicitly configured receiver.
 
 **Links failing / tunnel recovery failing.** Open the dashboard's "Link failures by reason" table.
 `provisioning: ensure-tunnel` or `configure-tunnel` with Cloudflare 429s on the "Cloudflare API calls

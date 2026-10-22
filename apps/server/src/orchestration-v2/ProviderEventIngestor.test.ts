@@ -176,14 +176,7 @@ function threadCreatedEvent(
 
 const layer = it.layer(layerTest);
 
-it.effect("records accepted billed turn usage once without billing the context window", () => {
-  const recorded: Array<Readonly<Record<string, unknown>>> = [];
-  const layerAnalytics = Layer.succeed(ProviderEventIngestor.ProviderTurnAnalytics, {
-    record: (properties: Readonly<Record<string, unknown>>) =>
-      Effect.sync(() => {
-        recorded.push(properties);
-      }),
-  });
+it.effect("persists accepted billed turn usage separately from the context window", () => {
   return Effect.gen(function* () {
     const now = yield* DateTime.now;
     const eventSink = yield* EventSink.EventSinkV2;
@@ -229,14 +222,9 @@ it.effect("records accepted billed turn usage once without billing the context w
       providerSessionId,
       providerInstanceId: modelSelection.instanceId,
       threadId: threadEvent.threadId,
-      analyticsContext: {
-        modelSelection,
-        runtimeMode: "full-access" as const,
-        interactionMode: "default" as const,
-      },
       event: { type: "provider_turn.updated" as const, driver: CODEX_DRIVER, providerTurn },
     };
-    yield* ingestor.ingestNormalized(input);
+    const stored = yield* ingestor.ingestNormalized(input);
     yield* ingestor.ingestNormalized(input);
     const ignored = yield* ingestor.ingestNormalized({
       ...input,
@@ -257,23 +245,12 @@ it.effect("records accepted billed turn usage once without billing the context w
       },
     });
     assert.isEmpty(ignored);
-    assert.lengthOf(recorded, 1);
-    assert.deepEqual(recorded[0], {
-      provider: CODEX_DRIVER,
-      terminalStatus: "completed",
-      usageStatus: "complete",
-      usageScope: "main_agent",
-      hasSubagents: false,
-      inputTokens: 40,
-      cachedInputTokens: 30,
-      outputTokens: 10,
-      model: modelSelection.model,
-      mixedModels: false,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      durationMs: 120,
-    });
-  }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerAnalytics))));
+    const updated = stored.find(({ event }) => event.type === "provider-turn.updated")?.event;
+    assert.isDefined(updated);
+    if (updated?.type !== "provider-turn.updated") return;
+    assert.deepEqual(updated.payload.turnTokenUsage, providerTurn.turnTokenUsage);
+    assert.deepEqual(updated.payload.tokenUsage, providerTurn.tokenUsage);
+  }).pipe(Effect.provide(layerTest));
 });
 
 layer("ProviderEventIngestorV2", (it) => {

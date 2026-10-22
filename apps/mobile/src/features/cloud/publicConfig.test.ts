@@ -1,35 +1,21 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { resolveCloudPublicConfig } from "./publicConfig";
 
-vi.mock("expo-constants", () => ({
-  default: {
-    expoConfig: {
-      extra: {},
-    },
-  },
-}));
+vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 
-describe("resolveCloudPublicConfig", () => {
-  it("rejects an insecure relay URL", () => {
-    expect(
-      resolveCloudPublicConfig({
-        clerk: { publishableKey: "pk_test_example", jwtTemplate: "t3-relay" },
-        relay: { url: "http://relay.example.test" },
-      }),
-    ).toEqual({
-      clerk: {
-        publishableKey: "pk_test_example",
-        jwtTemplate: "t3-relay",
-      },
-      relay: {
-        url: null,
-      },
-      observability: {
-        tracesUrl: null,
-        tracesDataset: null,
-        tracesToken: null,
-      },
-    });
+it("ignores legacy telemetry credentials while preserving cloud connection configuration", () => {
+  const extra = {
+    clerk: { publishableKey: "pk_test_example", jwtTemplate: "relay" },
+    relay: { url: "https://relay.example.test" },
+    observability: {
+      tracesUrl: "https://api.axiom.test/v1/traces",
+      tracesDataset: "mobile-traces",
+      tracesToken: "legacy-ingest-token",
+    },
+  };
+  expect(resolveCloudPublicConfig(extra)).toEqual({
+    clerk: extra.clerk,
+    relay: { url: "https://relay.example.test" },
   });
 });
