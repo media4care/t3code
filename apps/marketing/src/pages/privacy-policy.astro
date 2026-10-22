@@ -82,12 +82,6 @@ const sections = [
               headline.
             </li>
             <li>
-              <strong>Product usage data.</strong> By default, T3 Code sends us anonymous usage
-              data, such as which provider and model a turn used, whether it succeeded, and your app
-              version and operating system. We use it to improve the product. You can turn this off
-              at any time; see “Product Usage Data” under Your Choices below.
-            </li>
-            <li>
               <strong>Information you provide to us.</strong> We collect information that you choose
               to provide when you request support, send feedback, or otherwise communicate with us.
             </li>
@@ -163,8 +157,8 @@ const sections = [
             <li>To monitor reliability, prevent abuse, and investigate security incidents;</li>
             <li>To comply with applicable law and enforce the terms governing the Services; and</li>
             <li>
-              To analyze and improve T3 Code using product usage data and aggregated,
-              de-identified, or other anonymous operational information.
+              To analyze and improve T3 Code using aggregated, de-identified, or other anonymous
+              hosted-service operational information.
             </li>
           </ul>
 
@@ -246,16 +240,9 @@ const sections = [
               >.
             </li>
             <li>
-              <strong>PostHog</strong> <em>(PostHog, Inc.)</em>.<br />
-              We use PostHog to receive and analyze product usage data.<br />
-              You can view PostHog's privacy policy here:{" "}<a href="https://posthog.com/privacy"
-                >https://posthog.com/privacy</a
-              >.
-            </li>
-            <li>
               <strong>Axiom</strong> <em>(Axiom, Inc.)</em>.<br />
-              We use Axiom for operational diagnostics that help us maintain and troubleshoot the
-              Services.<br />
+              We use Axiom for hosted-service operational diagnostics that help us maintain and
+              troubleshoot T3 Connect.<br />
               You can view Axiom's privacy policy here:{" "}<a
                 href="https://axiom.co/docs/legal/privacy">https://axiom.co/docs/legal/privacy</a
               >.
@@ -342,11 +329,11 @@ const sections = [
             and notification permissions in your device settings.
           </p>
 
-          <h3>Product Usage Data</h3>
+          <h3>App Diagnostics</h3>
           <p>
-            To stop sending product usage data, set the environment variable{" "}
-            <code>T3CODE_TELEMETRY_ENABLED=false</code>{" "}where T3 Code runs, for example in your
-            shell profile, and restart T3 Code.
+            The app does not send product usage events or automatic relay and mobile traces. Local
+            diagnostics remain in your connected environment unless you configure a diagnostic
+            receiver. Hosted-service operational logging is separate from these app diagnostics.
           </p>
 
           <h3>Cookies and Local Data</h3>

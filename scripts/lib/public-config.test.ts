@@ -15,6 +15,27 @@ afterEach(() => {
 });
 
 describe("loadRepoEnv", () => {
+  it("does not expose legacy telemetry credentials to client builds", () => {
+    const config = loadRepoEnv({
+      repoRoot: makeTemporaryDirectory(),
+      baseEnv: {
+        T3CODE_MOBILE_OTLP_TRACES_URL: "https://telemetry.example.test/v1/traces",
+        T3CODE_MOBILE_OTLP_TRACES_DATASET: "mobile",
+        T3CODE_MOBILE_OTLP_TRACES_TOKEN: "mobile-token",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://telemetry.example.test/v1/traces",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-token",
+      },
+    });
+
+    expect(config.EXPO_PUBLIC_OTLP_TRACES_URL).toBeUndefined();
+    expect(config.EXPO_PUBLIC_OTLP_TRACES_DATASET).toBeUndefined();
+    expect(config.EXPO_PUBLIC_OTLP_TRACES_TOKEN).toBeUndefined();
+    expect(config.VITE_RELAY_OTLP_TRACES_URL).toBeUndefined();
+    expect(config.VITE_RELAY_OTLP_TRACES_DATASET).toBeUndefined();
+    expect(config.VITE_RELAY_OTLP_TRACES_TOKEN).toBeUndefined();
+  });
+
   it("applies process, root local, and root precedence in that order", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(

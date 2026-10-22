@@ -19,7 +19,6 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as CloudLink from "./CloudLink.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import type { RelayRequestError } from "./relayResponse.ts";
-import { traceRelayRequest } from "./traceRelayRequest.ts";
 
 const CLOUD_CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
@@ -148,10 +147,8 @@ export const layer = HttpApiBuilder.group(
         ),
       )
       .handle("t3MintCredential", ({ payload }) =>
-        traceRelayRequest(
-          toHttpError(cloudLink.mintCredential(payload)).pipe(
-            Effect.tap(() => appendCloudCredentialResponseHeaders),
-          ),
+        toHttpError(cloudLink.mintCredential(payload)).pipe(
+          Effect.tap(() => appendCloudCredentialResponseHeaders),
         ),
       );
   }),
