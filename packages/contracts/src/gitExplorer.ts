@@ -46,6 +46,50 @@ export const GitExplorerOverviewResult = Schema.Struct({
   snapshotId: Schema.String,
 });
 export type GitExplorerOverviewResult = typeof GitExplorerOverviewResult.Type;
+export const GitExplorerBranchStatus = Schema.Struct({
+  name: Schema.String,
+  hash: GitExplorerHash,
+  mergeStatus: Schema.Literals(["merged", "equivalent", "unmerged", "unknown"]),
+  targetRef: Schema.NullOr(Schema.String),
+  targetHash: Schema.NullOr(GitExplorerHash),
+  reason: Schema.NullOr(
+    Schema.Literals([
+      "missing-base",
+      "shallow",
+      "merge-commits",
+      "limit",
+      "unrelated",
+      "read-failed",
+    ]),
+  ),
+  deleteBlockedReason: Schema.NullOr(
+    Schema.Literals(["checked-out", "protected", "unmerged", "unknown"]),
+  ),
+});
+export type GitExplorerBranchStatus = typeof GitExplorerBranchStatus.Type;
+const GitExplorerLocalBranch = Schema.String.check(
+  Schema.isPattern(/^refs\/heads\/.+/),
+  Schema.isMaxLength(1024),
+);
+export const GitExplorerBranchStatusesInput = Schema.Struct({
+  ...GitExplorerScope,
+  snapshotId: Schema.String,
+  branches: Schema.Array(GitExplorerLocalBranch).check(Schema.isMaxLength(32)),
+});
+export type GitExplorerBranchStatusesInput = typeof GitExplorerBranchStatusesInput.Type;
+export const GitExplorerBranchStatusesResult = Schema.Struct({
+  branches: Schema.Array(GitExplorerBranchStatus),
+});
+export type GitExplorerBranchStatusesResult = typeof GitExplorerBranchStatusesResult.Type;
+export const GitExplorerDeleteBranchInput = Schema.Struct({
+  ...GitExplorerScope,
+  branchName: GitExplorerLocalBranch,
+  expectedHash: GitExplorerHash,
+  expectedTargetRef: Schema.String,
+  expectedTargetHash: GitExplorerHash,
+  allowEquivalent: Schema.Boolean,
+});
+export type GitExplorerDeleteBranchInput = typeof GitExplorerDeleteBranchInput.Type;
 export const GitExplorerHistoryInput = Schema.Struct({
   ...GitExplorerScope,
   snapshotId: Schema.String,
@@ -130,6 +174,12 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "snapshot-expired",
     "read-failed",
     "too-large",
+    "invalid-branch",
+    "branch-changed",
+    "branch-checked-out",
+    "branch-protected",
+    "branch-not-merged",
+    "write-failed",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -149,6 +199,18 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "This repository view is too large to load.";
       case "read-failed":
         return "Git Explorer could not read this repository.";
+      case "invalid-branch":
+        return "The selected local branch is unavailable.";
+      case "branch-changed":
+        return "The branch or its comparison base changed. Refresh and review it again.";
+      case "branch-checked-out":
+        return "This branch is checked out in a worktree and cannot be deleted.";
+      case "branch-protected":
+        return "The repository's base branch cannot be deleted from Git Explorer.";
+      case "branch-not-merged":
+        return "This branch has changes that are not confirmed merged into its base.";
+      case "write-failed":
+        return "Git Explorer could not delete this branch.";
     }
   }
 }

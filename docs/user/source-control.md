@@ -25,7 +25,18 @@ Reviewing a stash does not apply or remove it.
 Ahead and behind counts compare each branch with its configured upstream using locally stored
 refs. The last recorded fetch time, when available, describes local fetch information; it does
 not confirm the remote's current state. **Refresh** rereads local Git data. Ask an agent to fetch
-if you need newer remote-tracking information. Git Explorer only reads the repository.
+if you need newer remote-tracking information.
+
+Local branches also show whether they are merged into their comparison base, usually the
+remote's default branch. **Equivalent** means their commit patches already exist on that base;
+squashed or edited changes may not be recognized. Hover the indicator, or long-press the branch
+on mobile, to see its comparison. This uses locally stored refs, so fetch before relying on it
+for recent remote merges.
+
+To clean up a merged local branch, use **Delete** on its row and confirm. On touch devices, use
+the branch menu. Deletion is available only when its changes are confirmed merged or rebased
+into the base. Base branches and branches checked out in any worktree are protected. Remote
+branches are never deleted. Branch-specific Git configuration is retained.
 
 ## Connect an account
 

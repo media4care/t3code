@@ -697,3 +697,555 @@ it.layer(layer)("GitExplorer", (it) => {
     }),
   );
 });
+
+const branchFixture = Effect.gen(function* () {
+  const setup = yield* fixture;
+  const { git, write, root, explorer } = setup;
+  yield* git(["config", "remote.origin.url", "https://invalid.example/never-contact.git"]);
+  yield* git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+  yield* git(["switch", "-c", "rebased"]);
+  yield* write("feature.txt", "feature\n");
+  yield* git(["add", "."]);
+  yield* git(["commit", "-m", "feature before rebase"]);
+  const original = yield* git(["rev-parse", "HEAD"]);
+  yield* git(["switch", "main"]);
+  yield* write("base.txt", "base advanced\n");
+  yield* git(["add", "."]);
+  yield* git(["commit", "-m", "base advance"]);
+  yield* git(["cherry-pick", original]);
+  const target = yield* git(["rev-parse", "HEAD"]);
+  yield* git(["update-ref", "refs/remotes/origin/main", target]);
+  yield* git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  yield* git(["branch", "done", root]);
+  yield* git(["switch", "-c", "pending", root]);
+  yield* write("pending.txt", "not merged\n");
+  yield* git(["add", "."]);
+  yield* git(["commit", "-m", "not merged"]);
+  const pending = yield* git(["rev-parse", "HEAD"]);
+  yield* git(["update-ref", "refs/remotes/origin/pending", pending]);
+  yield* git(["branch", "--set-upstream-to=origin/pending", "pending"]);
+  yield* git(["switch", "main"]);
+  const statuses = Effect.fn("GitExplorer.test.branchStatuses")(function* (names: string[]) {
+    const overview = yield* explorer.overview(scope);
+    return (yield* explorer.branchStatuses({
+      ...scope,
+      snapshotId: overview.snapshotId,
+      branches: names.map((name) => `refs/heads/${name}`),
+    })).branches;
+  });
+  return { ...setup, original, target, pending, statuses };
+});
+
+it.layer(layer)("GitExplorer branch review", (it) => {
+  it.effect("protects a merged branch reserved by detached rebase and bisect operations", () =>
+    Effect.gen(function* () {
+      const { explorer, git, target, root, cwd, fs, path } = yield* branchFixture;
+      yield* git(["switch", "--detach"]);
+      const request = {
+        ...scope,
+        branchName: "refs/heads/done",
+        expectedHash: root,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: false,
+      };
+      for (const relative of ["rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"]) {
+        const file = path.join(cwd, ".git", relative);
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+        yield* fs.writeFileString(
+          file,
+          relative === "BISECT_START" ? "done\n" : "refs/heads/done\n",
+        );
+        assert.equal(
+          (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+          "branch-checked-out",
+        );
+        assert.equal(yield* git(["rev-parse", "done"]), root);
+        assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "HEAD.lock")));
+        yield* fs.remove(file);
+      }
+    }),
+  );
+
+  it.effect(
+    "preserves another process's HEAD lock and releases only locks acquired by deletion",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, target, original, cwd, fs, path } = yield* branchFixture;
+        const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-branch-lock-" });
+        const linked = path.join(parent, "linked");
+        yield* git(["worktree", "add", "-b", "active-other", linked]);
+        const existingLock = path.join(cwd, ".git", "worktrees", "linked", "HEAD.lock");
+        yield* fs.writeFileString(existingLock, "another process");
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({
+              ...scope,
+              branchName: "refs/heads/rebased",
+              expectedHash: original,
+              expectedTargetRef: "refs/remotes/origin/main",
+              expectedTargetHash: target,
+              allowEquivalent: true,
+            })
+            .pipe(Effect.flip)).reason,
+          "write-failed",
+        );
+        assert.equal(yield* fs.readFileString(existingLock), "another process");
+        assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "HEAD.lock")));
+        assert.equal(yield* git(["rev-parse", "rebased"]), original);
+      }),
+  );
+
+  it.effect("holds every registered worktree HEAD lock until the ref transaction completes", () =>
+    Effect.gen(function* () {
+      const { projectStore, git, target, original, cwd, fs, path } = yield* branchFixture;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-branch-checkout-" });
+      const linked = path.join(parent, "linked");
+      yield* git(["worktree", "add", "--detach", linked]);
+      let blockedCheckout = false;
+      const guardedDriver = GitVcsDriver.GitVcsDriver.of({
+        ...driver,
+        execute: (input) =>
+          Effect.gen(function* () {
+            if (input.operation === "GitExplorer.deleteBranch") {
+              assert.isTrue(
+                yield* fs.exists(path.join(cwd, ".git", "HEAD.lock")).pipe(Effect.orDie),
+              );
+              assert.isTrue(
+                yield* fs
+                  .exists(path.join(cwd, ".git", "worktrees", "linked", "HEAD.lock"))
+                  .pipe(Effect.orDie),
+              );
+              const checkout = yield* driver.execute({
+                operation: "GitExplorer.test.checkout",
+                cwd: linked,
+                args: ["switch", "rebased"],
+                allowNonZeroExit: true,
+              });
+              blockedCheckout = checkout.exitCode !== 0 && checkout.stderr.includes("HEAD.lock");
+            }
+            return yield* driver.execute(input);
+          }),
+      });
+      const explorer = yield* GitExplorer.GitExplorer.pipe(
+        Effect.provide(
+          GitExplorer.layer.pipe(
+            Layer.provide(projectStore),
+            Layer.provide(Layer.succeed(GitVcsDriver.GitVcsDriver, guardedDriver)),
+          ),
+        ),
+      );
+      yield* explorer.deleteBranch({
+        ...scope,
+        branchName: "refs/heads/rebased",
+        expectedHash: original,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: true,
+      });
+      assert.isTrue(blockedCheckout);
+      assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "HEAD.lock")));
+      assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "worktrees", "linked", "HEAD.lock")));
+      assert.equal(yield* git(["symbolic-ref", "HEAD"]), "refs/heads/main");
+    }),
+  );
+
+  it.effect("does not consider whitespace-changing Python patches equivalent or deletable", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write } = yield* fixture;
+      yield* write("example.py", "def f(x):\n    if x:\n        return 1\n    return 2\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "python base"]);
+      yield* git(["switch", "-c", "python-feature"]);
+      yield* write("example.py", "def f(x):\n    if x:\n        return 1\n    return 3\n");
+      yield* git(["commit", "-am", "return three outside if"]);
+      const branch = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "main"]);
+      yield* write("example.py", "def f(x):\n    if x:\n        return 1\n        return 3\n");
+      yield* git(["commit", "-am", "unreachable return inside if"]);
+      const target = yield* git(["rev-parse", "HEAD"]);
+      const overview = yield* explorer.overview(scope);
+      assert.equal(
+        (yield* explorer.branchStatuses({
+          ...scope,
+          snapshotId: overview.snapshotId,
+          branches: ["refs/heads/python-feature"],
+        })).branches[0]?.mergeStatus,
+        "unmerged",
+      );
+      assert.equal(
+        (yield* explorer
+          .deleteBranch({
+            ...scope,
+            branchName: "refs/heads/python-feature",
+            expectedHash: branch,
+            expectedTargetRef: "refs/heads/main",
+            expectedTargetHash: target,
+            allowEquivalent: true,
+          })
+          .pipe(Effect.flip)).reason,
+        "branch-not-merged",
+      );
+      assert.equal(yield* git(["rev-parse", "python-feature"]), branch);
+    }),
+  );
+
+  it.effect(
+    "does not cache transient read failures and rejects refs changed during deletion review",
+    () =>
+      Effect.gen(function* () {
+        const { cwd, pending, original, target, projectStore } = yield* branchFixture;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        let failAncestry = true;
+        let moveBeforeMutation = false;
+        const guardedDriver = GitVcsDriver.GitVcsDriver.of({
+          ...driver,
+          execute: (input) =>
+            Effect.gen(function* () {
+              if (input.args.includes("merge-base") && failAncestry) {
+                failAncestry = false;
+                return yield* driver.execute({
+                  ...input,
+                  args: ["rev-parse", "--verify", "missing-test-ref"],
+                });
+              }
+              if (moveBeforeMutation && input.operation === "GitExplorer.deleteBranch") {
+                moveBeforeMutation = false;
+                yield* driver.execute({
+                  operation: "GitExplorer.test.concurrent",
+                  cwd,
+                  args: ["update-ref", "refs/heads/rebased", pending],
+                });
+              }
+              return yield* driver.execute(input);
+            }),
+        });
+        const explorer = yield* GitExplorer.GitExplorer.pipe(
+          Effect.provide(
+            GitExplorer.layer.pipe(
+              Layer.provide(projectStore),
+              Layer.provide(Layer.succeed(GitVcsDriver.GitVcsDriver, guardedDriver)),
+            ),
+          ),
+        );
+        const overview = yield* explorer.overview(scope);
+        const input = {
+          ...scope,
+          snapshotId: overview.snapshotId,
+          branches: ["refs/heads/rebased"],
+        };
+        assert.equal((yield* explorer.branchStatuses(input)).branches[0]?.reason, "read-failed");
+        assert.equal(
+          (yield* explorer.branchStatuses(input)).branches[0]?.mergeStatus,
+          "equivalent",
+        );
+        moveBeforeMutation = true;
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({
+              ...scope,
+              branchName: "refs/heads/rebased",
+              expectedHash: original,
+              expectedTargetRef: "refs/remotes/origin/main",
+              expectedTargetHash: target,
+              allowEquivalent: true,
+            })
+            .pipe(Effect.flip)).reason,
+          "branch-changed",
+        );
+        assert.equal(
+          (yield* driver.execute({
+            operation: "GitExplorer.test.verify",
+            cwd,
+            args: ["rev-parse", "refs/heads/rebased"],
+          })).stdout.trim(),
+          pending,
+        );
+      }),
+  );
+
+  it.effect(
+    "bounds patch comparisons and reports unrelated histories without permitting deletion",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, root, cwd, statuses } = yield* branchFixture;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const commits = Array.from(
+          { length: 4001 },
+          (_, index) =>
+            `commit refs/heads/long-branch\ncommitter Test <test@example.com> ${1700000000 + index} +0000\ndata 4\nlong\n${index === 0 ? `from ${root}\n` : ""}\n`,
+        ).join("");
+        yield* driver.execute({
+          operation: "GitExplorer.test.long-history",
+          cwd,
+          args: ["fast-import", "--quiet"],
+          stdin: commits,
+        });
+        const [long] = yield* statuses(["long-branch"]);
+        assert.equal(long?.reason, "limit");
+        assert.equal(long?.deleteBlockedReason, "unknown");
+        yield* git(["checkout", "--orphan", "unrelated"]);
+        yield* git(["commit", "-m", "unrelated root"]);
+        yield* git(["switch", "main"]);
+        assert.equal((yield* statuses(["unrelated"]))[0]?.reason, "unrelated");
+        const overview = yield* explorer.overview(scope);
+        assert.equal(
+          (yield* explorer
+            .branchStatuses({
+              ...scope,
+              snapshotId: overview.snapshotId,
+              branches: ["refs/remotes/origin/main"],
+            })
+            .pipe(Effect.flip)).reason,
+          "invalid-branch",
+        );
+        assert.equal(
+          (yield* explorer
+            .branchStatuses({
+              ...scope,
+              snapshotId: overview.snapshotId,
+              branches: Array.from({ length: 33 }, () => "refs/heads/main"),
+            })
+            .pipe(Effect.flip)).reason,
+          "too-large",
+        );
+      }),
+  );
+
+  it.effect("deletes a topic at the base tip while preserving the actual base branch", () =>
+    Effect.gen(function* () {
+      const { explorer, git, target } = yield* branchFixture;
+      yield* git(["branch", "empty-topic", target]);
+      const overview = yield* explorer.overview(scope);
+      const result = yield* explorer.branchStatuses({
+        ...scope,
+        snapshotId: overview.snapshotId,
+        branches: ["refs/heads/empty-topic"],
+      });
+      assert.equal(result.branches[0]?.mergeStatus, "merged");
+      assert.equal(result.branches[0]?.deleteBlockedReason, null);
+      yield* explorer.deleteBranch({
+        ...scope,
+        branchName: "refs/heads/empty-topic",
+        expectedHash: target,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: false,
+      });
+      assert.equal(yield* git(["rev-parse", "main"]), target);
+      assert.notInclude(
+        yield* git(["for-each-ref", "--format=%(refname)", "refs/heads"]),
+        "refs/heads/empty-topic",
+      );
+    }),
+  );
+
+  it.effect(
+    "detects ancestry and rebased patches against origin's base, not a synced upstream",
+    () =>
+      Effect.gen(function* () {
+        const { statuses, target, git, fs, path, cwd } = yield* branchFixture;
+        const index = yield* fs.readFile(path.join(cwd, ".git", "index"));
+        const refs = yield* git(["show-ref"]);
+        const initialStatuses = yield* statuses(["done", "rebased", "pending", "main"]);
+        const [done, rebased, pending, main] = initialStatuses;
+        assert.equal(done?.mergeStatus, "merged");
+        assert.equal(rebased?.mergeStatus, "equivalent");
+        assert.equal(rebased?.targetRef, "refs/remotes/origin/main");
+        assert.equal(rebased?.targetHash, target);
+        assert.equal(pending?.mergeStatus, "unmerged");
+        assert.equal(pending?.deleteBlockedReason, "unmerged");
+        assert.equal(main?.deleteBlockedReason, "protected");
+        assert.deepEqual(yield* statuses(["done", "rebased", "pending", "main"]), initialStatuses);
+        assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git", "index")), index);
+        assert.equal(yield* git(["show-ref"]), refs);
+      }),
+  );
+
+  it.effect(
+    "invalidates configured bases and refuses equivalence with unique merge commits or shallow history",
+    () =>
+      Effect.gen(function* () {
+        const { statuses, git, explorer, target, root, fs, path, cwd } = yield* branchFixture;
+        const before = yield* explorer.overview(scope);
+        yield* git(["config", "branch.pending.t3-merge-base-ref", "refs/remotes/origin/pending"]);
+        const after = yield* explorer.overview(scope);
+        assert.notEqual(before.snapshotId, after.snapshotId);
+        const [configured] = yield* statuses(["pending"]);
+        assert.equal(configured?.mergeStatus, "merged");
+        assert.equal(configured?.deleteBlockedReason, "protected");
+        yield* git(["switch", "-c", "with-merge", root]);
+        yield* git(["merge", "--no-ff", "rebased", "-m", "merge feature"]);
+        yield* git(["switch", "main"]);
+        assert.equal((yield* statuses(["with-merge"]))[0]?.reason, "merge-commits");
+        yield* fs.writeFileString(path.join(cwd, ".git", "shallow"), `${target}\n`);
+        assert.equal((yield* statuses(["rebased"]))[0]?.reason, "shallow");
+      }),
+  );
+
+  it.effect(
+    "uses a local base only without remotes and reports ambiguous or missing remote bases",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, root } = yield* fixture;
+        yield* git(["branch", "done"]);
+        let overview = yield* explorer.overview(scope);
+        const request = { ...scope, branches: ["refs/heads/done"] };
+        const local = (yield* explorer.branchStatuses({
+          ...request,
+          snapshotId: overview.snapshotId,
+        })).branches[0];
+        assert.equal(local?.targetRef, "refs/heads/main");
+        assert.equal(local?.mergeStatus, "merged");
+        yield* git(["config", "remote.origin.url", "https://invalid.example/never-contact.git"]);
+        overview = yield* explorer.overview(scope);
+        const unknown = (yield* explorer.branchStatuses({
+          ...request,
+          snapshotId: overview.snapshotId,
+        })).branches[0];
+        assert.equal(unknown?.reason, "missing-base");
+        yield* git(["update-ref", "refs/remotes/origin/main", root]);
+        yield* git(["update-ref", "refs/remotes/origin/master", root]);
+        overview = yield* explorer.overview(scope);
+        assert.equal(
+          (yield* explorer.branchStatuses({ ...request, snapshotId: overview.snapshotId }))
+            .branches[0]?.reason,
+          "missing-base",
+        );
+      }),
+  );
+
+  it.effect("deletes an ancestor against the reviewed base and invalidates cached refs", () =>
+    Effect.gen(function* () {
+      const { explorer, git, target, original, root, cwd, fs, path } = yield* branchFixture;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* git(["branch", "integrated", target]);
+      yield* git(["update-ref", "refs/remotes/origin/integrated", root]);
+      yield* git(["branch", "--set-upstream-to=origin/integrated", "integrated"]);
+      yield* git(["commit", "--allow-empty", "-m", "after integration"]);
+      const base = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["update-ref", "refs/remotes/origin/main", base]);
+      yield* git(["reset", "--hard", root]);
+      const before = yield* explorer.overview(scope);
+      yield* driver.listRefs({ cwd });
+      const index = yield* fs.readFile(path.join(cwd, ".git", "index"));
+      yield* explorer.deleteBranch({
+        ...scope,
+        branchName: "refs/heads/integrated",
+        expectedHash: target,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: base,
+        allowEquivalent: false,
+      });
+      assert.notInclude(
+        yield* git(["for-each-ref", "--format=%(refname)", "refs/heads"]),
+        "refs/heads/integrated",
+      );
+      assert.notInclude(
+        (yield* driver.listRefs({ cwd })).refs.map((ref) => ref.name),
+        "integrated",
+      );
+      assert.equal(yield* git(["rev-parse", "rebased"]), original);
+      assert.equal(yield* git(["symbolic-ref", "HEAD"]), "refs/heads/main");
+      assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git", "index")), index);
+      assert.notEqual((yield* explorer.overview(scope)).snapshotId, before.snapshotId);
+      assert.equal(
+        yield* git(["config", "remote.origin.url"]),
+        "https://invalid.example/never-contact.git",
+      );
+    }),
+  );
+
+  it.effect(
+    "requires explicit equivalent deletion and rejects stale branch, stale base, protected and unmerged requests",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, target, original, pending, root } = yield* branchFixture;
+        const request = {
+          ...scope,
+          branchName: "refs/heads/rebased",
+          expectedHash: original,
+          expectedTargetRef: "refs/remotes/origin/main",
+          expectedTargetHash: target,
+          allowEquivalent: false,
+        };
+        assert.equal(
+          (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+          "branch-not-merged",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({ ...request, expectedHash: root, allowEquivalent: true })
+            .pipe(Effect.flip)).reason,
+          "branch-changed",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({ ...request, expectedTargetHash: root, allowEquivalent: true })
+            .pipe(Effect.flip)).reason,
+          "branch-changed",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({ ...request, branchName: "refs/heads/main", expectedHash: target })
+            .pipe(Effect.flip)).reason,
+          "branch-protected",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({
+              ...request,
+              branchName: "refs/heads/pending",
+              expectedHash: pending,
+              allowEquivalent: true,
+            })
+            .pipe(Effect.flip)).reason,
+          "branch-not-merged",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({ ...request, branchName: "refs/remotes/origin/main" })
+            .pipe(Effect.flip)).reason,
+          "invalid-branch",
+        );
+        assert.equal(
+          (yield* explorer
+            .deleteBranch({ ...request, branchName: "refs/heads/../main" })
+            .pipe(Effect.flip)).reason,
+          "invalid-branch",
+        );
+        yield* explorer.deleteBranch({ ...request, allowEquivalent: true });
+        assert.notInclude(
+          yield* git(["for-each-ref", "--format=%(refname)", "refs/heads"]),
+          "refs/heads/rebased",
+        );
+      }),
+  );
+
+  it.effect("refuses branches checked out in any worktree and validates repository scope", () =>
+    Effect.gen(function* () {
+      const { explorer, git, target, original, fs, path } = yield* branchFixture;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-branch-worktree-" });
+      yield* git(["worktree", "add", path.join(directory, "linked"), "rebased"]);
+      const request = {
+        ...scope,
+        branchName: "refs/heads/rebased",
+        expectedHash: original,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: true,
+      };
+      assert.equal(
+        (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+        "branch-checked-out",
+      );
+      assert.equal(
+        (yield* explorer.deleteBranch({ ...request, worktreePath: directory }).pipe(Effect.flip))
+          .reason,
+        "invalid-worktree",
+      );
+      assert.equal(yield* git(["rev-parse", "rebased"]), original);
+    }),
+  );
+});

@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { FlatList, Pressable, View } from "react-native";
-import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import type {
   GitExplorerOverviewResult,
   GitExplorerRef,
@@ -10,6 +9,9 @@ import type {
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
+import { GitExplorerBranchRow } from "./GitExplorerBranchRow";
+import type { GitExplorerParams } from "./useGitExplorer";
+import { useGitExplorerBranchActions } from "./useGitExplorerBranchActions";
 
 type BranchRow =
   | {
@@ -18,34 +20,42 @@ type BranchRow =
       readonly label: string;
       readonly detail: string;
     }
-  | { readonly kind: "ref"; readonly ref: GitExplorerRef; readonly displayName: string }
+  | {
+      readonly kind: "ref";
+      readonly ref: GitExplorerRef;
+      readonly displayName: string;
+      readonly statusBranches?: readonly string[];
+    }
   | { readonly kind: "stash"; readonly stash: GitExplorerStash }
   | { readonly kind: "empty"; readonly id: string; readonly label: string };
 
-function syncMark(ref: GitExplorerRef) {
-  if (ref.kind !== "local") return null;
-  if (ref.upstreamMissing) return "!";
-  if (!ref.upstream) return "—";
-  if (ref.ahead === null || ref.behind === null) return "?";
-  if (ref.ahead === 0 && ref.behind === 0) return "✓";
-  return [ref.ahead > 0 ? `↑${ref.ahead}` : "", ref.behind > 0 ? `↓${ref.behind}` : ""]
-    .filter(Boolean)
-    .join(" ");
-}
-
 export function GitExplorerBranches(props: {
   readonly overview: GitExplorerOverviewResult;
+  readonly params: GitExplorerParams;
+  readonly active: boolean;
   readonly tablet: boolean;
   readonly selectedRevision: string | null;
   readonly onSelect: (revision: string) => void;
+  readonly onRefresh: () => void;
 }) {
   const rowHeight = props.tablet ? 28 : 36;
+  const actions = useGitExplorerBranchActions(props.params, props.onRefresh);
   const rows = useMemo(() => {
     const result: BranchRow[] = [];
-    const local = props.overview.refs.filter((ref) => ref.kind === "local");
+    const local = props.overview.refs
+      .filter((ref) => ref.kind === "local")
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const batches: string[][] = [];
+    for (let index = 0; index < local.length; index += 32)
+      batches.push(local.slice(index, index + 32).map((ref) => ref.name));
     result.push({ kind: "heading", id: "local", label: "Branches", detail: String(local.length) });
     result.push(
-      ...local.map((ref): BranchRow => ({ kind: "ref", ref, displayName: ref.shortName })),
+      ...local.map((ref, index): BranchRow => ({
+        kind: "ref",
+        ref,
+        displayName: ref.shortName,
+        statusBranches: batches[Math.floor(index / 32)],
+      })),
     );
     if (local.length === 0)
       result.push({ kind: "empty", id: "no-local", label: "No local branches" });
@@ -91,6 +101,8 @@ export function GitExplorerBranches(props: {
         row.kind === "ref" ? row.ref.name : row.kind === "stash" ? row.stash.name : row.id
       }
       initialNumToRender={24}
+      maxToRenderPerBatch={24}
+      windowSize={5}
       contentInsetAdjustmentBehavior="never"
       renderItem={({ item }) => {
         if (item.kind === "heading")
@@ -146,64 +158,19 @@ export function GitExplorerBranches(props: {
               </Text>
             </Pressable>
           );
-        const ref = item.ref;
-        const mark = syncMark(ref);
-        const current =
-          ref.kind === "local" &&
-          (ref.shortName === props.overview.headBranch || ref.name === props.overview.headBranch);
-        const slash = item.displayName.lastIndexOf("/");
-        const prefix = item.displayName.slice(0, slash + 1);
-        const leaf = item.displayName.slice(slash + 1);
         return (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${ref.shortName}. ${current ? "Currently checked out. " : ""}${ref.kind === "tag" ? "Tag" : ref.kind === "remote" ? "Remote-tracking branch" : formatGitExplorerSync(ref)}${ref.upstream ? `. Tracks ${ref.upstream}` : ""}`}
-            accessibilityState={{ selected: ref.hash === props.selectedRevision }}
-            onPress={() => props.onSelect(ref.hash)}
-            style={{ height: rowHeight }}
-            className={cn(
-              "flex-row items-center gap-1 px-3",
-              ref.hash === props.selectedRevision ? "bg-primary/10" : "bg-card",
-            )}
-          >
-            {current ? (
-              <View
-                style={{ width: 2, height: 14, top: (rowHeight - 14) / 2 }}
-                className="absolute left-0 rounded-r-sm bg-primary"
-              />
-            ) : null}
-            <Text
-              numberOfLines={1}
-              ellipsizeMode="middle"
-              className="min-w-0 flex-1 text-[12px] leading-[16px]"
-            >
-              {prefix ? <Text className="text-foreground-muted">{prefix}</Text> : null}
-              <Text
-                className={cn(
-                  "font-t3-medium",
-                  current ? "font-t3-semibold text-primary-text" : "text-foreground",
-                )}
-              >
-                {leaf}
-              </Text>
-            </Text>
-            {mark ? (
-              <Text
-                numberOfLines={1}
-                style={{ width: 52, textAlign: "right" }}
-                className={cn(
-                  "text-[10px] leading-[14px]",
-                  ref.upstreamMissing || (ref.behind ?? 0) > 0
-                    ? "text-warning-foreground"
-                    : (ref.ahead ?? 0) > 0
-                      ? "text-primary-text"
-                      : "text-foreground-muted",
-                )}
-              >
-                {mark}
-              </Text>
-            ) : null}
-          </Pressable>
+          <GitExplorerBranchRow
+            branch={item.ref}
+            displayName={item.displayName}
+            statusBranches={item.statusBranches}
+            overview={props.overview}
+            params={props.params}
+            active={props.active}
+            rowHeight={rowHeight}
+            selected={item.ref.hash === props.selectedRevision}
+            onSelect={props.onSelect}
+            actions={actions}
+          />
         );
       }}
     />

@@ -1,5 +1,8 @@
 import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import type {
+  EnvironmentId,
+  GitExplorerBranchStatus,
+  GitExplorerOverviewInput,
   GitExplorerOverviewResult,
   GitExplorerRef,
   GitExplorerStash,
@@ -10,20 +13,72 @@ import {
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
+  CircleHelpIcon,
+  EqualIcon,
   GitBranchIcon,
   GitForkIcon,
   GlobeIcon,
   HardDriveIcon,
   TagIcon,
+  Trash2Icon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { gitExplorerEnvironment } from "~/state/git-explorer";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
+import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  describeGitExplorerMerge,
+  gitExplorerBranchDeletionBlock,
+} from "./gitExplorerBranches.logic";
 import { GitExplorerHint } from "./GitExplorerHint";
+import { useGitExplorerQuery } from "./useGitExplorerQuery";
 
 const ROW_CLASS =
   "relative flex h-6 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/8 pointer-coarse:h-7 max-sm:h-9";
 const HEADING_CLASS =
   "flex h-6 shrink-0 items-center gap-1.5 px-2 text-2xs font-medium text-muted-foreground";
+
+interface BranchActions {
+  deleteUnavailable: string | null;
+  pendingBranch: string | null;
+  onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
+}
+
+function BranchMergeStatus({
+  status,
+  description,
+}: {
+  status: GitExplorerBranchStatus | undefined;
+  description: string;
+}) {
+  const Icon =
+    status?.mergeStatus === "merged"
+      ? PullRequestGlyph.merged
+      : status?.mergeStatus === "equivalent"
+        ? EqualIcon
+        : status?.mergeStatus === "unmerged"
+          ? GitBranchIcon
+          : CircleHelpIcon;
+  return (
+    <GitExplorerHint label={description} className="shrink-0">
+      <Icon
+        className={cn(
+          "size-3",
+          status?.mergeStatus === "merged"
+            ? "text-success-foreground"
+            : status?.mergeStatus === "equivalent"
+              ? "text-info-foreground"
+              : "text-muted-foreground",
+        )}
+        aria-hidden
+      />
+    </GitExplorerHint>
+  );
+}
 
 function BranchSync({ reference }: { reference: GitExplorerRef }) {
   if (reference.upstream === null) {
@@ -62,50 +117,176 @@ function ReferenceRow({
   current,
   selected,
   onSelect,
+  status,
+  statusError,
+  actions,
 }: {
   reference: GitExplorerRef;
   label: string;
   current: boolean;
   selected: boolean;
   onSelect: (revision: string | null) => void;
+  status?: GitExplorerBranchStatus;
+  statusError?: string | null;
+  actions?: BranchActions;
 }) {
+  const mergeDescription = statusError
+    ? `Merge status unavailable. ${statusError}`
+    : describeGitExplorerMerge(status);
   const description =
     reference.kind === "local"
-      ? `${reference.shortName}${current ? " · checked out" : ""} · ${formatGitExplorerSync(reference)}${reference.upstream ? ` · ${reference.upstream}` : ""}`
+      ? `${reference.shortName}${current ? " · checked out" : ""} · ${formatGitExplorerSync(reference)}${reference.upstream ? ` · ${reference.upstream}` : ""} · ${mergeDescription}`
       : `${reference.shortName} · ${reference.kind === "tag" ? "tag" : "remote-tracking branch"}`;
   const slash = label.lastIndexOf("/");
+  const pending = actions?.pendingBranch === reference.name;
+  const deleteBlock =
+    actions?.deleteUnavailable ??
+    (actions?.pendingBranch ? "Another branch deletion is in progress." : null) ??
+    gitExplorerBranchDeletionBlock(reference, status);
   return (
-    <button
-      type="button"
-      className={ROW_CLASS}
-      onClick={() => onSelect(reference.hash)}
-      aria-current={selected ? "true" : undefined}
-      aria-label={description}
+    <div
+      className={cn(
+        "group/branch flex min-w-0 items-center rounded-sm hover:bg-accent",
+        selected && "bg-primary/8",
+      )}
     >
-      {selected ? (
-        <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
-      ) : null}
-      <span className="flex w-3 shrink-0 items-center justify-center" aria-hidden>
-        {reference.kind === "tag" ? (
-          <TagIcon className="size-3 text-info-foreground" />
-        ) : current ? (
-          <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-primary/40 ring-inset">
-            <span className="size-1.5 rounded-full bg-primary" />
-          </span>
-        ) : (
-          <span className="size-1 rounded-full bg-muted-foreground/40" />
-        )}
-      </span>
-      <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
-        {slash >= 0 ? (
-          <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
+      <button
+        type="button"
+        className={cn(ROW_CLASS, "flex-1")}
+        onClick={() => onSelect(reference.hash)}
+        aria-current={selected ? "true" : undefined}
+        aria-label={description}
+      >
+        {selected ? (
+          <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
         ) : null}
-        <span className={cn(current && "font-semibold text-primary")}>
-          {label.slice(slash + 1)}
+        <span className="flex w-3 shrink-0 items-center justify-center" aria-hidden>
+          {reference.kind === "tag" ? (
+            <TagIcon className="size-3 text-info-foreground" />
+          ) : current ? (
+            <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-primary/40 ring-inset">
+              <span className="size-1.5 rounded-full bg-primary" />
+            </span>
+          ) : (
+            <span className="size-1 rounded-full bg-muted-foreground/40" />
+          )}
         </span>
-      </GitExplorerHint>
-      {reference.kind === "local" ? <BranchSync reference={reference} /> : null}
-    </button>
+        <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
+          {slash >= 0 ? (
+            <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
+          ) : null}
+          <span className={cn(current && "font-semibold text-primary")}>
+            {label.slice(slash + 1)}
+          </span>
+        </GitExplorerHint>
+        {reference.kind === "local" ? (
+          <>
+            <span
+              className={cn(
+                "shrink-0",
+                actions && "group-any-hover/branch:hidden group-has-[:focus-visible]/branch:hidden",
+              )}
+            >
+              <BranchSync reference={reference} />
+            </span>
+            <BranchMergeStatus status={status} description={mergeDescription} />
+          </>
+        ) : null}
+      </button>
+      {reference.kind === "local" && actions ? (
+        <span
+          className={cn(
+            "mr-0.5 hidden shrink-0 items-center group-any-hover/branch:flex group-has-[:focus-visible]/branch:flex pointer-coarse:flex max-sm:flex",
+            pending && "flex",
+          )}
+        >
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost-destructive"
+                  size="xs"
+                  aria-label={`Delete local branch ${reference.shortName}`}
+                  aria-disabled={deleteBlock !== null}
+                  onClick={() => {
+                    if (deleteBlock === null && status) actions.onDelete(reference, status);
+                  }}
+                />
+              }
+            >
+              {pending ? <Spinner size="xs" /> : <Trash2Icon className="size-3" aria-hidden />}
+              <span className="pointer-coarse:hidden max-sm:hidden">Delete</span>
+            </TooltipTrigger>
+            <TooltipPopup>
+              {deleteBlock ?? `Delete local branch ${reference.shortName}`}
+            </TooltipPopup>
+          </Tooltip>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function LocalBranchChunk({
+  references,
+  environmentId,
+  input,
+  overview,
+  selectedRevision,
+  onSelect,
+  active,
+  actions,
+}: {
+  references: readonly GitExplorerRef[];
+  environmentId: EnvironmentId;
+  input: GitExplorerOverviewInput;
+  overview: GitExplorerOverviewResult;
+  selectedRevision: string | null | undefined;
+  onSelect: (revision: string | null) => void;
+  active: boolean;
+  actions: BranchActions;
+}) {
+  const [visible, setVisible] = useState(false);
+  const query = useGitExplorerQuery(
+    gitExplorerEnvironment.branchStatuses({
+      environmentId,
+      input: {
+        ...input,
+        snapshotId: overview.snapshotId,
+        branches: references.map((ref) => ref.name),
+      },
+    }),
+    active && visible,
+  );
+  const byName = new Map(query.data?.branches.map((status) => [status.name, status]));
+  const observeVisibility = (element: HTMLDivElement) => {
+    const observer = new IntersectionObserver(
+      ([entry]) => setVisible(entry?.isIntersecting === true),
+      { root: element.closest("[data-git-explorer-branches-scroll]") },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  };
+  return (
+    <div ref={observeVisibility}>
+      {references.map((reference) => {
+        const candidate = byName.get(reference.name);
+        const status = !query.error && candidate?.hash === reference.hash ? candidate : undefined;
+        return (
+          <ReferenceRow
+            key={reference.name}
+            reference={reference}
+            label={reference.shortName}
+            current={reference.shortName === overview.headBranch}
+            selected={selectedRevision === reference.hash}
+            onSelect={onSelect}
+            {...(status ? { status } : {})}
+            statusError={query.error}
+            actions={actions}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -145,10 +326,18 @@ export function GitExplorerBranches({
   overview,
   selectedRevision,
   onSelect,
+  environmentId,
+  input,
+  active,
+  actions,
 }: {
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
   onSelect: (revision: string | null) => void;
+  environmentId: EnvironmentId;
+  input: GitExplorerOverviewInput;
+  active: boolean;
+  actions: BranchActions;
 }) {
   const localRefs = overview.refs
     .filter((reference) => reference.kind === "local")
@@ -159,6 +348,10 @@ export function GitExplorerBranches({
           ? 1
           : a.shortName.localeCompare(b.shortName),
     );
+  const localChunks: GitExplorerRef[][] = [];
+  for (let offset = 0; offset < localRefs.length; offset += 32) {
+    localChunks.push(localRefs.slice(offset, offset + 32));
+  }
   const tags = overview.refs
     .filter((reference) => reference.kind === "tag")
     .toSorted((a, b) => a.shortName.localeCompare(b.shortName));
@@ -204,21 +397,27 @@ export function GitExplorerBranches({
           </button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-1.5 py-2">
+      <div
+        data-git-explorer-branches-scroll
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-1.5 py-2"
+      >
         <section aria-label="Local branches">
           <h2 className={HEADING_CLASS}>
             <GitBranchIcon className="size-3" aria-hidden />
             Local branches
             <span className="ml-auto font-mono text-3xs tabular-nums">{localRefs.length}</span>
           </h2>
-          {localRefs.map((reference) => (
-            <ReferenceRow
-              key={reference.name}
-              reference={reference}
-              label={reference.shortName}
-              current={reference.shortName === overview.headBranch}
-              selected={selectedRevision === reference.hash}
+          {localChunks.map((references) => (
+            <LocalBranchChunk
+              key={references[0]!.name}
+              references={references}
+              environmentId={environmentId}
+              input={input}
+              overview={overview}
+              selectedRevision={selectedRevision}
               onSelect={onSelect}
+              active={active}
+              actions={actions}
             />
           ))}
           {localRefs.length === 0 ? (
