@@ -40,6 +40,12 @@ import {
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
 import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
 
+import {
+  copyGitExplorerValue,
+  gitExplorerMenuPosition,
+  showGitExplorerContextMenu,
+} from "./gitExplorerContextMenu";
+
 const GRAPH_COLORS = [
   "text-primary",
   "text-success-foreground",
@@ -385,6 +391,15 @@ function GitExplorerHistoryList({
               <button
                 type="button"
                 {...navigation.optionProps(index)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showGitExplorerContextMenu(
+                    [{ id: "copy-hash", label: "Copy commit hash", icon: "copy" }],
+                    gitExplorerMenuPosition(event),
+                    () => copyGitExplorerValue(commit.hash, "commit hash"),
+                  );
+                }}
                 aria-current={selectedRevision === commit.hash ? "true" : undefined}
                 className="flex w-full items-center text-left outline-none hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-foreground/10"
                 style={{ height: rowHeight }}

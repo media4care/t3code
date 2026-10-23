@@ -58,6 +58,7 @@ vi.mock("~/hooks/useTheme", () => ({
 }));
 vi.mock("../diffs/StyledDiffCodeView", () => ({ StyledDiffCodeView: () => null }));
 vi.mock("~/localApi", () => ({
+  readLocalApi: () => undefined,
   ensureLocalApi: () => ({
     persistence: { setClientSettings: async () => {} },
   }),
