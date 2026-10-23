@@ -66,6 +66,81 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect("searches snapshot history by message, author, hash and literal path", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* write("[release].txt", "release\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "--author=Release Bot <release@example.com>", "-m", "Ship [release]"]);
+      const release = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "-c", "feature", root]);
+      yield* git(["commit", "--allow-empty", "-m", "feature only"]);
+      const feature = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "main"]);
+      yield* git(["commit", "--allow-empty", "-m", "Ship next"]);
+      const latest = yield* git(["rev-parse", "HEAD"]);
+      const { snapshotId } = yield* explorer.overview(scope);
+      for (const [searchField, search] of [
+        ["message", "SHIP [release]"],
+        ["author", "RELEASE@EXAMPLE.COM"],
+        ["hash", release.slice(0, 10)],
+        ["path", "[release].txt"],
+      ] as const) {
+        const result = yield* explorer.history({ ...scope, snapshotId, searchField, search });
+        assert.deepEqual(
+          result.commits.map((commit) => commit.hash),
+          [release],
+        );
+      }
+      const current = yield* explorer.history({ ...scope, snapshotId, historyScope: "current" });
+      assert.sameMembers(
+        current.commits.map((commit) => commit.hash),
+        [latest, release, root],
+      );
+      const excluded = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        historyScope: "current",
+        searchField: "hash",
+        search: feature.slice(0, 10),
+      });
+      assert.isEmpty(excluded.commits);
+      const included = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        searchField: "hash",
+        search: feature,
+      });
+      assert.deepEqual(
+        included.commits.map((commit) => commit.hash),
+        [feature],
+      );
+      const page = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        searchField: "message",
+        search: "Ship",
+        limit: 1,
+      });
+      assert.equal(page.commits[0]?.hash, latest);
+      assert.equal(page.nextCursor, 1);
+      const next = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        searchField: "message",
+        search: "Ship",
+        cursor: page.nextCursor!,
+      });
+      assert.deepEqual(
+        next.commits.map((commit) => commit.hash),
+        [release],
+      );
+      yield* git(["switch", "feature"]);
+      const stable = yield* explorer.history({ ...scope, snapshotId, historyScope: "current" });
+      assert.deepEqual(stable.commits, current.commits);
+    }),
+  );
+
   it.effect(
     "stages literal paths, commits only the index and amends without staging other edits",
     () =>

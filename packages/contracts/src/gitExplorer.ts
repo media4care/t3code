@@ -131,6 +131,9 @@ export const GitExplorerHistoryInput = Schema.Struct({
   snapshotId: Schema.String,
   cursor: Schema.optional(NonNegativeInt.check(Schema.isLessThanOrEqualTo(1_000_000))),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(200))),
+  historyScope: Schema.optional(Schema.Literals(["all", "current"])),
+  searchField: Schema.optional(Schema.Literals(["message", "author", "hash", "path"])),
+  search: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
 });
 export type GitExplorerHistoryInput = typeof GitExplorerHistoryInput.Type;
 export const GitExplorerCommit = Schema.Struct({
