@@ -35,6 +35,7 @@ import { cn } from "~/lib/utils";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -460,6 +461,10 @@ export function GitExplorerBranches({
   active: boolean;
   actions: BranchActions;
 }) {
+  const [search, setSearch] = useState("");
+  const filter = search.trim().toLocaleLowerCase();
+  const matches = (reference: GitExplorerRef) =>
+    reference.shortName.toLocaleLowerCase().includes(filter);
   const [collapsedLocal, setCollapsedLocal] = useState<ReadonlySet<string>>(new Set());
   const [collapsedRemote, setCollapsedRemote] = useState<ReadonlySet<string>>(new Set());
   const toggleFolder = (current: ReadonlySet<string>, path: string) => {
@@ -468,19 +473,23 @@ export function GitExplorerBranches({
     else next.add(path);
     return next;
   };
+  const visibleLocalFolders = filter ? new Set<string>() : collapsedLocal;
+  const visibleRemoteFolders = filter ? new Set<string>() : collapsedRemote;
   const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
-  const localRefs = overview.refs.filter((reference) => reference.kind === "local");
-  const localRows = gitExplorerBranchRows(localRefs, collapsedLocal);
+  const localRefs = overview.refs.filter(
+    (reference) => reference.kind === "local" && matches(reference),
+  );
+  const localRows = gitExplorerBranchRows(localRefs, visibleLocalFolders);
   const localChunks: GitExplorerBranchRow[][] = [];
   for (let offset = 0; offset < localRows.length; offset += 32) {
     localChunks.push(localRows.slice(offset, offset + 32));
   }
   const tags = overview.refs
-    .filter((reference) => reference.kind === "tag")
+    .filter((reference) => reference.kind === "tag" && matches(reference))
     .toSorted((a, b) => a.shortName.localeCompare(b.shortName));
   const remoteGroups = new Map<string, GitExplorerRef[]>();
   for (const reference of overview.refs) {
-    if (reference.kind !== "remote") continue;
+    if (reference.kind !== "remote" || !matches(reference)) continue;
     const prefix = reference.shortName.split("/")[0] ?? reference.shortName;
     const refs = remoteGroups.get(prefix) ?? [];
     refs.push(reference);
@@ -520,6 +529,16 @@ export function GitExplorerBranches({
           </button>
         ))}
       </div>
+      <div className="shrink-0 px-1.5 pt-1.5">
+        <Input
+          size="compact"
+          type="search"
+          aria-label="Search branches and tags"
+          placeholder="Search branches and tags"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </div>
       <div
         data-git-explorer-branches-scroll
         className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-1.5 py-2"
@@ -534,7 +553,7 @@ export function GitExplorerBranches({
             <LocalBranchChunk
               key={rows[0]!.kind === "branch" ? rows[0]!.reference.name : rows[0]!.path}
               rows={rows}
-              collapsed={collapsedLocal}
+              collapsed={visibleLocalFolders}
               onToggle={(path) => setCollapsedLocal((current) => toggleFolder(current, path))}
               environmentId={environmentId}
               input={input}
@@ -571,7 +590,7 @@ export function GitExplorerBranches({
                 {gitExplorerBranchRows(
                   references,
                   new Set(
-                    [...collapsedRemote]
+                    [...visibleRemoteFolders]
                       .filter((path) => path.startsWith(`${prefix}/`))
                       .map((path) => path.slice(prefix.length + 1)),
                   ),
@@ -584,7 +603,7 @@ export function GitExplorerBranches({
                     {row.kind === "folder" ? (
                       <BranchFolderRow
                         row={row}
-                        collapsed={collapsedRemote.has(`${prefix}/${row.path}`)}
+                        collapsed={visibleRemoteFolders.has(`${prefix}/${row.path}`)}
                         onToggle={(path) =>
                           setCollapsedRemote((current) =>
                             toggleFolder(current, `${prefix}/${path}`),
