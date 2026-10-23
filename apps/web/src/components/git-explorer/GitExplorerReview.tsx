@@ -17,6 +17,7 @@ import {
 import { useState } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { updateClientSettings, useClientSettings } from "~/hooks/useSettings";
 import { useRenderedAppearance } from "~/hooks/useTheme";
 import {
   buildFileDiffContentVersion,
@@ -33,6 +34,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
+import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
 
 const FILE_STATUS = {
   added: { label: "A", color: "text-success-foreground" },
@@ -145,7 +147,7 @@ function FilePatch({
 }) {
   const theme = useRenderedAppearance();
   const compact = useMediaQuery("max-md");
-  const [diffStyle, setDiffStyle] = useState<"split" | "unified">("unified");
+  const diffLayout = useClientSettings((settings) => settings.diffLayout);
   const patchQuery = useGitExplorerQuery(
     gitExplorerEnvironment.patch({
       environmentId,
@@ -179,14 +181,16 @@ function FilePatch({
         <FileStats file={file} />
         {!compact ? (
           <ToggleGroup
-            value={[diffStyle]}
+            value={[diffLayout]}
             onValueChange={(values) => {
               const value = values[0];
-              if (value === "split" || value === "unified") setDiffStyle(value);
+              if (value === "split" || value === "stacked") {
+                void updateClientSettings({ diffLayout: value });
+              }
             }}
             aria-label="Diff layout"
           >
-            <Toggle value="unified" aria-label="Inline diff">
+            <Toggle value="stacked" aria-label="Inline diff">
               <Rows3Icon className="size-3.5" />
             </Toggle>
             <Toggle value="split" aria-label="Side-by-side diff">
@@ -224,9 +228,9 @@ function FilePatch({
             <StyledDiffCodeView
               key={fileKey(file)}
               items={items}
-              className="min-h-0 flex-1"
+              className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain"
               options={{
-                diffStyle: compact ? "unified" : diffStyle,
+                diffStyle: !compact && diffLayout === "split" ? "split" : "unified",
                 overflow: "wrap",
                 disableFileHeader: true,
                 theme: resolveDiffThemeName(theme),
@@ -283,6 +287,12 @@ export function GitExplorerReview({
     setSelectedFileKey(fileKey(file));
     setShowDiff(true);
   };
+  const navigation = useGitExplorerListNavigation({
+    count: files.length,
+    selectedIndex: selectedFile ? files.indexOf(selectedFile) : -1,
+    rowHeight: fileRowHeight,
+    onSelect: (index) => selectFile(files[index]!),
+  });
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {compact ? (
@@ -342,16 +352,18 @@ export function GitExplorerReview({
                   </GitExplorerHint>
                 </div>
                 <LegendList
+                  {...navigation.listProps}
+                  aria-label="Changed files"
                   data={files}
                   keyExtractor={fileKey}
                   estimatedItemSize={fileRowHeight}
                   getFixedItemSize={() => fileRowHeight}
                   extraData={selectedFile ? fileKey(selectedFile) : null}
-                  className="min-h-0 flex-1 overscroll-contain"
-                  renderItem={({ item: file }) => (
+                  className="min-h-0 flex-1 overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  renderItem={({ item: file, index }) => (
                     <button
                       type="button"
-                      onClick={() => selectFile(file)}
+                      {...navigation.optionProps(index)}
                       aria-current={
                         selectedFile && fileKey(file) === fileKey(selectedFile) ? "true" : undefined
                       }
