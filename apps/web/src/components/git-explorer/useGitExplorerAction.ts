@@ -1,0 +1,78 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import type {
+  EnvironmentId,
+  GitExplorerOverviewInput,
+  GitExplorerOverviewResult,
+  GitExplorerRunActionInput,
+} from "@t3tools/contracts";
+import { useRef, useState } from "react";
+import { gitExplorerEnvironment } from "~/state/git-explorer";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { vcsEnvironment } from "~/state/vcs";
+import { toastManager } from "../ui/toast";
+
+export function useGitExplorerAction({
+  environmentId,
+  input,
+  overview,
+  refresh,
+  onBusyChange,
+}: {
+  environmentId: EnvironmentId;
+  input: GitExplorerOverviewInput;
+  overview: GitExplorerOverviewResult;
+  refresh: () => void;
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const allowed = useAtomValue(gitExplorerEnvironment.runAction.permissionAtom(environmentId));
+  const run = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
+  const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
+  const inFlight = useRef(false);
+  const [pending, setPending] = useState(false);
+  const execute = async (
+    action: Omit<
+      GitExplorerRunActionInput,
+      "projectId" | "worktreePath" | "expectedHead" | "expectedBranch"
+    >,
+  ) => {
+    if (!allowed || inFlight.current) return false;
+    inFlight.current = true;
+    setPending(true);
+    onBusyChange(true);
+    try {
+      const result = await run({
+        environmentId,
+        input: {
+          ...input,
+          ...action,
+          expectedHead: overview.headHash,
+          expectedBranch: overview.headBranch,
+        },
+      });
+      if (result._tag === "Success") {
+        toastManager.add({ type: "success", title: result.value.message });
+        return true;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Git action failed",
+          description: error instanceof Error ? error.message : "Refresh and try again.",
+        });
+      }
+      return false;
+    } finally {
+      refresh();
+      void refreshStatus({ environmentId, input: { cwd: overview.selectedWorktreePath } });
+      inFlight.current = false;
+      setPending(false);
+      onBusyChange(false);
+    }
+  };
+  return { execute, pending, allowed };
+}

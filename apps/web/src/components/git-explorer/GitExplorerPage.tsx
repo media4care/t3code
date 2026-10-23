@@ -34,6 +34,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { GitExplorerBranchAction } from "./GitExplorerBranchAction";
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
 import { GitExplorerFolderDeletion } from "./GitExplorerFolderDeletion";
 import { GitExplorerHistory } from "./GitExplorerHistory";
@@ -111,12 +112,16 @@ function RepositoryExplorer({
   });
   const deletionInFlight = useRef(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [branchAction, setBranchAction] = useState<{
+    action: "switch" | "rename";
+    reference: GitExplorerRef;
+  } | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : actionBusy || deletingFolder !== null
+      : actionBusy || deletingFolder !== null || branchAction !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -277,9 +282,22 @@ function RepositoryExplorer({
           overview={overview}
           selectedRevision={selectedRevision}
           connected={environment?.connection.phase === "connected"}
-          busy={actionBusy || pendingBranch !== null || deletingFolder !== null}
+          busy={
+            actionBusy || pendingBranch !== null || deletingFolder !== null || branchAction !== null
+          }
           onBusyChange={setActionBusy}
           refresh={refresh}
+        />
+      ) : null}
+      {overview && branchAction ? (
+        <GitExplorerBranchAction
+          {...branchAction}
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setBranchAction(null)}
         />
       ) : null}
       {overview && deletingFolder !== null ? (
@@ -324,6 +342,10 @@ function RepositoryExplorer({
                 actions={{
                   deleteUnavailable,
                   pendingBranch,
+                  onBranchAction: (action, reference) => {
+                    if (!deleteUnavailable && !deletionInFlight.current)
+                      setBranchAction({ action, reference });
+                  },
                   onDeleteFolder: (folder) => {
                     if (!deleteUnavailable && !deletionInFlight.current) setDeletingFolder(folder);
                   },
