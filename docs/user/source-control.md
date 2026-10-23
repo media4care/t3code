@@ -18,14 +18,30 @@ HEADs. Select a commit to review its files and diffs; merge commits compare with
 parent. Select **Working Tree** to review staged, unstaged, and untracked files. Changing the
 review worktree does not check out a branch or change any files.
 
+On web and desktop, double-click a local branch to switch to it, or use its context menu to
+switch or rename it. Switching keeps local edits and stops if Git would overwrite them.
+Branches checked out in another worktree cannot be switched to or renamed here.
+
+In **Working Tree** on web and desktop, stage or unstage whole files, then commit the staged
+content. Unstaged edits stay out of the commit. **Amend latest commit** replaces the latest
+commit, including its hash. **Discard** restores the selected file's unstaged changes while
+keeping staged content; discarding an untracked file deletes it after confirmation.
+
+On web and desktop, search branches and tags by name, or search history by message, author,
+commit hash, or a repository-relative file or directory path. History search includes commits
+that have not loaded into the list yet. Choose **Current branch** to restrict results to the
+checked-out branch's ancestry. Right-click commits or branches to copy their hash or name.
+Right-click a changed file to copy its path, open its current worktree version in an editor,
+or reveal it in the environment's file manager.
+
 Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
 base commit, including saved untracked files. Stashes are listed separately from the graph.
 Reviewing a stash does not apply or remove it.
 
 Ahead and behind counts compare each branch with its configured upstream using locally stored
 refs. The last recorded fetch time, when available, describes local fetch information; it does
-not confirm the remote's current state. **Refresh** rereads local Git data. Ask an agent to fetch
-if you need newer remote-tracking information.
+not confirm the remote's current state. **Refresh** rereads local Git data. Use **Fetch** on web
+or desktop, or ask an agent to fetch, if you need newer remote-tracking information.
 
 Local branches also show whether they are merged into their comparison base, usually the
 remote's default branch. **Equivalent** means their commit patches already exist on that base;
