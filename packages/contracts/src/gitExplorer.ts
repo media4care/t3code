@@ -94,9 +94,12 @@ export const GitExplorerRunActionInput = Schema.Struct({
   ...GitExplorerScope,
   expectedHead: Schema.NullOr(GitExplorerHash),
   expectedBranch: Schema.NullOr(Schema.String),
-  action: Schema.Literals(["push", "pull", "fetch", "stash", "apply-stash"]),
+  action: Schema.Literals(["push", "pull", "fetch", "stash", "apply-stash", "switch", "rename"]),
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
   stashHash: Schema.optional(GitExplorerHash),
+  branchName: Schema.optional(GitExplorerLocalBranch),
+  branchHash: Schema.optional(GitExplorerHash),
+  newName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
 export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
@@ -193,6 +196,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "write-failed",
     "worktree-changed",
     "stash-unavailable",
+    "branch-in-use",
+    "invalid-branch-name",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -226,6 +231,10 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The worktree branch or HEAD changed. Refresh Git Explorer and try again.";
       case "stash-unavailable":
         return "This stash is no longer available. Refresh Git Explorer and try again.";
+      case "branch-in-use":
+        return "This branch is checked out in another worktree.";
+      case "invalid-branch-name":
+        return "Enter a valid Git branch name.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }

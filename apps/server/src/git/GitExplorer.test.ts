@@ -66,6 +66,73 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect("switches existing branches and renames without losing local changes or upstream", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* git(["branch", "feature/old"]);
+      yield* git(["config", "branch.feature/old.remote", "."]);
+      yield* git(["config", "branch.feature/old.merge", "refs/heads/main"]);
+      yield* write("hello.txt", "keep local edits\n");
+      const target = {
+        ...scope,
+        expectedHead: root,
+        expectedBranch: "main",
+        branchName: "refs/heads/feature/old",
+        branchHash: root,
+      };
+      yield* explorer.runAction({ ...target, action: "switch" });
+      assert.equal(yield* git(["branch", "--show-current"]), "feature/old");
+      yield* explorer.runAction({
+        ...target,
+        expectedBranch: "feature/old",
+        action: "rename",
+        newName: "feature/new",
+      });
+      assert.equal(yield* git(["branch", "--show-current"]), "feature/new");
+      assert.equal(yield* git(["config", "branch.feature/new.merge"]), "refs/heads/main");
+      assert.include(yield* git(["diff"]), "keep local edits");
+    }),
+  );
+
+  it.effect("rejects stale branch actions, invalid names and branches checked out elsewhere", () =>
+    Effect.gen(function* () {
+      const { explorer, git, cwd, path, root } = yield* fixture;
+      yield* git(["branch", "feature"]);
+      const target = {
+        ...scope,
+        expectedHead: root,
+        expectedBranch: "main",
+        branchName: "refs/heads/feature",
+        branchHash: root,
+      };
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, branchHash: "a".repeat(40), action: "switch" })
+          .pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, action: "rename", newName: "--bad" })
+          .pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+      yield* git(["worktree", "add", path.join(cwd, "other"), "feature"]);
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, action: "rename", newName: "other-name" })
+          .pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+      assert.equal(
+        (yield* explorer.runAction({ ...target, action: "switch" }).pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+      assert.equal(yield* git(["branch", "--show-current"]), "main");
+      assert.equal(yield* git(["rev-parse", "refs/heads/feature"]), root);
+    }),
+  );
+
   it.effect(
     "stashes tracked and untracked changes and restores the index without dropping the stash",
     () =>
