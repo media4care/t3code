@@ -5,10 +5,12 @@ export interface GitGraphLine {
   readonly to: number;
   readonly color: number;
   readonly kind: "through" | "incoming" | "parent";
+  readonly emphasized?: boolean;
 }
 
 export interface GitGraphRow {
   readonly hash: string;
+  readonly emphasized?: boolean;
   readonly column: number;
   readonly laneCount: number;
   readonly lines: ReadonlyArray<GitGraphLine>;
@@ -22,8 +24,10 @@ export interface GitGraphRow {
 export function layoutGitGraph(
   commits: ReadonlyArray<{ readonly hash: string; readonly parents: ReadonlyArray<string> }>,
   initialLanes: ReadonlyArray<string | null> = [],
+  emphasizedTips: ReadonlySet<string> = new Set(),
 ) {
   const lanes = [...initialLanes];
+  const emphasizedHashes = new Set(emphasizedTips);
   const rows: GitGraphRow[] = [];
   const vacantLane = () => {
     const vacant = lanes.indexOf(null);
@@ -31,6 +35,7 @@ export function layoutGitGraph(
   };
 
   for (const commit of commits) {
+    const emphasized = emphasizedHashes.has(commit.hash);
     const incomingColumn = lanes.indexOf(commit.hash);
     const column = incomingColumn === -1 ? vacantLane() : incomingColumn;
     const lines: GitGraphLine[] = [];
@@ -43,6 +48,7 @@ export function layoutGitGraph(
         to: lane,
         color: lane,
         kind: lane === incomingColumn ? "incoming" : "through",
+        ...(emphasizedHashes.has(lanes[lane]!) ? { emphasized: true } : {}),
       });
     }
 
@@ -53,11 +59,20 @@ export function layoutGitGraph(
         parentColumn = lanes[column] === null ? column : vacantLane();
         lanes[parentColumn] = parent;
       }
-      lines.push({ from: column, to: parentColumn, color: parentColumn, kind: "parent" });
+      const emphasizedParent = emphasized && parent === commit.parents[0];
+      if (emphasizedParent) emphasizedHashes.add(parent);
+      lines.push({
+        from: column,
+        to: parentColumn,
+        color: parentColumn,
+        kind: "parent",
+        ...(emphasizedParent ? { emphasized: true } : {}),
+      });
     }
 
     rows.push({
       hash: commit.hash,
+      ...(emphasized ? { emphasized: true } : {}),
       column,
       laneCount: Math.max(incomingWidth, lanes.length, column + 1),
       lines,
@@ -80,4 +95,26 @@ export function formatGitExplorerSync(
   if (ref.ahead > 0) return `${ref.ahead} ahead`;
   if (ref.behind > 0) return `${ref.behind} behind`;
   return "Synchronized";
+}
+
+export function gitExplorerEmphasizedRefs(
+  refs: readonly Pick<GitExplorerRef, "name" | "shortName" | "kind">[],
+) {
+  const branches = refs
+    .filter((ref) => ref.kind !== "tag")
+    .map((ref) => ({
+      ref,
+      branch:
+        ref.kind === "remote" ? ref.shortName.slice(ref.shortName.indexOf("/") + 1) : ref.shortName,
+    }));
+  const primary = branches.some(({ branch }) => branch === "main") ? "main" : "master";
+  const latest = branches
+    .map(({ branch }) => branch)
+    .filter((name) => /^v\d/.test(name))
+    .sort((a, b) => b.localeCompare(a, "en", { numeric: true }))[0];
+  return new Set(
+    branches
+      .filter(({ branch }) => branch === primary || branch === latest)
+      .map(({ ref }) => ref.name),
+  );
 }

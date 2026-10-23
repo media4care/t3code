@@ -34,6 +34,8 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { GitExplorerToolbar } from "./GitExplorerToolbar";
+import { GitExplorerFolderDeletion } from "./GitExplorerFolderDeletion";
 import { GitExplorerHistory } from "./GitExplorerHistory";
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerHint } from "./GitExplorerHint";
@@ -108,13 +110,17 @@ function RepositoryExplorer({
     reportFailure: false,
   });
   const deletionInFlight = useRef(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : !canDelete
-        ? "Source-control write permission is required to delete branches."
-        : null;
+      : actionBusy || deletingFolder !== null
+        ? "Another Git action is in progress."
+        : !canDelete
+          ? "Source-control write permission is required to delete branches."
+          : null;
   const input: GitExplorerOverviewInput = { projectId, ...(worktreePath ? { worktreePath } : {}) };
   const target = { environmentId, input };
   const overviewQuery = useGitExplorerQuery(gitExplorerEnvironment.overview(target));
@@ -264,6 +270,28 @@ function RepositoryExplorer({
           <RefreshIcon />
         </Button>
       </div>
+      {overview ? (
+        <GitExplorerToolbar
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          selectedRevision={selectedRevision}
+          connected={environment?.connection.phase === "connected"}
+          busy={actionBusy || pendingBranch !== null || deletingFolder !== null}
+          onBusyChange={setActionBusy}
+          refresh={refresh}
+        />
+      ) : null}
+      {overview && deletingFolder !== null ? (
+        <GitExplorerFolderDeletion
+          folder={deletingFolder}
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          refresh={refresh}
+          onClose={() => setDeletingFolder(null)}
+        />
+      ) : null}
       {overviewQuery.error ? (
         <GitExplorerNotice title="Git Explorer unavailable" retry={refresh}>
           {overviewQuery.error}
@@ -296,6 +324,9 @@ function RepositoryExplorer({
                 actions={{
                   deleteUnavailable,
                   pendingBranch,
+                  onDeleteFolder: (folder) => {
+                    if (!deleteUnavailable && !deletionInFlight.current) setDeletingFolder(folder);
+                  },
                   onDelete: (reference, branchStatus) =>
                     void handleDeleteBranch(reference, branchStatus),
                 }}

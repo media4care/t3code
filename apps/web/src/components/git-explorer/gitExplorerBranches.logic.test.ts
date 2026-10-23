@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   gitExplorerBranchRows,
   prepareGitExplorerBranchDeletion,
+  prepareGitExplorerFolderDeletion,
 } from "./gitExplorerBranches.logic";
 
 const reference: GitExplorerRef = {
@@ -136,5 +137,37 @@ describe("Git Explorer branch deletion review", () => {
     ).toBeNull();
     expect(prepareGitExplorerBranchDeletion(reference, { ...merged, targetHash: null })).toBeNull();
     expect(prepareGitExplorerBranchDeletion({ ...reference, kind: "remote" }, merged)).toBeNull();
+  });
+});
+
+describe("folder deletion review", () => {
+  it("includes nested local branches, excludes prefix siblings and keeps blocked or stale branches", () => {
+    const refs = [
+      "feature/a",
+      "feature/nested/b",
+      "feature/active",
+      "feature/stale",
+      "features/other",
+    ].map((shortName) => ({ ...reference, shortName, name: `refs/heads/${shortName}` }));
+    const statuses = refs.map((ref) => ({
+      ...merged,
+      name: ref.name,
+      deleteBlockedReason: ref.shortName === "feature/active" ? ("checked-out" as const) : null,
+      hash: ref.shortName === "feature/stale" ? "c".repeat(40) : ref.hash,
+    }));
+    const review = prepareGitExplorerFolderDeletion(
+      "feature",
+      [...refs, { ...refs[0]!, kind: "remote" }],
+      statuses,
+    );
+    expect(review.eligible.map(({ reference }) => reference.shortName)).toEqual([
+      "feature/a",
+      "feature/nested/b",
+    ]);
+    expect(review.skipped.map(({ reference }) => reference.shortName)).toEqual([
+      "feature/active",
+      "feature/stale",
+    ]);
+    expect(review.eligible[0]?.deletion.input.expectedHash).toBe(reference.hash);
   });
 });

@@ -2,6 +2,7 @@ import { LegendList } from "@legendapp/list/react";
 import {
   formatGitExplorerSync,
   layoutGitGraph,
+  gitExplorerEmphasizedRefs,
   type GitGraphRow,
 } from "@t3tools/client-runtime/git-explorer";
 import type {
@@ -76,7 +77,7 @@ function CommitGraph({
             d={`M ${x(line.from)} ${fromY} C ${x(line.from)} ${midY}, ${x(line.to)} ${midY}, ${x(line.to)} ${toY}`}
             fill="none"
             stroke="currentColor"
-            strokeWidth={2}
+            strokeWidth={line.emphasized ? 3.5 : 2}
             className={GRAPH_COLORS[line.color % GRAPH_COLORS.length]}
           />
         );
@@ -84,7 +85,7 @@ function CommitGraph({
       <circle
         cx={x(row.column)}
         cy={height / 2}
-        r={3.5}
+        r={row.emphasized ? 4 : 3.5}
         fill="currentColor"
         className={GRAPH_COLORS[row.column % GRAPH_COLORS.length]}
       />
@@ -92,11 +93,12 @@ function CommitGraph({
   );
 }
 
-function RefLabel({ reference }: { reference: GitExplorerRef }) {
+function RefLabel({ reference, emphasized }: { reference: GitExplorerRef; emphasized: boolean }) {
   return (
     <GitExplorerHint
       className={cn(
-        "inline-flex h-4.5 min-w-0 max-w-36 flex-auto items-center gap-1 rounded px-1 text-2xs leading-none",
+        "inline-flex h-4.5 min-w-0 max-w-36 flex-auto items-center gap-1 rounded px-1 text-xs leading-none",
+        emphasized && "font-semibold",
         reference.kind === "local"
           ? "bg-primary text-primary-foreground"
           : reference.kind === "tag"
@@ -164,7 +166,12 @@ export function GitExplorerHistory({
       cursor,
     });
   }
-  const graph = layoutGitGraph(history.commits);
+  const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
+  const graph = layoutGitGraph(
+    history.commits,
+    [],
+    new Set(overview.refs.filter((ref) => emphasizedRefs.has(ref.name)).map((ref) => ref.hash)),
+  );
   const graphWidth =
     graph.rows.reduce((width, row) => Math.max(width, row.laneCount), 2) * LANE_WIDTH + 16;
   const graphDisplayWidth = compact ? Math.max(48, Math.min(graphWidth, 64)) : 88;
@@ -233,7 +240,7 @@ export function GitExplorerHistory({
         <span className="shrink-0 px-2" style={{ width: graphDisplayWidth }}>
           <HardDriveIcon className="size-3.5 text-muted-foreground" aria-hidden />
         </span>
-        <span className="min-w-0 flex-1 truncate px-2 text-sm leading-5 font-medium">
+        <span className="min-w-0 flex-1 truncate px-2 text-xs leading-5 font-medium">
           Working Tree{" "}
           <span className="font-normal text-muted-foreground">· Uncommitted changes</span>
         </span>
@@ -299,18 +306,22 @@ export function GitExplorerHistory({
                 </span>
                 <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden px-2">
                   {isHead ? (
-                    <span className="inline-flex h-4.5 shrink-0 items-center rounded bg-primary px-1 text-2xs leading-none text-primary-foreground">
+                    <span className="inline-flex h-4.5 shrink-0 items-center rounded bg-primary px-1 text-xs leading-none text-primary-foreground">
                       HEAD
                     </span>
                   ) : null}
                   {visibleReferences.length > 0 ? (
                     <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-1">
                       {visibleReferences.map((reference) => (
-                        <RefLabel key={reference.name} reference={reference} />
+                        <RefLabel
+                          key={reference.name}
+                          reference={reference}
+                          emphasized={emphasizedRefs.has(reference.name)}
+                        />
                       ))}
                       {hiddenReferences.length > 0 ? (
                         <GitExplorerHint
-                          className="inline-flex h-4.5 shrink-0 items-center rounded bg-accent px-1 text-2xs leading-none text-foreground/85"
+                          className="inline-flex h-4.5 shrink-0 items-center rounded bg-accent px-1 text-xs leading-none text-foreground/85"
                           label={`More references: ${hiddenReferences.map((reference) => (reference.kind === "tag" ? `tag: ${reference.shortName}` : reference.shortName)).join(", ")}`}
                         >
                           +{hiddenReferences.length}
@@ -329,7 +340,7 @@ export function GitExplorerHistory({
                   ) : null}
                   <GitExplorerHint
                     className={cn(
-                      "min-w-0 flex-1 truncate text-sm leading-5",
+                      "min-w-0 flex-1 truncate text-xs leading-5",
                       isHead && "font-medium",
                     )}
                     label={commit.subject}

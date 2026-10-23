@@ -80,7 +80,7 @@ function CommitMetadata({ details }: { details: GitExplorerDetailsResult }) {
   if (!commit) {
     return (
       <div className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/20 px-3 py-2">
-        <h2 className="text-sm font-medium">Working Tree</h2>
+        <h2 className="text-xs font-medium">Working Tree</h2>
         <p className="text-xs text-muted-foreground">
           Uncommitted changes in the selected worktree.
         </p>
@@ -90,7 +90,7 @@ function CommitMetadata({ details }: { details: GitExplorerDetailsResult }) {
   return (
     <div className="max-h-40 shrink-0 overflow-y-auto border-b border-border bg-muted/20 px-3 py-2">
       <details className="group/metadata">
-        <summary className="flex cursor-pointer list-none items-center gap-3 rounded-sm text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        <summary className="flex cursor-pointer list-none items-center gap-3 rounded-sm text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           {stash ? (
             <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
               <ArchiveIcon className="size-3.5" aria-hidden />
@@ -172,11 +172,11 @@ function FilePatch({
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={`Diff for ${file.path}`}>
       <header className={REVIEW_HEADER_CLASS}>
         <FileIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <GitExplorerHint className="min-w-0 flex-1 truncate text-sm" label={file.path}>
+        <GitExplorerHint className="min-w-0 flex-1 truncate text-xs" label={file.path}>
           {file.path}
         </GitExplorerHint>
         {file.stage === "stash-untracked" ? (
-          <span className="shrink-0 text-2xs text-muted-foreground">Saved untracked</span>
+          <span className="shrink-0 text-xs text-muted-foreground">Saved untracked</span>
         ) : null}
         <FileStats file={file} />
         {!compact ? (
@@ -228,7 +228,8 @@ function FilePatch({
             <StyledDiffCodeView
               key={fileKey(file)}
               items={items}
-              className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain"
+              className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain [--diffs-font-size:var(--text-xs)]"
+              unsafeCSSExtra="[data-separator] [data-separator-content] { font-size: var(--diffs-font-size) !important; }"
               options={{
                 diffStyle: !compact && diffLayout === "split" ? "split" : "unified",
                 overflow: "wrap",
@@ -380,11 +381,11 @@ export function GitExplorerReview({
                         {FILE_STATUS[file.status].label}
                       </span>
                       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                        <GitExplorerHint className="block truncate text-sm" label={file.path}>
+                        <GitExplorerHint className="block truncate text-xs" label={file.path}>
                           {file.path}
                         </GitExplorerHint>
                         {file.stage !== "committed" ? (
-                          <span className="shrink-0 text-2xs text-muted-foreground">
+                          <span className="shrink-0 text-xs text-muted-foreground">
                             {STAGE_LABELS[file.stage]}
                           </span>
                         ) : null}

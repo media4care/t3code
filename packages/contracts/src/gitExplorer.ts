@@ -90,6 +90,17 @@ export const GitExplorerDeleteBranchInput = Schema.Struct({
   allowEquivalent: Schema.Boolean,
 });
 export type GitExplorerDeleteBranchInput = typeof GitExplorerDeleteBranchInput.Type;
+export const GitExplorerRunActionInput = Schema.Struct({
+  ...GitExplorerScope,
+  expectedHead: Schema.NullOr(GitExplorerHash),
+  expectedBranch: Schema.NullOr(Schema.String),
+  action: Schema.Literals(["push", "pull", "fetch", "stash", "apply-stash"]),
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
+  stashHash: Schema.optional(GitExplorerHash),
+});
+export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
+export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
+export type GitExplorerRunActionResult = typeof GitExplorerRunActionResult.Type;
 export const GitExplorerHistoryInput = Schema.Struct({
   ...GitExplorerScope,
   snapshotId: Schema.String,
@@ -180,6 +191,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "branch-protected",
     "branch-not-merged",
     "write-failed",
+    "worktree-changed",
+    "stash-unavailable",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -209,6 +222,10 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The repository's base branch cannot be deleted from Git Explorer.";
       case "branch-not-merged":
         return "This branch has changes that are not confirmed merged into its base.";
+      case "worktree-changed":
+        return "The worktree branch or HEAD changed. Refresh Git Explorer and try again.";
+      case "stash-unavailable":
+        return "This stash is no longer available. Refresh Git Explorer and try again.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }

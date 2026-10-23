@@ -132,3 +132,24 @@ export function prepareGitExplorerBranchDeletion(
     ].join("\n\n"),
   };
 }
+
+export function prepareGitExplorerFolderDeletion(
+  folder: string,
+  references: readonly GitExplorerRef[],
+  statuses: readonly GitExplorerBranchStatus[],
+) {
+  const byName = new Map(statuses.map((status) => [status.name, status]));
+  const eligible: {
+    reference: GitExplorerRef;
+    deletion: NonNullable<ReturnType<typeof prepareGitExplorerBranchDeletion>>;
+  }[] = [];
+  const skipped: { reference: GitExplorerRef; reason: string }[] = [];
+  for (const reference of references) {
+    if (reference.kind !== "local" || !reference.shortName.startsWith(`${folder}/`)) continue;
+    const status = byName.get(reference.name);
+    const deletion = prepareGitExplorerBranchDeletion(reference, status);
+    if (deletion) eligible.push({ reference, deletion });
+    else skipped.push({ reference, reason: gitExplorerBranchDeletionBlock(reference, status)! });
+  }
+  return { eligible, skipped };
+}
