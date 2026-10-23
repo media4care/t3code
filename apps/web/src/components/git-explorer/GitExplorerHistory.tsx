@@ -8,6 +8,7 @@ import {
 import type {
   EnvironmentId,
   GitExplorerCommit,
+  GitExplorerHistoryInput,
   GitExplorerHistoryResult,
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
@@ -27,6 +28,9 @@ import { cn } from "~/lib/utils";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { useDebouncedValue } from "~/state/queries";
 import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerHint } from "./GitExplorerHint";
 import {
@@ -117,15 +121,7 @@ function RefLabel({ reference, emphasized }: { reference: GitExplorerRef; emphas
   );
 }
 
-export function GitExplorerHistory({
-  environmentId,
-  input,
-  overview,
-  selectedRevision,
-  onSelect,
-  refresh,
-  refreshRevision,
-}: {
+interface HistoryProps {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
@@ -133,6 +129,96 @@ export function GitExplorerHistory({
   onSelect: (revision: string | null) => void;
   refresh: () => void;
   refreshRevision: number;
+}
+
+export function GitExplorerHistory(props: HistoryProps) {
+  const [historyScope, setHistoryScope] = useState<"all" | "current">("all");
+  const [searchField, setSearchField] =
+    useState<NonNullable<GitExplorerHistoryInput["searchField"]>>("message");
+  const [query, setQuery] = useState("");
+  const search = useDebouncedValue(query.trim(), 250);
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border p-1.5">
+        <Select
+          value={historyScope}
+          onValueChange={(value) => {
+            if (value) setHistoryScope(value);
+          }}
+        >
+          <SelectTrigger size="sm" aria-label="History scope">
+            <SelectValue>{historyScope === "all" ? "All branches" : "Current branch"}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="all">All branches</SelectItem>
+            <SelectItem value="current">Current branch</SelectItem>
+          </SelectPopup>
+        </Select>
+        <Select
+          value={searchField}
+          onValueChange={(value) => {
+            if (value) setSearchField(value);
+          }}
+        >
+          <SelectTrigger size="sm" aria-label="Search field">
+            <SelectValue>
+              {
+                { message: "Message", author: "Author", hash: "Commit hash", path: "File path" }[
+                  searchField
+                ]
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="message">Message</SelectItem>
+            <SelectItem value="author">Author</SelectItem>
+            <SelectItem value="hash">Commit hash</SelectItem>
+            <SelectItem value="path">File path</SelectItem>
+          </SelectPopup>
+        </Select>
+        <div className="min-w-36 flex-1">
+          <Input
+            size="compact"
+            type="search"
+            aria-label="Search history"
+            maxLength={256}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={
+              searchField === "path"
+                ? "Relative file or directory path"
+                : searchField === "hash"
+                  ? "Commit hash (at least 4 characters)"
+                  : `Search by ${searchField}`
+            }
+          />
+        </div>
+        {query ? (
+          <Button size="xs" variant="ghost" onClick={() => setQuery("")}>
+            Clear
+          </Button>
+        ) : null}
+      </div>
+      <GitExplorerHistoryList
+        key={JSON.stringify([props.overview.snapshotId, historyScope, searchField, search])}
+        {...props}
+        filters={{ historyScope, searchField, search }}
+      />
+    </div>
+  );
+}
+
+function GitExplorerHistoryList({
+  environmentId,
+  input,
+  overview,
+  selectedRevision,
+  onSelect,
+  refresh,
+  refreshRevision,
+  filters,
+}: HistoryProps & {
+  filters: Pick<GitExplorerHistoryInput, "historyScope" | "searchField" | "search">;
 }) {
   const phone = useMediaQuery("max-sm");
   const compact = useMediaQuery("max-lg");
@@ -149,7 +235,7 @@ export function GitExplorerHistory({
   const query = useGitExplorerQuery(
     gitExplorerEnvironment.history({
       environmentId,
-      input: { ...input, snapshotId: overview.snapshotId, cursor, limit: 200 },
+      input: { ...input, ...filters, snapshotId: overview.snapshotId, cursor, limit: 200 },
     }),
   );
   const handledRefresh = useRef(refreshRevision);
@@ -267,7 +353,15 @@ export function GitExplorerHistory({
           {query.error}
         </GitExplorerNotice>
       ) : rows.length === 0 ? (
-        <GitExplorerNotice title={query.isPending ? "Loading history…" : "No commits yet"} />
+        <GitExplorerNotice
+          title={
+            query.isPending
+              ? "Loading history…"
+              : filters.search
+                ? "No matching commits"
+                : "No commits yet"
+          }
+        />
       ) : (
         <LegendList
           {...navigation.listProps}

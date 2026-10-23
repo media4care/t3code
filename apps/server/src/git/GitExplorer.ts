@@ -1374,7 +1374,52 @@ const make = Effect.gen(function* () {
       snapshot.touchedAt = now;
       const limit = Math.max(1, Math.min(200, input.limit ?? 100));
       const cursor = Math.max(0, Math.min(1_000_000, input.cursor ?? 0));
-      if (snapshot.tips.length === 0) return { commits: [], nextCursor: null };
+      let tips =
+        input.historyScope === "current"
+          ? snapshot.overview.headHash
+            ? [snapshot.overview.headHash]
+            : []
+          : snapshot.tips;
+      if (tips.length === 0) return { commits: [], nextCursor: null };
+      const search = input.search?.trim() ?? "";
+      const filters: string[] = [];
+      const paths: string[] = [];
+      if (search) {
+        switch (input.searchField ?? "message") {
+          case "message":
+            filters.push("--fixed-strings", "--regexp-ignore-case", `--grep=${search}`);
+            break;
+          case "author":
+            filters.push("--fixed-strings", "--regexp-ignore-case", `--author=${search}`);
+            break;
+          case "path":
+            paths.push(search);
+            break;
+          case "hash": {
+            if (!/^[0-9a-f]{4,64}$/i.test(search)) return { commits: [], nextCursor: null };
+            const resolved = yield* run(
+              context.cwd,
+              ["rev-parse", "--verify", `${search}^{commit}`],
+              { allowNonZero: true },
+            );
+            const hash = resolved.stdout.trim();
+            if (resolved.exitCode !== 0 || !HASH.test(hash))
+              return { commits: [], nextCursor: null };
+            if (!tips.includes(hash)) {
+              // A descendant among the snapshot tips proves the match belongs to this view.
+              const descendants = yield* run(
+                context.cwd,
+                ["rev-list", "--max-count=1", `--ancestry-path=${hash}`, `^${hash}`, "--stdin"],
+                { stdin: tips.join("\n") + "\n" },
+              );
+              if (!descendants.stdout.trim()) return { commits: [], nextCursor: null };
+            }
+            tips = [hash];
+            filters.push("--no-walk");
+            break;
+          }
+        }
+      }
       const result = yield* run(
         context.cwd,
         [
@@ -1386,10 +1431,12 @@ const make = Effect.gen(function* () {
           `--format=${FORMAT}`,
           `--skip=${cursor}`,
           `--max-count=${limit + 1}`,
+          ...filters,
           "--stdin",
           "--",
+          ...paths,
         ],
-        { stdin: snapshot.tips.join("\n") + "\n" },
+        { stdin: tips.join("\n") + "\n" },
       );
       const rows = commitsFromOutput(result.stdout);
       const current = snapshot.overview.refs.find(
