@@ -9,6 +9,7 @@ import type {
   GitExplorerBranchStatus,
   GitExplorerOverviewInput,
   GitExplorerRef,
+  GitExplorerStash,
   ProjectId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -35,6 +36,7 @@ import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { GitExplorerBranchAction } from "./GitExplorerBranchAction";
+import { GitExplorerStashAction, type GitExplorerStashActionKind } from "./GitExplorerStashAction";
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
 import { GitExplorerFolderDeletion } from "./GitExplorerFolderDeletion";
 import { GitExplorerHistory } from "./GitExplorerHistory";
@@ -116,12 +118,19 @@ function RepositoryExplorer({
     action: "switch" | "rename";
     reference: GitExplorerRef;
   } | null>(null);
+  const [stashAction, setStashAction] = useState<{
+    action: GitExplorerStashActionKind;
+    stash: GitExplorerStash;
+  } | null>(null);
+  const canManageStashes = useAtomValue(
+    gitExplorerEnvironment.runAction.permissionAtom(environmentId),
+  );
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : actionBusy || deletingFolder !== null || branchAction !== null
+      : actionBusy || deletingFolder !== null || branchAction !== null || stashAction !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -281,12 +290,33 @@ function RepositoryExplorer({
           input={input}
           overview={overview}
           selectedRevision={selectedRevision}
+          onStashAction={(action, stash) => setStashAction({ action, stash })}
           connected={environment?.connection.phase === "connected"}
           busy={
-            actionBusy || pendingBranch !== null || deletingFolder !== null || branchAction !== null
+            actionBusy ||
+            pendingBranch !== null ||
+            deletingFolder !== null ||
+            branchAction !== null ||
+            stashAction !== null
           }
           onBusyChange={setActionBusy}
           refresh={refresh}
+        />
+      ) : null}
+      {overview && stashAction ? (
+        <GitExplorerStashAction
+          {...stashAction}
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setStashAction(null)}
+          onComplete={() => {
+            if (stashAction.action !== "apply-stash" && selectedRevision === stashAction.stash.hash)
+              selectRevision(null);
+            setStashAction(null);
+          }}
         />
       ) : null}
       {overview && branchAction ? (
@@ -339,6 +369,14 @@ function RepositoryExplorer({
                 selectedRevision={selectedRevision}
                 onSelect={selectRevision}
                 active={split || showBranches}
+                stashActions={{
+                  unavailable: !canManageStashes
+                    ? "Source-control write permission is required."
+                    : pendingBranch !== null
+                      ? "Another Git action is in progress."
+                      : deleteUnavailable,
+                  onAction: (action, stash) => setStashAction({ action, stash }),
+                }}
                 actions={{
                   deleteUnavailable,
                   pendingBranch,
@@ -429,7 +467,8 @@ function RepositoryExplorer({
                         actionBusy ||
                         pendingBranch !== null ||
                         deletingFolder !== null ||
-                        branchAction !== null,
+                        branchAction !== null ||
+                        stashAction !== null,
                       refresh,
                       onBusyChange: setActionBusy,
                     }}

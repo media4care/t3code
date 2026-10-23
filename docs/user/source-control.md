@@ -38,6 +38,12 @@ Select a tag to review its commit, or a stash to inspect its saved changes again
 base commit, including saved untracked files. Stashes are listed separately from the graph.
 Reviewing a stash does not apply or remove it.
 
+On web and desktop, select a stash and use its toolbar or context menu. **Apply stash** restores
+its changes and keeps the saved entry. **Pop stash** removes the entry only after applying it
+successfully; conflicts keep the stash. Clear **Restore staged files** to restore everything as
+unstaged changes. **Delete stash** removes the saved entry after confirmation without changing
+working files.
+
 Ahead and behind counts compare each branch with its configured upstream using locally stored
 refs. The last recorded fetch time, when available, describes local fetch information; it does
 not confirm the remote's current state. **Refresh** rereads local Git data. Use **Fetch** on web

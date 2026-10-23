@@ -1188,6 +1188,90 @@ const make = Effect.gen(function* () {
             message: result.status === "pulled" ? "Pulled successfully." : "Already up to date.",
           };
         }
+        if (
+          input.action === "apply-stash" ||
+          input.action === "pop-stash" ||
+          input.action === "drop-stash"
+        ) {
+          const stashHash = input.stashHash;
+          if (
+            !stashHash ||
+            !(yield* readStashes(cwd)).stashes.some((stash) => stash.hash === stashHash)
+          )
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "stash-unavailable",
+            });
+          if (input.action !== "drop-stash") {
+            yield* git
+              .execute({
+                operation: `GitExplorer.${input.action}`,
+                cwd,
+                args: [
+                  "stash",
+                  "apply",
+                  ...(input.restoreIndex === false ? [] : ["--index"]),
+                  stashHash,
+                ],
+                timeoutMs: null,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitExplorerError({
+                      operation: input.action,
+                      reason: "stash-apply-failed",
+                      cause,
+                    }),
+                ),
+              );
+          }
+          if (input.action !== "apply-stash") {
+            // Applying can take time. Resolve the current reflog position again before removing it.
+            const current = (yield* readStashes(cwd).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitExplorerError({
+                    operation: input.action,
+                    reason:
+                      input.action === "pop-stash" ? "stash-pop-drop-failed" : "stash-drop-failed",
+                    cause,
+                  }),
+              ),
+            )).stashes.find((stash) => stash.hash === stashHash);
+            if (current) {
+              yield* git
+                .execute({
+                  operation: `GitExplorer.${input.action}`,
+                  cwd,
+                  args: ["stash", "drop", current.name],
+                  timeoutMs: null,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new GitExplorerError({
+                        operation: input.action,
+                        reason:
+                          input.action === "pop-stash"
+                            ? "stash-pop-drop-failed"
+                            : "stash-drop-failed",
+                        cause,
+                      }),
+                  ),
+                );
+            }
+          }
+          yield* git.invalidateRefs(cwd);
+          return {
+            message:
+              input.action === "apply-stash"
+                ? "Stash applied. The saved stash was kept."
+                : input.action === "pop-stash"
+                  ? "Stash applied and removed from the stash list."
+                  : "Stash deleted. Working files were kept.",
+          };
+        }
         let args: string[];
         let stdin: string | undefined;
         switch (input.action) {
@@ -1288,17 +1372,6 @@ const make = Effect.gen(function* () {
               input.message?.trim() || "Git Explorer stash",
             ];
             break;
-          case "apply-stash":
-            if (
-              !input.stashHash ||
-              !(yield* readStashes(cwd)).stashes.some((stash) => stash.hash === input.stashHash)
-            )
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "stash-unavailable",
-              });
-            args = ["stash", "apply", "--index", input.stashHash];
-            break;
         }
         const result = yield* git.execute({
           operation: `GitExplorer.${input.action}`,
@@ -1329,9 +1402,7 @@ const make = Effect.gen(function* () {
                       : "Committed staged changes."
                     : input.action === "fetch"
                       ? "Fetched all remotes."
-                      : input.action === "apply-stash"
-                        ? "Stash applied. The saved stash was kept."
-                        : result.stdout.trim() || "Changes stashed.",
+                      : result.stdout.trim() || "Changes stashed.",
         };
       }).pipe(
         activeLock.semaphore.withPermits(1),

@@ -33,6 +33,7 @@ export function useGitExplorerAction({
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
   const inFlight = useRef(false);
   const [pending, setPending] = useState(false);
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const execute = async (
     action: Omit<
       GitExplorerRunActionInput,
@@ -43,6 +44,7 @@ export function useGitExplorerAction({
     if (!allowed || inFlight.current) return false;
     inFlight.current = true;
     setPending(true);
+    setFailureMessage(null);
     onBusyChange(true);
     try {
       const result = await run({
@@ -60,10 +62,12 @@ export function useGitExplorerAction({
       }
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
+        const description = error instanceof Error ? error.message : "Refresh and try again.";
+        setFailureMessage(description);
         toastManager.add({
           type: "error",
           title: "Git action failed",
-          description: error instanceof Error ? error.message : "Refresh and try again.",
+          description,
         });
       }
       return false;
@@ -75,5 +79,5 @@ export function useGitExplorerAction({
       onBusyChange(false);
     }
   };
-  return { execute, pending, allowed };
+  return { execute, pending, allowed, failureMessage };
 }
