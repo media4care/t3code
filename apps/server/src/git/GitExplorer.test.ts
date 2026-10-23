@@ -66,6 +66,104 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect(
+    "pops the selected stash after its list position changes and restores staged files",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+        yield* write("hello.txt", "saved staged\n");
+        yield* git(["add", "hello.txt"]);
+        yield* write("saved.txt", "saved untracked\n");
+        yield* git(["stash", "push", "-u", "-m", "selected"]);
+        const selected = yield* git(["rev-parse", "refs/stash"]);
+        yield* write("newer.txt", "newer stash\n");
+        yield* git(["stash", "push", "-u", "-m", "newer"]);
+        const newer = yield* git(["rev-parse", "refs/stash"]);
+        yield* explorer.runAction({ ...target, action: "pop-stash", stashHash: selected });
+        assert.equal(yield* git(["show", ":hello.txt"]), "saved staged");
+        assert.equal(yield* fs.readFileString(path.join(cwd, "saved.txt")), "saved untracked\n");
+        assert.deepEqual(
+          (yield* explorer.overview(scope)).stashes.map((stash) => stash.hash),
+          [newer],
+        );
+      }),
+  );
+
+  it.effect("applies a stash without restoring the index when requested", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* write("hello.txt", "saved staged\n");
+      yield* git(["add", "hello.txt"]);
+      yield* git(["stash", "push", "-m", "staged"]);
+      const stashHash = yield* git(["rev-parse", "refs/stash"]);
+      yield* explorer.runAction({
+        ...scope,
+        expectedHead: root,
+        expectedBranch: "main",
+        action: "apply-stash",
+        stashHash,
+        restoreIndex: false,
+      });
+      assert.equal(yield* git(["diff", "--cached", "--name-only"]), "");
+      assert.include(yield* git(["diff"]), "saved staged");
+      assert.equal((yield* explorer.overview(scope)).stashes[0]?.hash, stashHash);
+    }),
+  );
+
+  it.effect("keeps a stash when pop encounters conflicts", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write } = yield* fixture;
+      yield* write("hello.txt", "stash edit\n");
+      yield* git(["stash", "push", "-m", "conflicting"]);
+      const stashHash = yield* git(["rev-parse", "refs/stash"]);
+      yield* write("hello.txt", "branch edit\n");
+      yield* git(["commit", "-am", "diverge"]);
+      const expectedHead = yield* git(["rev-parse", "HEAD"]);
+      const error = yield* explorer
+        .runAction({
+          ...scope,
+          expectedHead,
+          expectedBranch: "main",
+          action: "pop-stash",
+          stashHash,
+          restoreIndex: false,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "GitExplorerError");
+      if (error._tag === "GitExplorerError") assert.equal(error.reason, "stash-apply-failed");
+      assert.include(yield* git(["diff", "--name-only", "--diff-filter=U"]), "hello.txt");
+      assert.equal((yield* explorer.overview(scope)).stashes[0]?.hash, stashHash);
+    }),
+  );
+
+  it.effect("drops only the selected stash and rejects an already removed stash", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+      const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+      yield* write("hello.txt", "older\n");
+      yield* git(["stash", "push", "-m", "older"]);
+      const older = yield* git(["rev-parse", "refs/stash"]);
+      yield* write("hello.txt", "newer\n");
+      yield* git(["stash", "push", "-m", "newer"]);
+      const newer = yield* git(["rev-parse", "refs/stash"]);
+      yield* write("hello.txt", "keep working edit\n");
+      yield* explorer.runAction({ ...target, action: "drop-stash", stashHash: older });
+      assert.deepEqual(
+        (yield* explorer.overview(scope)).stashes.map((stash) => stash.hash),
+        [newer],
+      );
+      assert.equal(yield* fs.readFileString(path.join(cwd, "hello.txt")), "keep working edit\n");
+      const error = yield* explorer
+        .runAction({ ...target, action: "drop-stash", stashHash: older })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "GitExplorerError");
+      if (error._tag === "GitExplorerError") assert.equal(error.reason, "stash-unavailable");
+      yield* explorer.runAction({ ...target, action: "drop-stash", stashHash: newer });
+      assert.isEmpty((yield* explorer.overview(scope)).stashes);
+    }),
+  );
+
   it.effect("searches snapshot history by message, author, hash and literal path", () =>
     Effect.gen(function* () {
       const { explorer, git, write, root } = yield* fixture;

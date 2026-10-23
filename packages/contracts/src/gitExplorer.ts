@@ -100,6 +100,8 @@ export const GitExplorerRunActionInput = Schema.Struct({
     "fetch",
     "stash",
     "apply-stash",
+    "pop-stash",
+    "drop-stash",
     "switch",
     "rename",
     "stage",
@@ -109,6 +111,7 @@ export const GitExplorerRunActionInput = Schema.Struct({
   ]),
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(10000))),
   stashHash: Schema.optional(GitExplorerHash),
+  restoreIndex: Schema.optional(Schema.Boolean),
   branchName: Schema.optional(GitExplorerLocalBranch),
   branchHash: Schema.optional(GitExplorerHash),
   newName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
@@ -223,6 +226,9 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "write-failed",
     "worktree-changed",
     "stash-unavailable",
+    "stash-apply-failed",
+    "stash-drop-failed",
+    "stash-pop-drop-failed",
     "branch-in-use",
     "invalid-branch-name",
     "changes-changed",
@@ -260,6 +266,12 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The worktree branch or HEAD changed. Refresh Git Explorer and try again.";
       case "stash-unavailable":
         return "This stash is no longer available. Refresh Git Explorer and try again.";
+      case "stash-apply-failed":
+        return "Git could not fully apply this stash. The saved stash was kept. Check the working tree for conflicts or existing changes before trying again.";
+      case "stash-drop-failed":
+        return "Git could not delete this stash. Refresh Git Explorer and try again.";
+      case "stash-pop-drop-failed":
+        return "The stash was applied, but Git could not delete the saved entry. Refresh and delete it separately; do not apply it again.";
       case "branch-in-use":
         return "This branch is checked out in another worktree.";
       case "invalid-branch-name":
