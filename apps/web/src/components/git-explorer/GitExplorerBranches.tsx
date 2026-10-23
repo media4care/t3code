@@ -24,11 +24,13 @@ import {
   GitForkIcon,
   GlobeIcon,
   HardDriveIcon,
+  EllipsisIcon,
   TagIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
 
+import { ensureLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -53,6 +55,7 @@ interface BranchActions {
   deleteUnavailable: string | null;
   pendingBranch: string | null;
   onDeleteFolder: (path: string) => void;
+  onBranchAction: (action: "switch" | "rename", reference: GitExplorerRef) => void;
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
 }
 
@@ -203,8 +206,27 @@ function ReferenceRow({
     actions?.deleteUnavailable ??
     (actions?.pendingBranch ? "Another branch deletion is in progress." : null) ??
     gitExplorerBranchDeletionBlock(reference, status);
+  const showActions = async (position: { x: number; y: number }) => {
+    if (!actions || reference.kind !== "local") return;
+    const blocked = actions.deleteUnavailable !== null || actions.pendingBranch !== null;
+    const action = await ensureLocalApi().contextMenu.show(
+      [
+        { id: "switch", label: "Switch to branch", disabled: blocked || current },
+        { id: "rename", label: "Rename branch…", disabled: blocked },
+      ],
+      position,
+    );
+    if (!blocked && (action === "rename" || (action === "switch" && !current)))
+      actions.onBranchAction(action, reference);
+  };
   return (
     <div
+      onContextMenu={(event) => {
+        if (!actions) return;
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        void showActions({ x: event.clientX || bounds.left, y: event.clientY || bounds.bottom });
+      }}
       className={cn(
         "group/branch flex min-w-0 items-center rounded-sm hover:bg-accent",
         selected && "bg-primary/8",
@@ -214,6 +236,10 @@ function ReferenceRow({
         type="button"
         className={cn(ROW_CLASS, "flex-1")}
         onClick={() => onSelect(reference.hash)}
+        onDoubleClick={() => {
+          if (actions && !current && !actions.deleteUnavailable && !actions.pendingBranch)
+            actions.onBranchAction("switch", reference);
+        }}
         aria-current={selected ? "true" : undefined}
         aria-label={description}
       >
@@ -262,6 +288,17 @@ function ReferenceRow({
             pending && "flex",
           )}
         >
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-label={`Actions for branch ${reference.shortName}`}
+            onClick={(event) => {
+              const bounds = event.currentTarget.getBoundingClientRect();
+              void showActions({ x: bounds.left, y: bounds.bottom });
+            }}
+          >
+            <EllipsisIcon className="size-3" aria-hidden />
+          </Button>
           <Tooltip>
             <TooltipTrigger
               render={

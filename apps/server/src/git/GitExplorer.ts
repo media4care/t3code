@@ -1119,6 +1119,55 @@ const make = Effect.gen(function* () {
               reason: "worktree-changed",
             });
         }
+        if (input.action === "switch" || input.action === "rename") {
+          const name = input.branchName;
+          if (
+            !name?.startsWith("refs/heads/") ||
+            !input.branchHash ||
+            (yield* run(cwd, ["check-ref-format", name], { allowNonZero: true })).exitCode !== 0
+          )
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "invalid-branch",
+            });
+          const hash = (yield* run(cwd, ["show-ref", "--verify", "--hash", name], {
+            allowNonZero: true,
+          })).stdout.trim();
+          if (hash !== input.branchHash)
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "branch-changed",
+            });
+          const shortName = name.slice("refs/heads/".length);
+          const { worktrees } = yield* resolve(input);
+          if (worktrees.some((tree) => tree.branch === shortName && tree.path !== cwd))
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "branch-in-use",
+            });
+          if (input.action === "switch") {
+            yield* git.switchRef({ cwd, refName: shortName });
+            return { message: `Switched to ${shortName}.` };
+          }
+          if (
+            !input.newName ||
+            input.newName.startsWith("-") ||
+            (yield* run(cwd, ["check-ref-format", `refs/heads/${input.newName}`], {
+              allowNonZero: true,
+            })).exitCode !== 0
+          )
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "invalid-branch-name",
+            });
+          yield* git.renameBranch({
+            cwd,
+            oldBranch: shortName,
+            newBranch: input.newName,
+            exactName: true,
+          });
+          return { message: `Renamed ${shortName} to ${input.newName}.` };
+        }
         if (input.action === "push") {
           const result = yield* git.pushCurrentBranch(cwd, null);
           return {
