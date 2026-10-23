@@ -28,7 +28,8 @@ export function GitExplorerBranchAction(props: {
   onClose: () => void;
 }) {
   const [name, setName] = useState(props.reference.shortName);
-  const { execute, pending, allowed } = useGitExplorerAction(props);
+  const [overview] = useState(props.overview);
+  const { execute, pending, allowed } = useGitExplorerAction({ ...props, overview });
   const switching = props.action === "switch";
   return (
     <Dialog

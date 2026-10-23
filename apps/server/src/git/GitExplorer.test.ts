@@ -66,6 +66,153 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect(
+    "stages literal paths, commits only the index and amends without staging other edits",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root } = yield* fixture;
+        const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+        yield* write("hello.txt", "staged value\n");
+        yield* write("[new].txt", "literal path\n");
+        yield* write("unrelated.txt", "leave untracked\n");
+        yield* explorer.runAction({
+          ...target,
+          action: "stage",
+          filePaths: ["hello.txt", "[new].txt"],
+        });
+        yield* write("hello.txt", "unstaged value\n");
+        const review = yield* explorer.details({ ...scope, revision: null });
+        yield* explorer.runAction({
+          ...target,
+          action: "commit",
+          message: "Commit selection",
+          indexVersion: review.indexVersion,
+        });
+        const head = yield* git(["rev-parse", "HEAD"]);
+        assert.equal(yield* git(["show", "HEAD:hello.txt"]), "staged value");
+        assert.include(yield* git(["status", "--porcelain"]), "unrelated.txt");
+        const after = yield* explorer.details({ ...scope, revision: null });
+        yield* explorer.runAction({
+          ...target,
+          expectedHead: head,
+          action: "commit",
+          amend: true,
+          message: "Amended message",
+          indexVersion: after.indexVersion,
+        });
+        assert.equal(yield* git(["log", "-1", "--format=%s"]), "Amended message");
+        assert.equal(yield* git(["rev-parse", "HEAD^"]), root);
+        assert.equal(yield* git(["show", "HEAD:hello.txt"]), "staged value");
+        assert.include(yield* git(["diff"]), "unstaged value");
+      }),
+  );
+
+  it.effect("unstages renames and unborn files without changing working files", () =>
+    Effect.gen(function* () {
+      const { explorer, git, fs, path, cwd, root } = yield* fixture;
+      const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+      yield* git(["mv", "hello.txt", "renamed.txt"]);
+      yield* explorer.runAction({ ...target, action: "unstage", filePaths: ["renamed.txt"] });
+      assert.equal(yield* git(["diff", "--cached", "--name-only"]), "");
+      assert.equal(yield* fs.readFileString(path.join(cwd, "renamed.txt")), "first\n");
+      yield* git(["switch", "--orphan", "unborn"]);
+      yield* git(["add", "renamed.txt"]);
+      yield* explorer.runAction({
+        ...target,
+        expectedHead: null,
+        expectedBranch: "unborn",
+        action: "unstage",
+        filePaths: ["renamed.txt"],
+      });
+      assert.equal(yield* git(["ls-files"]), "");
+      assert.equal(yield* fs.readFileString(path.join(cwd, "renamed.txt")), "first\n");
+    }),
+  );
+
+  it.effect(
+    "discards only reviewed unstaged edits and refuses stale patches or a changed index",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, fs, path, cwd, root } = yield* fixture;
+        const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+        yield* write("hello.txt", "staged\n");
+        yield* git(["add", "hello.txt"]);
+        const review = yield* explorer.details({ ...scope, revision: null });
+        yield* write("hello.txt", "unstaged\n");
+        const patch = yield* explorer.patch({
+          ...scope,
+          revision: null,
+          path: "hello.txt",
+          stage: "unstaged",
+        });
+        yield* write("hello.txt", "newer\n");
+        assert.equal(
+          (yield* explorer
+            .runAction({
+              ...target,
+              action: "discard",
+              filePaths: ["hello.txt"],
+              fileStage: "unstaged",
+              changeToken: patch.changeToken,
+            })
+            .pipe(Effect.flip))._tag,
+          "GitExplorerError",
+        );
+        const latest = yield* explorer.patch({
+          ...scope,
+          revision: null,
+          path: "hello.txt",
+          stage: "unstaged",
+        });
+        yield* explorer.runAction({
+          ...target,
+          action: "discard",
+          filePaths: ["hello.txt"],
+          fileStage: "unstaged",
+          changeToken: latest.changeToken,
+        });
+        assert.equal(yield* fs.readFileString(path.join(cwd, "hello.txt")), "staged\n");
+        assert.equal(yield* git(["show", ":hello.txt"]), "staged");
+        yield* write("hello.txt", "different index\n");
+        yield* git(["add", "hello.txt"]);
+        assert.equal(
+          (yield* explorer
+            .runAction({
+              ...target,
+              action: "commit",
+              message: "stale",
+              indexVersion: review.indexVersion,
+            })
+            .pipe(Effect.flip))._tag,
+          "GitExplorerError",
+        );
+        assert.equal(yield* git(["rev-parse", "HEAD"]), root);
+      }),
+  );
+
+  it.effect("discards a reviewed untracked file without deleting its siblings", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* write("[new].txt", "remove\n");
+      yield* write("n.txt", "keep\n");
+      const patch = yield* explorer.patch({
+        ...scope,
+        revision: null,
+        path: "[new].txt",
+        stage: "untracked",
+      });
+      yield* explorer.runAction({
+        ...scope,
+        expectedHead: root,
+        expectedBranch: "main",
+        action: "discard",
+        filePaths: ["[new].txt"],
+        fileStage: "untracked",
+        changeToken: patch.changeToken,
+      });
+      assert.equal(yield* git(["ls-files", "--others", "--exclude-standard"]), "n.txt");
+    }),
+  );
   it.effect("switches existing branches and renames without losing local changes or upstream", () =>
     Effect.gen(function* () {
       const { explorer, git, write, root } = yield* fixture;

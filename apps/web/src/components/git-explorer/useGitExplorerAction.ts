@@ -38,6 +38,7 @@ export function useGitExplorerAction({
       GitExplorerRunActionInput,
       "projectId" | "worktreePath" | "expectedHead" | "expectedBranch"
     >,
+    expected = overview,
   ) => {
     if (!allowed || inFlight.current) return false;
     inFlight.current = true;
@@ -49,8 +50,8 @@ export function useGitExplorerAction({
         input: {
           ...input,
           ...action,
-          expectedHead: overview.headHash,
-          expectedBranch: overview.headBranch,
+          expectedHead: expected.headHash,
+          expectedBranch: expected.headBranch,
         },
       });
       if (result._tag === "Success") {

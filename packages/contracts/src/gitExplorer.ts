@@ -94,12 +94,34 @@ export const GitExplorerRunActionInput = Schema.Struct({
   ...GitExplorerScope,
   expectedHead: Schema.NullOr(GitExplorerHash),
   expectedBranch: Schema.NullOr(Schema.String),
-  action: Schema.Literals(["push", "pull", "fetch", "stash", "apply-stash", "switch", "rename"]),
-  message: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
+  action: Schema.Literals([
+    "push",
+    "pull",
+    "fetch",
+    "stash",
+    "apply-stash",
+    "switch",
+    "rename",
+    "stage",
+    "unstage",
+    "discard",
+    "commit",
+  ]),
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(10000))),
   stashHash: Schema.optional(GitExplorerHash),
   branchName: Schema.optional(GitExplorerLocalBranch),
   branchHash: Schema.optional(GitExplorerHash),
   newName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
+  filePaths: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(4096))).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(2000),
+    ),
+  ),
+  fileStage: Schema.optional(Schema.Literals(["unstaged", "untracked"])),
+  changeToken: Schema.optional(Schema.String),
+  indexVersion: Schema.optional(Schema.String),
+  amend: Schema.optional(Schema.Boolean),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
 export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
@@ -159,6 +181,7 @@ export const GitExplorerFile = Schema.Struct({
 });
 export type GitExplorerFile = typeof GitExplorerFile.Type;
 export const GitExplorerDetailsResult = Schema.Struct({
+  indexVersion: Schema.optional(Schema.String),
   stash: Schema.NullOr(GitExplorerStash),
   commit: Schema.NullOr(Schema.Struct({ ...GitExplorerCommit.fields, body: Schema.String })),
   comparisonParent: Schema.NullOr(GitExplorerHash),
@@ -173,6 +196,7 @@ export const GitExplorerPatchInput = Schema.Struct({
 });
 export type GitExplorerPatchInput = typeof GitExplorerPatchInput.Type;
 export const GitExplorerPatchResult = Schema.Struct({
+  changeToken: Schema.optional(Schema.String),
   patch: Schema.String,
   binary: Schema.Boolean,
   truncated: Schema.Boolean,
@@ -198,6 +222,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "stash-unavailable",
     "branch-in-use",
     "invalid-branch-name",
+    "changes-changed",
+    "commit-message-required",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -235,6 +261,10 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "This branch is checked out in another worktree.";
       case "invalid-branch-name":
         return "Enter a valid Git branch name.";
+      case "changes-changed":
+        return "The changes have changed since you reviewed them. Refresh and review them again.";
+      case "commit-message-required":
+        return "Enter a commit message.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }
