@@ -52,6 +52,13 @@ import {
   showGitExplorerContextMenu,
 } from "./gitExplorerContextMenu";
 
+import type { GitExplorerStashActionKind } from "./GitExplorerStashAction";
+
+interface StashActions {
+  unavailable: string | null;
+  onAction: (action: GitExplorerStashActionKind, stash: GitExplorerStash) => void;
+}
+
 const ROW_CLASS =
   "relative flex h-6 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/8 pointer-coarse:h-7 max-sm:h-9";
 const HEADING_CLASS =
@@ -444,31 +451,73 @@ function StashRow({
   stash,
   selected,
   onSelect,
+  actions,
 }: {
   stash: GitExplorerStash;
   selected: boolean;
   onSelect: (revision: string | null) => void;
+  actions: StashActions;
 }) {
   const description = `${stash.name} · ${stash.subject} · ${new Date(stash.createdAt).toLocaleString()}`;
+  const showActions = (position: { x: number; y: number }) =>
+    showGitExplorerContextMenu<GitExplorerStashActionKind>(
+      [
+        { id: "apply-stash", label: "Apply stash…", disabled: actions.unavailable !== null },
+        { id: "pop-stash", label: "Pop stash…", disabled: actions.unavailable !== null },
+        {
+          id: "drop-stash",
+          label: "Delete stash…",
+          destructive: true,
+          separatorBefore: true,
+          disabled: actions.unavailable !== null,
+        },
+      ],
+      position,
+      (action) => {
+        if (!actions.unavailable) actions.onAction(action, stash);
+      },
+    );
   return (
-    <button
-      type="button"
-      className={ROW_CLASS}
-      onClick={() => onSelect(stash.hash)}
-      aria-current={selected ? "true" : undefined}
-      aria-label={description}
+    <div
+      className="group/stash flex min-w-0 items-center"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void showActions(gitExplorerMenuPosition(event));
+      }}
     >
-      {selected ? (
-        <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
-      ) : null}
-      <ArchiveIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-      <GitExplorerHint className="flex min-w-0 flex-1 items-center gap-1.5" label={description}>
-        <span className="shrink-0 rounded-sm bg-accent px-1 font-mono text-3xs leading-4 text-muted-foreground">
-          {stash.name.replace(/^stash@\{(\d+)\}$/, "@$1")}
-        </span>
-        <span className="min-w-0 truncate">{stash.subject}</span>
-      </GitExplorerHint>
-    </button>
+      <button
+        type="button"
+        className={cn(ROW_CLASS, "flex-1")}
+        onClick={() => onSelect(stash.hash)}
+        aria-current={selected ? "true" : undefined}
+        aria-label={description}
+      >
+        {selected ? (
+          <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
+        ) : null}
+        <ArchiveIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <GitExplorerHint className="flex min-w-0 flex-1 items-center gap-1.5" label={description}>
+          <span className="shrink-0 rounded-sm bg-accent px-1 font-mono text-3xs leading-4 text-muted-foreground">
+            {stash.name.replace(/^stash@\{(\d+)\}$/, "@$1")}
+          </span>
+          <span className="min-w-0 truncate">{stash.subject}</span>
+        </GitExplorerHint>
+      </button>
+      <div className="hidden shrink-0 group-any-hover/stash:block group-has-[:focus-visible]/stash:block pointer-coarse:block max-sm:block">
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={`Actions for ${stash.name}`}
+          onClick={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            void showActions({ x: bounds.left, y: bounds.bottom });
+          }}
+        >
+          <EllipsisIcon className="size-3" aria-hidden />
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -480,6 +529,7 @@ export function GitExplorerBranches({
   input,
   active,
   actions,
+  stashActions,
 }: {
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
@@ -488,6 +538,7 @@ export function GitExplorerBranches({
   input: GitExplorerOverviewInput;
   active: boolean;
   actions: BranchActions;
+  stashActions: StashActions;
 }) {
   const [search, setSearch] = useState("");
   const filter = search.trim().toLocaleLowerCase();
@@ -689,6 +740,7 @@ export function GitExplorerBranches({
             <StashRow
               key={stash.name}
               stash={stash}
+              actions={stashActions}
               selected={selectedRevision === stash.hash}
               onSelect={onSelect}
             />

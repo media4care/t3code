@@ -8,6 +8,7 @@ import type {
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
   GitExplorerRunActionInput,
+  GitExplorerStash,
 } from "@t3tools/contracts";
 import {
   ArchiveIcon,
@@ -15,6 +16,7 @@ import {
   ArrowUpIcon,
   DownloadIcon,
   ArchiveRestoreIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -34,6 +36,8 @@ import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 
+import type { GitExplorerStashActionKind } from "./GitExplorerStashAction";
+
 export function GitExplorerToolbar({
   environmentId,
   input,
@@ -43,6 +47,7 @@ export function GitExplorerToolbar({
   busy,
   onBusyChange,
   refresh,
+  onStashAction,
 }: {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
@@ -52,6 +57,7 @@ export function GitExplorerToolbar({
   busy: boolean;
   onBusyChange: (busy: boolean) => void;
   refresh: () => void;
+  onStashAction: (action: GitExplorerStashActionKind, stash: GitExplorerStash) => void;
 }) {
   const allowed = useAtomValue(gitExplorerEnvironment.runAction.permissionAtom(environmentId));
   const runAction = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
@@ -71,7 +77,7 @@ export function GitExplorerToolbar({
       : busy
         ? "A Git action is in progress."
         : null;
-  const execute = async (action: GitExplorerRunActionInput["action"]) => {
+  const execute = async (action: "push" | "pull" | "fetch" | "stash") => {
     if (inFlight.current || unavailable) return;
     inFlight.current = true;
     setPending(action);
@@ -84,7 +90,6 @@ export function GitExplorerToolbar({
         expectedHead: overview.headHash,
         expectedBranch: overview.headBranch,
         ...(action === "stash" ? { message } : {}),
-        ...(action === "apply-stash" && stash ? { stashHash: stash.hash } : {}),
       },
     });
     if (result._tag === "Success") {
@@ -158,22 +163,27 @@ export function GitExplorerToolbar({
             {label}
           </Button>
         ))}
-        {stash ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={unavailable !== null}
-            title={unavailable ?? `Restore ${stash.name}, keeping the saved stash`}
-            onClick={() => void execute("apply-stash")}
-          >
-            {pending === "apply-stash" ? (
-              <Spinner size="xs" />
-            ) : (
-              <ArchiveRestoreIcon className="size-3.5" aria-hidden />
-            )}
-            Apply stash
-          </Button>
-        ) : null}
+        {stash
+          ? (
+              [
+                { action: "apply-stash", label: "Apply stash…", Icon: ArchiveRestoreIcon },
+                { action: "pop-stash", label: "Pop stash…", Icon: ArchiveRestoreIcon },
+                { action: "drop-stash", label: "Delete stash…", Icon: Trash2Icon },
+              ] as const
+            ).map(({ action, label, Icon }) => (
+              <Button
+                key={action}
+                variant={action === "drop-stash" ? "ghost-destructive" : "ghost"}
+                size="sm"
+                disabled={unavailable !== null}
+                title={unavailable ?? `${label} ${stash.name}`}
+                onClick={() => onStashAction(action, stash)}
+              >
+                <Icon className="size-3.5" aria-hidden />
+                {label}
+              </Button>
+            ))
+          : null}
       </div>
       <Dialog
         open={stashOpen}
