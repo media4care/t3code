@@ -422,6 +422,7 @@ function RepositoryExplorer({
                     revision={selectedRevision}
                     compact={!split}
                     onBack={() => setShowReview(false)}
+                    workspacePath={overview.selectedWorktreePath}
                     workingTreeActions={{
                       overview,
                       busy:
