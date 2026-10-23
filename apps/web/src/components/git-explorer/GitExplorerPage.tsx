@@ -13,10 +13,11 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FolderGit2Icon, GitBranchIcon } from "lucide-react";
-import { useContext, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useContext, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
 import { ensureLocalApi } from "~/localApi";
+import { RESIZABLE_WIDTH_PROPERTY, useResizableWidth } from "~/hooks/useResizableWidth";
 import { observeResize } from "~/lib/observeResize";
 import { inferProjectTitleFromPath } from "~/lib/projectPaths";
 import { cn } from "~/lib/utils";
@@ -125,6 +126,13 @@ function RepositoryExplorer({
   const [historyShare, setHistoryShare] = useState(0.64);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const split = availableWidth >= 720;
+  const branchesPanel = useResizableWidth({
+    storageKey: "git-explorer-branches-width",
+    defaultWidth: 224,
+    minWidth: 180,
+    maxWidth: availableWidth ? Math.max(180, Math.min(520, availableWidth - 420)) : 520,
+    edge: "right",
+  });
   const refresh = () => {
     gitExplorerEnvironment.refresh(registry, target);
     setRefreshRevision((revision) => revision + 1);
@@ -269,9 +277,14 @@ function RepositoryExplorer({
               id="git-explorer-branches"
               aria-label="Branches"
               className={cn(
-                "min-h-0 flex-col overflow-y-auto border-border bg-muted/25",
-                split ? "flex w-56 shrink-0 border-r" : showBranches ? "flex flex-1" : "hidden",
+                "relative min-h-0 min-w-0 flex-col border-border bg-muted/25",
+                split
+                  ? "flex w-(--resizable-width) shrink-0 border-r"
+                  : showBranches
+                    ? "flex flex-1"
+                    : "hidden",
               )}
+              style={{ [RESIZABLE_WIDTH_PROPERTY]: `${branchesPanel.width}px` } as CSSProperties}
             >
               <GitExplorerBranches
                 environmentId={environmentId}
@@ -287,6 +300,15 @@ function RepositoryExplorer({
                     void handleDeleteBranch(reference, branchStatus),
                 }}
               />
+              {split ? (
+                <div
+                  role="separator"
+                  aria-label="Resize branches panel"
+                  aria-orientation="vertical"
+                  className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none select-none hover:bg-primary/30 active:bg-primary/50"
+                  {...branchesPanel.handlers}
+                />
+              ) : null}
             </aside>
             <div
               className={cn(

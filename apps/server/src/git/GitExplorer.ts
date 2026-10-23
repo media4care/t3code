@@ -994,11 +994,33 @@ const make = Effect.gen(function* () {
               operation: "delete-branch",
               reason: "branch-changed",
             });
+          // Verifying a checked-out base also makes Git lock HEAD. A detached
+          // ref context shares the repository refs without colliding with the
+          // worktree HEAD locks that prevent checkout during deletion.
+          const refContext = yield* Effect.gen(function* () {
+            const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-delete-" });
+            yield* fs.writeFileString(
+              path.join(directory, "commondir"),
+              `${latest.commonDirectory}\n`,
+            );
+            yield* fs.writeFileString(path.join(directory, "HEAD"), `${input.expectedHash}\n`);
+            return directory;
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitExplorerError({
+                  operation: "delete-branch",
+                  reason: "write-failed",
+                  cause,
+                }),
+            ),
+          );
           const result = yield* git
             .execute({
               operation: "GitExplorer.deleteBranch",
               cwd: latest.cwd,
               args: [
+                `--git-dir=${refContext}`,
                 "-c",
                 `core.hooksPath=${platform === "win32" ? "NUL" : "/dev/null"}`,
                 "update-ref",
