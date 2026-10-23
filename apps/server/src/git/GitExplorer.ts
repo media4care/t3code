@@ -219,6 +219,14 @@ const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const snapshots = new Map<string, Snapshot>();
   const mutationLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
+  const contentToken = Effect.fn("GitExplorer.contentToken")((value: string) =>
+    crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
+      Effect.map(Hex.encode),
+      Effect.mapError(
+        (cause) => new GitExplorerError({ operation: "changes", reason: "read-failed", cause }),
+      ),
+    ),
+  );
 
   const run = Effect.fn("GitExplorer.readGit")(function* (
     cwd: string,
@@ -1181,7 +1189,93 @@ const make = Effect.gen(function* () {
           };
         }
         let args: string[];
+        let stdin: string | undefined;
         switch (input.action) {
+          case "stage":
+          case "unstage": {
+            const review = yield* details({ ...input, revision: null });
+            const selected = input.filePaths?.map((name) =>
+              review.files.find(
+                (file) =>
+                  file.path === name &&
+                  (input.action === "unstage"
+                    ? file.stage === "staged"
+                    : file.stage === "unstaged" || file.stage === "untracked"),
+              ),
+            );
+            if (!selected?.length || selected.some((file) => !file))
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-path",
+              });
+            const paths = [
+              ...new Set(
+                selected.flatMap((file) =>
+                  file ? [file.path, ...(file.oldPath ? [file.oldPath] : [])] : [],
+                ),
+              ),
+            ];
+            args =
+              input.action === "stage"
+                ? ["add", "-A", "--", ...paths]
+                : input.expectedHead
+                  ? ["reset", "-q", "HEAD", "--", ...paths]
+                  : ["update-index", "--force-remove", "--", ...paths];
+            break;
+          }
+          case "discard": {
+            const filePath = input.filePaths?.[0];
+            if (
+              !filePath ||
+              input.filePaths?.length !== 1 ||
+              !input.fileStage ||
+              !input.changeToken
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-path",
+              });
+            const current = yield* patch({
+              ...input,
+              revision: null,
+              path: filePath,
+              stage: input.fileStage,
+            });
+            if (current.truncated || current.changeToken !== input.changeToken)
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "changes-changed",
+              });
+            const review = yield* details({ ...input, revision: null });
+            if (review.files.some((file) => file.path === filePath && file.status === "unmerged"))
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-path",
+              });
+            args =
+              input.fileStage === "untracked"
+                ? ["clean", "-f", "--", filePath]
+                : ["restore", "--worktree", "--", filePath];
+            break;
+          }
+          case "commit": {
+            if (!input.message?.trim())
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "commit-message-required",
+              });
+            const indexVersion = yield* contentToken(
+              (yield* run(cwd, ["ls-files", "--stage", "-z"])).stdout,
+            );
+            if (indexVersion !== input.indexVersion)
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "changes-changed",
+              });
+            args = ["commit", ...(input.amend ? ["--amend"] : []), "--file", "-"];
+            stdin = input.message.trim();
+            break;
+          }
           case "fetch":
             args = ["fetch", "--all"];
             break;
@@ -1209,7 +1303,13 @@ const make = Effect.gen(function* () {
         const result = yield* git.execute({
           operation: `GitExplorer.${input.action}`,
           cwd,
-          args,
+          args: [
+            ...(["stage", "unstage", "discard"].includes(input.action)
+              ? ["--literal-pathspecs"]
+              : []),
+            ...args,
+          ],
+          ...(stdin === undefined ? {} : { stdin }),
           env: { GIT_TERMINAL_PROMPT: "0" },
           timeoutMs: null,
           appendTruncationMarker: true,
@@ -1217,11 +1317,21 @@ const make = Effect.gen(function* () {
         yield* git.invalidateRefs(cwd);
         return {
           message:
-            input.action === "fetch"
-              ? "Fetched all remotes."
-              : input.action === "apply-stash"
-                ? "Stash applied. The saved stash was kept."
-                : result.stdout.trim() || "Changes stashed.",
+            input.action === "stage"
+              ? "Selected files staged."
+              : input.action === "unstage"
+                ? "Selected files unstaged."
+                : input.action === "discard"
+                  ? "Selected changes discarded."
+                  : input.action === "commit"
+                    ? input.amend
+                      ? "Amended the latest commit."
+                      : "Committed staged changes."
+                    : input.action === "fetch"
+                      ? "Fetched all remotes."
+                      : input.action === "apply-stash"
+                        ? "Stash applied. The saved stash was kept."
+                        : result.stdout.trim() || "Changes stashed.",
         };
       }).pipe(
         activeLock.semaphore.withPermits(1),
@@ -1394,11 +1504,12 @@ const make = Effect.gen(function* () {
           truncated: result.truncated || untracked.truncated || files.length > MAX_FILES,
         };
       }
-      const [staged, unstaged, untracked] = yield* Effect.all(
+      const [staged, unstaged, untracked, index] = yield* Effect.all(
         [
           readFiles(cwd, null, null, "staged"),
           readFiles(cwd, null, null, "unstaged"),
           run(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], { truncate: true }),
+          run(cwd, ["ls-files", "--stage", "-z"]),
         ],
         { concurrency: 3 },
       );
@@ -1418,6 +1529,7 @@ const make = Effect.gen(function* () {
         })),
       ];
       return {
+        indexVersion: yield* contentToken(index.stdout),
         commit: null,
         stash: null,
         comparisonParent: null,
@@ -1465,6 +1577,7 @@ const make = Effect.gen(function* () {
         [
           "diff",
           "--no-index",
+          "--binary",
           ...DIFF_OPTIONS,
           "--src-prefix=a/",
           "--dst-prefix=b/",
@@ -1477,6 +1590,7 @@ const make = Effect.gen(function* () {
       if (result.exitCode !== 0 && result.exitCode !== 1 && !result.stdoutTruncated)
         return yield* new GitExplorerError({ operation: "patch", reason: "read-failed" });
       return {
+        ...(!result.stdoutTruncated ? { changeToken: yield* contentToken(result.stdout) } : {}),
         patch: result.stdoutTruncated ? "" : result.stdout,
         binary:
           result.stdout.includes("Binary files ") || result.stdout.includes("GIT binary patch"),
@@ -1503,6 +1617,7 @@ const make = Effect.gen(function* () {
       [
         ...diffArgs(revision, parent, input.stage),
         "--patch",
+        ...(input.revision === null ? ["--binary"] : []),
         ...(file.status === "unmerged" && input.stage === "unstaged" ? ["--ours"] : []),
         "--src-prefix=a/",
         "--dst-prefix=b/",
@@ -1513,6 +1628,9 @@ const make = Effect.gen(function* () {
       { maxBytes: MAX_PATCH_BYTES, truncate: true },
     );
     return {
+      ...(input.revision === null && !result.stdoutTruncated
+        ? { changeToken: yield* contentToken(result.stdout) }
+        : {}),
       patch: result.stdoutTruncated ? "" : result.stdout,
       binary: file.binary || result.stdout.includes("Binary files "),
       truncated: result.stdoutTruncated,

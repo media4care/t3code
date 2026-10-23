@@ -422,6 +422,16 @@ function RepositoryExplorer({
                     revision={selectedRevision}
                     compact={!split}
                     onBack={() => setShowReview(false)}
+                    workingTreeActions={{
+                      overview,
+                      busy:
+                        actionBusy ||
+                        pendingBranch !== null ||
+                        deletingFolder !== null ||
+                        branchAction !== null,
+                      refresh,
+                      onBusyChange: setActionBusy,
+                    }}
                   />
                 )}
               </section>
