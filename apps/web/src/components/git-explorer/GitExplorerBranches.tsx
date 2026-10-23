@@ -1,4 +1,7 @@
-import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
+import {
+  formatGitExplorerSync,
+  gitExplorerEmphasizedRefs,
+} from "@t3tools/client-runtime/git-explorer";
 import type {
   EnvironmentId,
   GitExplorerBranchStatus,
@@ -49,6 +52,7 @@ const HEADING_CLASS =
 interface BranchActions {
   deleteUnavailable: string | null;
   pendingBranch: string | null;
+  onDeleteFolder: (path: string) => void;
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
 }
 
@@ -56,30 +60,49 @@ function BranchFolderRow({
   row,
   collapsed,
   onToggle,
+  actions,
 }: {
   row: Extract<GitExplorerBranchRow, { kind: "folder" }>;
   collapsed: boolean;
   onToggle: (path: string) => void;
+  actions?: BranchActions;
 }) {
   const Icon = collapsed ? FolderIcon : FolderOpenIcon;
   return (
-    <button
-      type="button"
-      className={ROW_CLASS}
-      aria-label={`${row.path} branch folder`}
-      aria-expanded={!collapsed}
-      onClick={() => onToggle(row.path)}
-      onKeyDown={(event) => {
-        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-          event.preventDefault();
-          if (collapsed === (event.key === "ArrowRight")) onToggle(row.path);
-        }
-      }}
-    >
-      <ChevronDownIcon className={cn("size-3 shrink-0", collapsed && "-rotate-90")} aria-hidden />
-      <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="min-w-0 truncate font-medium">{row.label}</span>
-    </button>
+    <div className="group/branch flex min-w-0 items-center rounded-sm hover:bg-accent">
+      <button
+        type="button"
+        className={cn(ROW_CLASS, "flex-1")}
+        aria-label={`${row.path} branch folder`}
+        aria-expanded={!collapsed}
+        onClick={() => onToggle(row.path)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            if (collapsed === (event.key === "ArrowRight")) onToggle(row.path);
+          }
+        }}
+      >
+        <ChevronDownIcon className={cn("size-3 shrink-0", collapsed && "-rotate-90")} aria-hidden />
+        <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 truncate font-medium">{row.label}</span>
+      </button>
+      {actions ? (
+        <span className="mr-0.5 hidden shrink-0 group-any-hover/branch:block group-has-[:focus-visible]/branch:block pointer-coarse:block max-sm:block">
+          <Button
+            variant="ghost-destructive"
+            size="xs"
+            aria-label={`Delete local folder ${row.path}`}
+            title={actions.deleteUnavailable ?? `Review branches in ${row.path} for deletion`}
+            disabled={actions.deleteUnavailable !== null || actions.pendingBranch !== null}
+            onClick={() => actions.onDeleteFolder(row.path)}
+          >
+            <Trash2Icon className="size-3" aria-hidden />
+            <span className="pointer-coarse:hidden max-sm:hidden">Delete</span>
+          </Button>
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -154,6 +177,7 @@ function ReferenceRow({
   onSelect,
   status,
   statusError,
+  emphasized = false,
   actions,
 }: {
   reference: GitExplorerRef;
@@ -163,6 +187,7 @@ function ReferenceRow({
   onSelect: (revision: string | null) => void;
   status?: GitExplorerBranchStatus;
   statusError?: string | null;
+  emphasized?: boolean;
   actions?: BranchActions;
 }) {
   const mergeDescription = statusError
@@ -210,7 +235,9 @@ function ReferenceRow({
           {slash >= 0 ? (
             <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
           ) : null}
-          <span className={cn(current && "font-semibold text-primary")}>
+          <span
+            className={cn((current || emphasized) && "font-semibold", current && "text-primary")}
+          >
             {label.slice(slash + 1)}
           </span>
         </GitExplorerHint>
@@ -286,6 +313,7 @@ function LocalBranchChunk({
   actions: BranchActions;
 }) {
   const [visible, setVisible] = useState(false);
+  const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
   const branches = rows.flatMap((row) => (row.kind === "branch" ? [row.reference.name] : []));
   const query = useGitExplorerQuery(
     branches.length
@@ -315,7 +343,12 @@ function LocalBranchChunk({
         if (row.kind === "folder")
           return (
             <div key={`folder:${row.path}`} style={{ paddingInlineStart: row.depth * 12 }}>
-              <BranchFolderRow row={row} collapsed={collapsed.has(row.path)} onToggle={onToggle} />
+              <BranchFolderRow
+                row={row}
+                collapsed={collapsed.has(row.path)}
+                onToggle={onToggle}
+                actions={actions}
+              />
             </div>
           );
         const reference = row.reference;
@@ -325,6 +358,7 @@ function LocalBranchChunk({
           <div key={reference.name} style={{ paddingInlineStart: row.depth * 12 }}>
             <ReferenceRow
               reference={reference}
+              emphasized={emphasizedRefs.has(reference.name)}
               label={row.label}
               current={reference.shortName === overview.headBranch}
               selected={selectedRevision === reference.hash}
@@ -397,6 +431,7 @@ export function GitExplorerBranches({
     else next.add(path);
     return next;
   };
+  const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
   const localRefs = overview.refs.filter((reference) => reference.kind === "local");
   const localRows = gitExplorerBranchRows(localRefs, collapsedLocal);
   const localChunks: GitExplorerBranchRow[][] = [];
@@ -522,6 +557,7 @@ export function GitExplorerBranches({
                     ) : (
                       <ReferenceRow
                         reference={row.reference}
+                        emphasized={emphasizedRefs.has(row.reference.name)}
                         label={row.label}
                         current={false}
                         selected={selectedRevision === row.reference.hash}

@@ -160,6 +160,8 @@ import {
   GitExplorerBranchStatusesInput,
   GitExplorerBranchStatusesResult,
   GitExplorerDeleteBranchInput,
+  GitExplorerRunActionInput,
+  GitExplorerRunActionResult,
   GitExplorerError,
 } from "./gitExplorer.ts";
 import {
@@ -471,6 +473,7 @@ export const WS_METHODS = {
   gitExplorerPatch: "git.explorerPatch",
   gitExplorerBranchStatuses: "git.explorerBranchStatuses",
   gitExplorerDeleteBranch: "git.explorerDeleteBranch",
+  gitExplorerRunAction: "git.explorerRunAction",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -1537,6 +1540,12 @@ const WsGitExplorerBranchStatusesRpc = Rpc.make(WS_METHODS.gitExplorerBranchStat
   error: Schema.Union([GitExplorerError, EnvironmentAuthorizationError]),
 });
 
+const WsGitExplorerRunActionRpc = Rpc.make(WS_METHODS.gitExplorerRunAction, {
+  payload: GitExplorerRunActionInput,
+  success: GitExplorerRunActionResult,
+  error: Schema.Union([GitExplorerError, GitCommandError, EnvironmentAuthorizationError]),
+});
+
 const WsGitExplorerDeleteBranchRpc = Rpc.make(WS_METHODS.gitExplorerDeleteBranch, {
   payload: GitExplorerDeleteBranchInput,
   success: Schema.Void,
@@ -2179,6 +2188,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitExplorerPatchRpc,
   WsGitExplorerBranchStatusesRpc,
   WsGitExplorerDeleteBranchRpc,
+  WsGitExplorerRunActionRpc,
 
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,

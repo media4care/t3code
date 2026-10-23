@@ -1,8 +1,40 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatGitExplorerSync, layoutGitGraph } from "./gitExplorer.ts";
+import { formatGitExplorerSync, layoutGitGraph, gitExplorerEmphasizedRefs } from "./gitExplorer.ts";
 
 describe("Git Explorer graph", () => {
+  it("emphasizes first-parent history without thickening a merged feature or reused lane", () => {
+    const { rows } = layoutGitGraph(
+      [
+        { hash: "main", parents: ["base", "feature"] },
+        { hash: "feature", parents: ["base"] },
+        { hash: "base", parents: [] },
+        { hash: "other", parents: [] },
+      ],
+      [],
+      new Set(["main"]),
+    );
+    expect(rows.filter((row) => row.emphasized).map((row) => row.hash)).toEqual(["main", "base"]);
+    expect(rows[0]?.lines.filter((line) => line.emphasized)).toHaveLength(1);
+    expect(rows[1]?.lines.find((line) => line.kind === "through")?.emphasized).toBe(true);
+    expect(rows[1]?.lines.find((line) => line.kind === "parent")?.emphasized).toBeUndefined();
+  });
+
+  it("selects main and the highest numeric release branch including remote counterparts, excluding tags", () => {
+    const refs = [
+      { name: "refs/heads/main", shortName: "main", kind: "local" },
+      { name: "refs/heads/v2.9", shortName: "v2.9", kind: "local" },
+      { name: "refs/heads/v2.10", shortName: "v2.10", kind: "local" },
+      { name: "refs/remotes/origin/v2.10", shortName: "origin/v2.10", kind: "remote" },
+      { name: "refs/tags/v99", shortName: "v99", kind: "tag" },
+    ] as const;
+    expect([...gitExplorerEmphasizedRefs(refs)]).toEqual([
+      "refs/heads/main",
+      "refs/heads/v2.10",
+      "refs/remotes/origin/v2.10",
+    ]);
+  });
+
   it("connects a linear history and stops at the root", () => {
     const { rows, lanes } = layoutGitGraph([
       { hash: "c", parents: ["b"] },
