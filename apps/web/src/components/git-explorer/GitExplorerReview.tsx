@@ -40,6 +40,9 @@ import {
   type GitExplorerWorkingTreeActions,
 } from "./GitExplorerWorkingTree";
 
+import { useGitExplorerFileMenu } from "./useGitExplorerFileMenu";
+import { gitExplorerMenuPosition } from "./gitExplorerContextMenu";
+
 const FILE_STATUS = {
   added: { label: "A", color: "text-success-foreground" },
   modified: { label: "M", color: "text-warning-foreground" },
@@ -270,6 +273,7 @@ export function GitExplorerReview({
   compact,
   onBack,
   workingTreeActions,
+  workspacePath,
 }: {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
@@ -277,7 +281,9 @@ export function GitExplorerReview({
   compact: boolean;
   onBack: () => void;
   workingTreeActions?: GitExplorerWorkingTreeActions;
+  workspacePath?: string;
 }) {
+  const showFileMenu = useGitExplorerFileMenu(environmentId, workspacePath);
   const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const touch = useMediaQuery({ pointer: "coarse" });
@@ -380,6 +386,11 @@ export function GitExplorerReview({
                     <button
                       type="button"
                       {...navigation.optionProps(index)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void showFileMenu(file, gitExplorerMenuPosition(event));
+                      }}
                       aria-current={
                         selectedFile && fileKey(file) === fileKey(selectedFile) ? "true" : undefined
                       }

@@ -30,7 +30,6 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { ensureLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -46,6 +45,12 @@ import {
 } from "./gitExplorerBranches.logic";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
+
+import {
+  copyGitExplorerValue,
+  gitExplorerMenuPosition,
+  showGitExplorerContextMenu,
+} from "./gitExplorerContextMenu";
 
 const ROW_CLASS =
   "relative flex h-6 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/8 pointer-coarse:h-7 max-sm:h-9";
@@ -207,26 +212,49 @@ function ReferenceRow({
     actions?.deleteUnavailable ??
     (actions?.pendingBranch ? "Another branch deletion is in progress." : null) ??
     gitExplorerBranchDeletionBlock(reference, status);
-  const showActions = async (position: { x: number; y: number }) => {
-    if (!actions || reference.kind !== "local") return;
-    const blocked = actions.deleteUnavailable !== null || actions.pendingBranch !== null;
-    const action = await ensureLocalApi().contextMenu.show(
+  const showActions = (position: { x: number; y: number }) => {
+    const canManage = actions && reference.kind === "local";
+    const blocked =
+      !canManage || actions.deleteUnavailable !== null || actions.pendingBranch !== null;
+    return showGitExplorerContextMenu<"copy-name" | "copy-hash" | "switch" | "rename">(
       [
-        { id: "switch", label: "Switch to branch", disabled: blocked || current },
-        { id: "rename", label: "Rename branch…", disabled: blocked },
+        {
+          id: "copy-name",
+          label: reference.kind === "tag" ? "Copy tag name" : "Copy branch name",
+          icon: "copy",
+        },
+        { id: "copy-hash", label: "Copy commit hash", icon: "copy" },
+        ...(canManage
+          ? [
+              {
+                id: "switch" as const,
+                label: "Switch to branch",
+                disabled: blocked || current,
+                separatorBefore: true,
+              },
+              { id: "rename" as const, label: "Rename branch…", disabled: blocked },
+            ]
+          : []),
       ],
       position,
+      async (action) => {
+        if (action === "copy-name")
+          await copyGitExplorerValue(
+            reference.shortName,
+            reference.kind === "tag" ? "tag name" : "branch name",
+          );
+        else if (action === "copy-hash") await copyGitExplorerValue(reference.hash, "commit hash");
+        else if (!blocked && (action === "rename" || (action === "switch" && !current)))
+          actions.onBranchAction(action, reference);
+      },
     );
-    if (!blocked && (action === "rename" || (action === "switch" && !current)))
-      actions.onBranchAction(action, reference);
   };
   return (
     <div
       onContextMenu={(event) => {
-        if (!actions) return;
         event.preventDefault();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        void showActions({ x: event.clientX || bounds.left, y: event.clientY || bounds.bottom });
+        event.stopPropagation();
+        void showActions(gitExplorerMenuPosition(event));
       }}
       className={cn(
         "group/branch flex min-w-0 items-center rounded-sm hover:bg-accent",
