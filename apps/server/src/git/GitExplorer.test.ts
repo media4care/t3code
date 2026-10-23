@@ -66,6 +66,73 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect(
+    "stashes tracked and untracked changes and restores the index without dropping the stash",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root } = yield* fixture;
+        yield* write("hello.txt", "staged\n");
+        yield* git(["add", "hello.txt"]);
+        yield* write("hello.txt", "unstaged\n");
+        yield* write("new.txt", "untracked\n");
+        const before = yield* git(["status", "--porcelain"]);
+        const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+        yield* explorer.runAction({ ...target, action: "stash", message: "Save test changes" });
+        assert.equal(yield* git(["status", "--porcelain"]), "");
+        const saved = (yield* explorer.overview(scope)).stashes[0]!;
+        assert.include(saved.subject, "Save test changes");
+        yield* explorer.runAction({ ...target, action: "apply-stash", stashHash: saved.hash });
+        assert.equal(yield* git(["status", "--porcelain"]), before);
+        assert.equal(yield* git(["show", ":hello.txt"]), "staged");
+        assert.lengthOf((yield* explorer.overview(scope)).stashes, 1);
+      }),
+  );
+
+  it.effect("refuses stale action targets and stashes that are no longer listed", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* write("hello.txt", "changed\n");
+      yield* git(["switch", "-c", "other"]);
+      const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+      assert.equal(
+        (yield* explorer.runAction({ ...target, action: "stash" }).pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+      assert.include(yield* git(["status", "--porcelain"]), "hello.txt");
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, expectedBranch: "other", action: "apply-stash", stashHash: root })
+          .pipe(Effect.flip))._tag,
+        "GitExplorerError",
+      );
+    }),
+  );
+
+  it.effect(
+    "pushes, fetches without moving HEAD, and pulls by fast-forward from a local remote",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, fs, root } = yield* fixture;
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-remote-" });
+        yield* git(["init", "--bare", remote]);
+        yield* git(["remote", "add", "origin", remote]);
+        const target = { ...scope, expectedHead: root, expectedBranch: "main" };
+        yield* explorer.runAction({ ...target, action: "push" });
+        assert.equal(yield* git(["rev-parse", "@{upstream}"]), root);
+        yield* write("hello.txt", "remote change\n");
+        yield* git(["commit", "-am", "remote update"]);
+        const updated = yield* git(["rev-parse", "HEAD"]);
+        yield* git(["push"]);
+        yield* git(["reset", "--hard", root]);
+        yield* git(["update-ref", "refs/remotes/origin/main", root]);
+        yield* explorer.runAction({ ...target, action: "fetch" });
+        assert.equal(yield* git(["rev-parse", "HEAD"]), root);
+        assert.equal(yield* git(["rev-parse", "origin/main"]), updated);
+        yield* explorer.runAction({ ...target, action: "pull" });
+        assert.equal(yield* git(["rev-parse", "HEAD"]), updated);
+      }),
+  );
+
   it.effect("reviews root commits and paginates immutable tips across concurrent commits", () =>
     Effect.gen(function* () {
       const { explorer, git, write, root } = yield* fixture;

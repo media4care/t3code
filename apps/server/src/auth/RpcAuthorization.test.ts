@@ -76,7 +76,10 @@ describe("RPC authorization scopes", () => {
     }
   });
 
-  it("requires source control write permission to delete a local explorer branch", () => {
+  it("requires source control write permission for explorer mutations", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.gitExplorerRunAction)).toBe(
+      AuthSourceControlWriteScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.gitExplorerDeleteBranch)).toBe(
       AuthSourceControlWriteScope,
     );

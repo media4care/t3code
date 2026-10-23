@@ -78,6 +78,19 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
       staleTimeMs: 60_000,
       refreshTrigger,
     }),
+    readBranchStatuses: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git-explorer:read-branch-statuses",
+      tag: WS_METHODS.gitExplorerBranchStatuses,
+    }),
+    runAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git-explorer:run-action",
+      tag: WS_METHODS.gitExplorerRunAction,
+      scheduler: vcsCommandScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
+      },
+    }),
     deleteBranch: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:git-explorer:delete-branch",
       tag: WS_METHODS.gitExplorerDeleteBranch,

@@ -1,5 +1,8 @@
 import {
   GitExplorerError,
+  type GitCommandError,
+  type GitExplorerRunActionInput,
+  type GitExplorerRunActionResult,
   type GitExplorerCommit,
   type GitExplorerBranchStatus,
   type GitExplorerBranchStatusesInput,
@@ -45,6 +48,9 @@ export class GitExplorer extends Context.Service<
     readonly deleteBranch: (
       input: GitExplorerDeleteBranchInput,
     ) => Effect.Effect<void, GitExplorerError>;
+    readonly runAction: (
+      input: GitExplorerRunActionInput,
+    ) => Effect.Effect<GitExplorerRunActionResult, GitExplorerError | GitCommandError>;
     readonly history: (
       input: GitExplorerHistoryInput,
     ) => Effect.Effect<GitExplorerHistoryResult, GitExplorerError>;
@@ -212,7 +218,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const snapshots = new Map<string, Snapshot>();
-  const deletionLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
+  const mutationLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
 
   const run = Effect.fn("GitExplorer.readGit")(function* (
     cwd: string,
@@ -814,10 +820,10 @@ const make = Effect.gen(function* () {
     )
       return yield* new GitExplorerError({ operation: "delete-branch", reason: "invalid-branch" });
     const context = yield* resolve(input);
-    let lock = deletionLocks.get(context.commonDirectory);
+    let lock = mutationLocks.get(context.commonDirectory);
     if (!lock) {
       lock = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
-      deletionLocks.set(context.commonDirectory, lock);
+      mutationLocks.set(context.commonDirectory, lock);
     }
     lock.users++;
     const activeLock = lock;
@@ -1082,11 +1088,104 @@ const make = Effect.gen(function* () {
       Effect.ensuring(
         Effect.sync(() => {
           activeLock.users--;
-          if (activeLock.users === 0) deletionLocks.delete(context.commonDirectory);
+          if (activeLock.users === 0) mutationLocks.delete(context.commonDirectory);
         }),
       ),
     );
   });
+  const runAction: GitExplorer["Service"]["runAction"] = Effect.fn("GitExplorer.runAction")(
+    function* (input) {
+      const { cwd, commonDirectory } = yield* resolve(input);
+      let lock = mutationLocks.get(commonDirectory);
+      if (!lock) {
+        lock = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+        mutationLocks.set(commonDirectory, lock);
+      }
+      lock.users++;
+      const activeLock = lock;
+      return yield* Effect.gen(function* () {
+        if (input.action !== "fetch") {
+          const head =
+            (yield* run(cwd, ["rev-parse", "--verify", "HEAD"], {
+              allowNonZero: true,
+            })).stdout.trim() || null;
+          const branch =
+            (yield* run(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+              allowNonZero: true,
+            })).stdout.trim() || null;
+          if (head !== input.expectedHead || branch !== input.expectedBranch)
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "worktree-changed",
+            });
+        }
+        if (input.action === "push") {
+          const result = yield* git.pushCurrentBranch(cwd, null);
+          return {
+            message: result.status === "pushed" ? "Pushed successfully." : "Already up to date.",
+          };
+        }
+        if (input.action === "pull") {
+          const result = yield* git.pullCurrentBranch(cwd);
+          return {
+            message: result.status === "pulled" ? "Pulled successfully." : "Already up to date.",
+          };
+        }
+        let args: string[];
+        switch (input.action) {
+          case "fetch":
+            args = ["fetch", "--all"];
+            break;
+          case "stash":
+            args = [
+              "stash",
+              "push",
+              "--include-untracked",
+              "--message",
+              input.message?.trim() || "Git Explorer stash",
+            ];
+            break;
+          case "apply-stash":
+            if (
+              !input.stashHash ||
+              !(yield* readStashes(cwd)).stashes.some((stash) => stash.hash === input.stashHash)
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "stash-unavailable",
+              });
+            args = ["stash", "apply", "--index", input.stashHash];
+            break;
+        }
+        const result = yield* git.execute({
+          operation: `GitExplorer.${input.action}`,
+          cwd,
+          args,
+          env: { GIT_TERMINAL_PROMPT: "0" },
+          timeoutMs: null,
+          appendTruncationMarker: true,
+        });
+        yield* git.invalidateRefs(cwd);
+        return {
+          message:
+            input.action === "fetch"
+              ? "Fetched all remotes."
+              : input.action === "apply-stash"
+                ? "Stash applied. The saved stash was kept."
+                : result.stdout.trim() || "Changes stashed.",
+        };
+      }).pipe(
+        activeLock.semaphore.withPermits(1),
+        Effect.ensuring(
+          Effect.sync(() => {
+            activeLock.users--;
+            if (activeLock.users === 0) mutationLocks.delete(commonDirectory);
+          }),
+        ),
+      );
+    },
+  );
+
   const ancestors = Effect.fn("GitExplorer.ancestors")(function* (
     cwd: string,
     hash: string | null,
@@ -1370,7 +1469,15 @@ const make = Effect.gen(function* () {
       truncated: result.stdoutTruncated,
     };
   });
-  return GitExplorer.of({ overview, history, details, patch, branchStatuses, deleteBranch });
+  return GitExplorer.of({
+    overview,
+    history,
+    details,
+    patch,
+    branchStatuses,
+    deleteBranch,
+    runAction,
+  });
 });
 
 export const layer = Layer.effect(GitExplorer, make);

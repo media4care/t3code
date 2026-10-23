@@ -2806,6 +2806,7 @@ export const layerWsRpc = (
         [WS_METHODS.vcsListRefs]: (input) => gitWorkflow.listRefs(input),
         [WS_METHODS.gitExplorerBranchStatuses]: (input) => gitExplorer.branchStatuses(input),
         [WS_METHODS.gitExplorerDeleteBranch]: (input) => gitExplorer.deleteBranch(input),
+        [WS_METHODS.gitExplorerRunAction]: (input) => gitExplorer.runAction(input),
         [WS_METHODS.gitExplorerOverview]: (input) => gitExplorer.overview(input),
         [WS_METHODS.gitExplorerHistory]: (input) => gitExplorer.history(input),
         [WS_METHODS.gitExplorerDetails]: (input) => gitExplorer.details(input),
