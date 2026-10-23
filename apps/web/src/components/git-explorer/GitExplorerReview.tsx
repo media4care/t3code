@@ -35,6 +35,10 @@ import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
 import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
+import {
+  GitExplorerWorkingTree,
+  type GitExplorerWorkingTreeActions,
+} from "./GitExplorerWorkingTree";
 
 const FILE_STATUS = {
   added: { label: "A", color: "text-success-foreground" },
@@ -265,12 +269,14 @@ export function GitExplorerReview({
   revision,
   compact,
   onBack,
+  workingTreeActions,
 }: {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   revision: string | null;
   compact: boolean;
   onBack: () => void;
+  workingTreeActions?: GitExplorerWorkingTreeActions;
 }) {
   const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
@@ -315,6 +321,15 @@ export function GitExplorerReview({
           <div className={cn("shrink-0", compact && showDiff && "hidden")}>
             <CommitMetadata details={details} />
           </div>
+          {revision === null && workingTreeActions ? (
+            <GitExplorerWorkingTree
+              {...workingTreeActions}
+              environmentId={environmentId}
+              input={input}
+              details={details}
+              selectedFile={selectedFile}
+            />
+          ) : null}
           {details.truncated ? (
             <p className="border-b border-border bg-warning-surface px-4 py-2 text-xs text-warning-foreground">
               The changed-file list was limited. Additional files may be omitted.
