@@ -15,6 +15,8 @@ import {
   ChevronDownIcon,
   CircleHelpIcon,
   EqualIcon,
+  FolderIcon,
+  FolderOpenIcon,
   GitBranchIcon,
   GitForkIcon,
   GlobeIcon,
@@ -32,7 +34,9 @@ import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   describeGitExplorerMerge,
+  gitExplorerBranchRows,
   gitExplorerBranchDeletionBlock,
+  type GitExplorerBranchRow,
 } from "./gitExplorerBranches.logic";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
@@ -46,6 +50,37 @@ interface BranchActions {
   deleteUnavailable: string | null;
   pendingBranch: string | null;
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
+}
+
+function BranchFolderRow({
+  row,
+  collapsed,
+  onToggle,
+}: {
+  row: Extract<GitExplorerBranchRow, { kind: "folder" }>;
+  collapsed: boolean;
+  onToggle: (path: string) => void;
+}) {
+  const Icon = collapsed ? FolderIcon : FolderOpenIcon;
+  return (
+    <button
+      type="button"
+      className={ROW_CLASS}
+      aria-label={`${row.path} branch folder`}
+      aria-expanded={!collapsed}
+      onClick={() => onToggle(row.path)}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          if (collapsed === (event.key === "ArrowRight")) onToggle(row.path);
+        }
+      }}
+    >
+      <ChevronDownIcon className={cn("size-3 shrink-0", collapsed && "-rotate-90")} aria-hidden />
+      <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 truncate font-medium">{row.label}</span>
+    </button>
+  );
 }
 
 function BranchMergeStatus({
@@ -228,7 +263,9 @@ function ReferenceRow({
 }
 
 function LocalBranchChunk({
-  references,
+  rows,
+  collapsed,
+  onToggle,
   environmentId,
   input,
   overview,
@@ -237,7 +274,9 @@ function LocalBranchChunk({
   active,
   actions,
 }: {
-  references: readonly GitExplorerRef[];
+  rows: readonly GitExplorerBranchRow[];
+  collapsed: ReadonlySet<string>;
+  onToggle: (path: string) => void;
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
@@ -247,15 +286,18 @@ function LocalBranchChunk({
   actions: BranchActions;
 }) {
   const [visible, setVisible] = useState(false);
+  const branches = rows.flatMap((row) => (row.kind === "branch" ? [row.reference.name] : []));
   const query = useGitExplorerQuery(
-    gitExplorerEnvironment.branchStatuses({
-      environmentId,
-      input: {
-        ...input,
-        snapshotId: overview.snapshotId,
-        branches: references.map((ref) => ref.name),
-      },
-    }),
+    branches.length
+      ? gitExplorerEnvironment.branchStatuses({
+          environmentId,
+          input: {
+            ...input,
+            snapshotId: overview.snapshotId,
+            branches,
+          },
+        })
+      : null,
     active && visible,
   );
   const byName = new Map(query.data?.branches.map((status) => [status.name, status]));
@@ -269,21 +311,29 @@ function LocalBranchChunk({
   };
   return (
     <div ref={observeVisibility}>
-      {references.map((reference) => {
+      {rows.map((row) => {
+        if (row.kind === "folder")
+          return (
+            <div key={`folder:${row.path}`} style={{ paddingInlineStart: row.depth * 12 }}>
+              <BranchFolderRow row={row} collapsed={collapsed.has(row.path)} onToggle={onToggle} />
+            </div>
+          );
+        const reference = row.reference;
         const candidate = byName.get(reference.name);
         const status = !query.error && candidate?.hash === reference.hash ? candidate : undefined;
         return (
-          <ReferenceRow
-            key={reference.name}
-            reference={reference}
-            label={reference.shortName}
-            current={reference.shortName === overview.headBranch}
-            selected={selectedRevision === reference.hash}
-            onSelect={onSelect}
-            {...(status ? { status } : {})}
-            statusError={query.error}
-            actions={actions}
-          />
+          <div key={reference.name} style={{ paddingInlineStart: row.depth * 12 }}>
+            <ReferenceRow
+              reference={reference}
+              label={row.label}
+              current={reference.shortName === overview.headBranch}
+              selected={selectedRevision === reference.hash}
+              onSelect={onSelect}
+              {...(status ? { status } : {})}
+              statusError={query.error}
+              actions={actions}
+            />
+          </div>
         );
       })}
     </div>
@@ -339,18 +389,19 @@ export function GitExplorerBranches({
   active: boolean;
   actions: BranchActions;
 }) {
-  const localRefs = overview.refs
-    .filter((reference) => reference.kind === "local")
-    .toSorted((a, b) =>
-      a.shortName === overview.headBranch
-        ? -1
-        : b.shortName === overview.headBranch
-          ? 1
-          : a.shortName.localeCompare(b.shortName),
-    );
-  const localChunks: GitExplorerRef[][] = [];
-  for (let offset = 0; offset < localRefs.length; offset += 32) {
-    localChunks.push(localRefs.slice(offset, offset + 32));
+  const [collapsedLocal, setCollapsedLocal] = useState<ReadonlySet<string>>(new Set());
+  const [collapsedRemote, setCollapsedRemote] = useState<ReadonlySet<string>>(new Set());
+  const toggleFolder = (current: ReadonlySet<string>, path: string) => {
+    const next = new Set(current);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    return next;
+  };
+  const localRefs = overview.refs.filter((reference) => reference.kind === "local");
+  const localRows = gitExplorerBranchRows(localRefs, collapsedLocal);
+  const localChunks: GitExplorerBranchRow[][] = [];
+  for (let offset = 0; offset < localRows.length; offset += 32) {
+    localChunks.push(localRows.slice(offset, offset + 32));
   }
   const tags = overview.refs
     .filter((reference) => reference.kind === "tag")
@@ -407,10 +458,12 @@ export function GitExplorerBranches({
             Local branches
             <span className="ml-auto font-mono text-3xs tabular-nums">{localRefs.length}</span>
           </h2>
-          {localChunks.map((references) => (
+          {localChunks.map((rows) => (
             <LocalBranchChunk
-              key={references[0]!.name}
-              references={references}
+              key={rows[0]!.kind === "branch" ? rows[0]!.reference.name : rows[0]!.path}
+              rows={rows}
+              collapsed={collapsedLocal}
+              onToggle={(path) => setCollapsedLocal((current) => toggleFolder(current, path))}
               environmentId={environmentId}
               input={input}
               overview={overview}
@@ -443,15 +496,39 @@ export function GitExplorerBranches({
                 </span>
               </summary>
               <div className="ml-3.5 border-l border-border/70 pl-1">
-                {references.map((reference) => (
-                  <ReferenceRow
-                    key={reference.name}
-                    reference={reference}
-                    label={reference.shortName.slice(prefix.length + 1) || reference.shortName}
-                    current={false}
-                    selected={selectedRevision === reference.hash}
-                    onSelect={onSelect}
-                  />
+                {gitExplorerBranchRows(
+                  references,
+                  new Set(
+                    [...collapsedRemote]
+                      .filter((path) => path.startsWith(`${prefix}/`))
+                      .map((path) => path.slice(prefix.length + 1)),
+                  ),
+                  `${prefix}/`,
+                ).map((row) => (
+                  <div
+                    key={row.kind === "folder" ? `folder:${row.path}` : row.reference.name}
+                    style={{ paddingInlineStart: row.depth * 12 }}
+                  >
+                    {row.kind === "folder" ? (
+                      <BranchFolderRow
+                        row={row}
+                        collapsed={collapsedRemote.has(`${prefix}/${row.path}`)}
+                        onToggle={(path) =>
+                          setCollapsedRemote((current) =>
+                            toggleFolder(current, `${prefix}/${path}`),
+                          )
+                        }
+                      />
+                    ) : (
+                      <ReferenceRow
+                        reference={row.reference}
+                        label={row.label}
+                        current={false}
+                        selected={selectedRevision === row.reference.hash}
+                        onSelect={onSelect}
+                      />
+                    )}
+                  </div>
                 ))}
               </div>
             </details>

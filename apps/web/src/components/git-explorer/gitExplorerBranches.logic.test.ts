@@ -1,7 +1,10 @@
 import type { GitExplorerBranchStatus, GitExplorerRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { prepareGitExplorerBranchDeletion } from "./gitExplorerBranches.logic";
+import {
+  gitExplorerBranchRows,
+  prepareGitExplorerBranchDeletion,
+} from "./gitExplorerBranches.logic";
 
 const reference: GitExplorerRef = {
   name: "refs/heads/feature",
@@ -22,6 +25,68 @@ const merged: GitExplorerBranchStatus = {
   reason: null,
   deleteBlockedReason: null,
 };
+
+describe("Git Explorer branch folders", () => {
+  const refs = ["main", "feature/z", "feature/api/a", "feature/api/b", "fix/login"].map(
+    (shortName) => ({ ...reference, shortName, name: `refs/heads/${shortName}` }),
+  );
+
+  it("groups slash-separated branches into nested folders while retaining full ref identities", () => {
+    const rows = gitExplorerBranchRows(refs, new Set());
+    expect(rows.map((row) => [row.kind, row.label, row.depth])).toEqual([
+      ["folder", "feature", 0],
+      ["folder", "api", 1],
+      ["branch", "a", 2],
+      ["branch", "b", 2],
+      ["branch", "z", 1],
+      ["folder", "fix", 0],
+      ["branch", "login", 1],
+      ["branch", "main", 0],
+    ]);
+    expect(rows.filter((row) => row.kind === "branch").map((row) => row.reference.name)).toEqual([
+      "refs/heads/feature/api/a",
+      "refs/heads/feature/api/b",
+      "refs/heads/feature/z",
+      "refs/heads/fix/login",
+      "refs/heads/main",
+    ]);
+  });
+
+  it("collapses only the requested folder and restores its children when reopened", () => {
+    const collapsed = new Set(["feature/api"]);
+    expect(gitExplorerBranchRows(refs, collapsed).map((row) => row.label)).toEqual([
+      "feature",
+      "api",
+      "z",
+      "fix",
+      "login",
+      "main",
+    ]);
+    collapsed.add("feature");
+    expect(gitExplorerBranchRows(refs, collapsed).map((row) => row.label)).toEqual([
+      "feature",
+      "fix",
+      "login",
+      "main",
+    ]);
+    collapsed.delete("feature");
+    collapsed.delete("feature/api");
+    expect(gitExplorerBranchRows(refs, collapsed)).toEqual(gitExplorerBranchRows(refs, new Set()));
+  });
+
+  it("groups remote branches beneath the remote without changing their ref names", () => {
+    const remote = {
+      ...reference,
+      kind: "remote" as const,
+      name: "refs/remotes/origin/feature/api",
+      shortName: "origin/feature/api",
+    };
+    expect(gitExplorerBranchRows([remote], new Set(), "origin/")).toEqual([
+      { kind: "folder", path: "feature", label: "feature", depth: 0 },
+      { kind: "branch", reference: remote, label: "api", depth: 1 },
+    ]);
+  });
+});
 
 describe("Git Explorer branch deletion review", () => {
   it("pins the reviewed branch and comparison tips in the deletion request", () => {

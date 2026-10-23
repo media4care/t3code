@@ -1041,6 +1041,31 @@ it.layer(layer)("GitExplorer branch review", (it) => {
     }),
   );
 
+  it.effect("deletes a merged local branch when the comparison branch is checked out", () =>
+    Effect.gen(function* () {
+      const { explorer, git, root } = yield* fixture;
+      yield* git(["branch", "finished"]);
+      const overview = yield* explorer.overview(scope);
+      const { branches } = yield* explorer.branchStatuses({
+        ...scope,
+        snapshotId: overview.snapshotId,
+        branches: ["refs/heads/finished"],
+      });
+      assert.equal(branches[0]?.targetRef, "refs/heads/main");
+      assert.equal(branches[0]?.deleteBlockedReason, null);
+      yield* explorer.deleteBranch({
+        ...scope,
+        branchName: "refs/heads/finished",
+        expectedHash: root,
+        expectedTargetRef: "refs/heads/main",
+        expectedTargetHash: root,
+        allowEquivalent: false,
+      });
+      assert.equal(yield* git(["branch", "--list", "finished"]), "");
+      assert.equal(yield* git(["symbolic-ref", "HEAD"]), "refs/heads/main");
+    }),
+  );
+
   it.effect(
     "detects ancestry and rebased patches against origin's base, not a synced upstream",
     () =>

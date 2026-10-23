@@ -33,6 +33,7 @@ import {
   selectGitExplorerReferences,
 } from "./gitExplorerHistory.logic";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
+import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
 
 const GRAPH_COLORS = [
   "text-primary",
@@ -169,6 +170,12 @@ export function GitExplorerHistory({
   const graphDisplayWidth = compact ? Math.max(48, Math.min(graphWidth, 64)) : 88;
   const visibleGraphOffset = Math.min(graphOffset, Math.max(0, graphWidth - graphDisplayWidth));
   const rows = history.commits.map((commit, index) => ({ commit, graph: graph.rows[index]! }));
+  const navigation = useGitExplorerListNavigation({
+    count: rows.length,
+    selectedIndex: history.commits.findIndex((commit) => commit.hash === selectedRevision),
+    rowHeight,
+    onSelect: (index) => onSelect(history.commits[index]!.hash),
+  });
   const currentBranch = overview.refs.find(
     (reference) => reference.kind === "local" && reference.shortName === overview.headBranch,
   );
@@ -256,6 +263,8 @@ export function GitExplorerHistory({
         <GitExplorerNotice title={query.isPending ? "Loading history…" : "No commits yet"} />
       ) : (
         <LegendList
+          {...navigation.listProps}
+          aria-label="Commits"
           key={rowHeight}
           data={rows}
           keyExtractor={(row) => row.commit.hash}
@@ -264,8 +273,8 @@ export function GitExplorerHistory({
           extraData={extraData}
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
-          className="min-h-0 flex-1 overscroll-contain"
-          renderItem={({ item: { commit, graph: row } }) => {
+          className="min-h-0 flex-1 overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          renderItem={({ item: { commit, graph: row }, index }) => {
             const references = refsByHash.get(commit.hash) ?? [];
             const { visible: visibleReferences, hidden: hiddenReferences } =
               selectGitExplorerReferences(references, overview.headBranch, maxVisibleRefs);
@@ -274,7 +283,7 @@ export function GitExplorerHistory({
             return (
               <button
                 type="button"
-                onClick={() => onSelect(commit.hash)}
+                {...navigation.optionProps(index)}
                 aria-current={selectedRevision === commit.hash ? "true" : undefined}
                 className="flex w-full items-center text-left outline-none hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-foreground/10"
                 style={{ height: rowHeight }}
