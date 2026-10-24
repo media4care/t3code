@@ -1,5 +1,9 @@
 # Updating T3 Code
 
+This fork disables desktop app updates and mobile over-the-air updates by default.
+To retain its changes, update from this repository and install a fresh build.
+The update controls below still apply to connected official servers and providers.
+
 The app you use and the server running your agents can be on different machines.
 When a server is behind your web or desktop app, the update button at the bottom
 of the sidebar and **Settings → Environments** offer to update it.
