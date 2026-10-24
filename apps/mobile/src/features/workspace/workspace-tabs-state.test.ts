@@ -56,15 +56,25 @@ describe("workspace root navigation", () => {
   it("pairs Settings, chats and pull requests with a detail column, and keeps Usage one page", () => {
     expect(workspaceUsesColumns("usage")).toBe(false);
     expect(workspaceUsesColumns("usage", true)).toBe(true);
+    expect(workspaceUsesColumns("gitExplorer")).toBe(false);
     expect(workspaceUsesColumns("threads")).toBe(true);
     expect(workspaceUsesColumns("pullRequests")).toBe(true);
   });
 
-  it("keeps the registered defaults while customization is unavailable", () => {
-    expect(resolveWorkspaceTabOrder(undefined)).toEqual(["threads", "pullRequests", "usage"]);
+  it("exposes Git Explorer in the footer for new and existing navigation preferences", () => {
+    expect(resolveWorkspaceTabOrder(undefined)).toEqual([
+      "threads",
+      "pullRequests",
+      "gitExplorer",
+      "usage",
+    ]);
     expect(resolveWorkspaceTabOrder(["home", "usage", "issues", "threads"])).toEqual(
       resolveWorkspaceTabOrder(undefined),
     );
+    const order = resolveWorkspaceTabOrder(["threads", "pullRequests", "usage"]);
+    expect(workspaceTabForNativeSlot(order, "third")).toBe("gitExplorer");
+    expect(workspaceTabForNativeSlot(order, "fourth")).toBe("usage");
+    expect(workspaceTabForNativeSlot(order, "settings")).toBe("settings");
   });
 
   it("retains separate queries and positions across tabs, and cancels only the current search", () => {
@@ -156,13 +166,13 @@ describe("workspace root navigation", () => {
     expect(shouldRestoreNativeSearch(initialWorkspaceTabsState().tabs.threads, true)).toBe(false);
   });
 
-  it("returns from Usage without losing list state", () => {
+  it("returns from Git Explorer and Usage without losing list state", () => {
     let state = workspaceTabsReducer(initialWorkspaceTabsState(), {
       type: "query",
       query: "retained",
       tab: "threads",
     });
-    for (const tab of ["usage"] as const) {
+    for (const tab of ["gitExplorer", "usage"] as const) {
       state = workspaceTabsReducer(state, { type: "select", tab });
       expect(state.selectedTab).toBe(tab);
       expect(workspaceTabsReducer(state, { type: "search" })).toBe(state);
