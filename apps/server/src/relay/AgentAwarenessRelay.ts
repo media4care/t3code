@@ -13,6 +13,7 @@ import {
   type RelayAgentActivityState,
 } from "@t3tools/contracts/relay";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import { projectAgentNotification } from "@t3tools/shared/agentNotification";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
@@ -125,7 +126,12 @@ function shouldPublishAgentAwarenessEvent(
     case "provider-session.detached":
     case "provider-turn.updated":
     case "turn-item.updated":
-      return isTurnItemPayload(event.payload) && turnItemUpdateCanEndBackgroundWork(event.payload);
+      return (
+        isTurnItemPayload(event.payload) &&
+        (event.payload.type === "user_input_request" ||
+          event.payload.type === "approval_request" ||
+          turnItemUpdateCanEndBackgroundWork(event.payload))
+      );
     case "message.updated":
     case "plan.updated":
     case "checkpoint-scope.created":
@@ -527,11 +533,31 @@ export const make = Effect.gen(function* () {
     const project = Option.isSome(thread)
       ? yield* projects.getById(thread.value.projectId)
       : Option.none<Project>();
-    const snapshot = resolveAgentAwarenessRelayPublishSnapshot({
+    let snapshot = resolveAgentAwarenessRelayPublishSnapshot({
       environmentId,
       thread,
       project,
     });
+    if (snapshot.state && threadShell?.pendingRuntimeRequest) {
+      const requestId = threadShell.pendingRuntimeRequest.id;
+      const records = yield* threads.getThreadRecords(threadId, ["runtimeRequests", "turnItems"], {
+        turnItemTypes: ["user_input_request", "approval_request"],
+        turnItemStatuses: ["pending", "running", "waiting"],
+      });
+      const item = records.turnItems.findLast(
+        (candidate) =>
+          (candidate.type === "user_input_request" || candidate.type === "approval_request") &&
+          candidate.requestId === requestId,
+      );
+      const notification = projectAgentNotification({
+        request: records.runtimeRequests.find((candidate) => candidate.id === requestId),
+        item:
+          item?.type === "user_input_request" || item?.type === "approval_request"
+            ? item
+            : undefined,
+      });
+      if (notification) snapshot = { ...snapshot, state: { ...snapshot.state, notification } };
+    }
     const publishIdentity = agentAwarenessPublishIdentity(snapshot.state);
     const publishedStateByThread = yield* Ref.get(publishedStateByThreadRef);
     if (

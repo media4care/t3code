@@ -1,4 +1,4 @@
-function dataFromNotificationResponse(response: unknown): Record<string, unknown> | null {
+export function dataFromNotificationResponse(response: unknown): Record<string, unknown> | null {
   if (typeof response !== "object" || response === null) {
     return null;
   }
@@ -104,6 +104,15 @@ export function routeAgentNotificationResponseOnce(input: {
   readonly response: unknown;
   readonly navigate: (deepLink: string) => void;
 }): void {
+  // Background actions are handled before React mounts, including Watch replies.
+  if (
+    typeof input.response === "object" &&
+    input.response !== null &&
+    "actionIdentifier" in input.response &&
+    typeof input.response.actionIdentifier === "string" &&
+    input.response.actionIdentifier.startsWith("t3.")
+  )
+    return;
   const responseId = identifierFromNotificationResponse(input.response);
   if (responseId && input.handledResponseIds.has(responseId)) {
     return;

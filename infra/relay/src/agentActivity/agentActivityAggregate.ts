@@ -42,6 +42,7 @@ function aggregateRowForState(state: RelayAgentActivityState) {
     status: statusForPhase(state.phase),
     updatedAt: state.updatedAt,
     deepLink: state.deepLink,
+    ...(state.notification ? { notification: state.notification } : {}),
   };
 }
 
@@ -104,7 +105,11 @@ export function makeAggregateState(input: {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const displayedStates = [
     ...activeStates
-      .toSorted((a, b) => activityPhasePriority(a.phase) - activityPhasePriority(b.phase))
+      .toSorted(
+        (a, b) =>
+          (a.notification ? 0 : activityPhasePriority(a.phase)) -
+          (b.notification ? 0 : activityPhasePriority(b.phase)),
+      )
       .slice(0, MAX_ACTIVITY_ROWS),
     ...recentTerminalStates,
   ].slice(0, MAX_ACTIVITY_ROWS);

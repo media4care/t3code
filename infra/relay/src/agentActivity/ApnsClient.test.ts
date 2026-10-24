@@ -169,6 +169,70 @@ describe("ApnsClient", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("preserves a readable question longer than the old 120-character summary", () =>
+    Effect.gen(function* () {
+      const apns = yield* ApnsClient.ApnsClient;
+      const body = (
+        "Which environment should receive this change? " + "Additional context. ".repeat(20)
+      ).trim();
+      const notification = sanitizeApnsNotificationPayload({
+        title: "Deployment question",
+        body,
+        environmentId: "env",
+        threadId: "thread",
+        deepLink: "/threads/env/thread",
+      });
+      const request = apns.makePushNotificationRequest({ token: "push-token", notification });
+      expect(request.payload).toMatchObject({ aps: { alert: { body } } });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("includes the action category and exact request metadata", () =>
+    Effect.gen(function* () {
+      const apns = yield* ApnsClient.ApnsClient;
+      const request = {
+        requestId: "request-1",
+        action: {
+          kind: "user_input" as const,
+          questionId: "q-1",
+          choices: ["staging", "production"],
+          allowText: true,
+        },
+      };
+      const result = apns.makePushNotificationRequest({
+        token: "token",
+        notification: {
+          title: "Deploy",
+          body: "Where?\n1. Staging\n2. Production",
+          environmentId: "env",
+          threadId: "thread",
+          deepLink: "/threads/env/thread",
+          request,
+        },
+      });
+      expect(result.payload).toMatchObject({
+        aps: { category: "t3-input-2-reply-v1" },
+        body: { request },
+      });
+      const long = apns.makePushNotificationRequest({
+        token: "token",
+        notification: {
+          title: "Deploy",
+          body: '😀"'.repeat(2000),
+          environmentId: "env",
+          threadId: "thread",
+          deepLink: "/threads/env/thread",
+          request,
+        },
+      });
+      expect(new TextEncoder().encode(JSON.stringify(long.payload)).byteLength).toBeLessThanOrEqual(
+        4096,
+      );
+      expect(long.payload).not.toHaveProperty("aps.category");
+      expect(long.payload).not.toHaveProperty("body.request");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("reuses the signed provider JWT across pushes within the reuse window", () => {
     ApnsProviderTokens.__resetApnsProviderTokenCacheForTest();
     const { privateKey } = NodeCrypto.generateKeyPairSync("ec", {

@@ -209,6 +209,19 @@ function harness() {
 }
 
 describe("Android delivery routing", () => {
+  it("shows the actual async question and honors the input notification preference", () => {
+    const question: RelayAgentActivityState = {
+      ...state,
+      notification: { kind: "user_input", requestId: "request-1", body: "Where should I deploy?" },
+    };
+    expect(FcmDeliveries.androidAlertForState(question, preferences, 0)).toMatchObject({
+      alert_body: "Where should I deploy?",
+      alert_path: "/threads/env/thread",
+    });
+    expect(
+      FcmDeliveries.androidAlertForState(question, { ...preferences, notifyOnInput: false }, 0),
+    ).toBeNull();
+  });
   const secondState: RelayAgentActivityState = {
     ...state,
     threadId: ThreadId.make("second-thread"),

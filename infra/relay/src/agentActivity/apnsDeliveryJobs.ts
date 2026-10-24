@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   RelayAgentActivityAggregateState,
   RelayAgentAwarenessPhase,
+  RelayAgentNotificationAction,
 } from "@t3tools/contracts/relay";
 import { stableStringify } from "@t3tools/shared/relaySigning";
 import * as DateTime from "effect/DateTime";
@@ -36,6 +37,13 @@ export const ApnsNotificationPayload = Schema.Struct({
   deepLink: Schema.String,
   phase: Schema.optional(RelayAgentAwarenessPhase),
   updatedAt: Schema.optional(Schema.String),
+  notificationKind: Schema.optional(Schema.Literals(["user_input", "approval"])),
+  request: Schema.optional(
+    Schema.Struct({
+      requestId: Schema.String,
+      action: RelayAgentNotificationAction,
+    }),
+  ),
 });
 export type ApnsNotificationPayload = typeof ApnsNotificationPayload.Type;
 

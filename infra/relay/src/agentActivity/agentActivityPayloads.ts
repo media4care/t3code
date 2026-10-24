@@ -92,11 +92,14 @@ export function sanitizeAgentActivityAggregateState(
 export function sanitizeApnsNotificationPayload(
   notification: ApnsNotificationPayload,
 ): ApnsNotificationPayload {
+  const { request, ...rest } = notification;
+  const body = truncateText(notification.body, 1200);
   return {
-    ...notification,
+    ...rest,
     title: truncateText(notification.title, MAX_SUMMARY_TEXT_LENGTH),
-    body: truncateText(notification.body, MAX_SUMMARY_TEXT_LENGTH),
+    body,
     deepLink: sanitizeDeepLink(notification.deepLink),
+    ...(request && body === notification.body.trim() ? { request } : {}),
   };
 }
 
@@ -106,11 +109,20 @@ export function notificationForActivity(
   const activity = sanitizeAgentActivityAggregateRow(row);
   return sanitizeApnsNotificationPayload({
     title: activity.threadTitle,
-    body: `${activity.status}: ${activity.projectTitle}`,
+    body: activity.notification?.body ?? `${activity.status}: ${activity.projectTitle}`,
     environmentId: activity.environmentId,
     threadId: activity.threadId,
     deepLink: activity.deepLink,
     phase: activity.phase,
     updatedAt: activity.updatedAt,
+    ...(activity.notification ? { notificationKind: activity.notification.kind } : {}),
+    ...(activity.notification?.action
+      ? {
+          request: {
+            requestId: activity.notification.requestId,
+            action: activity.notification.action,
+          },
+        }
+      : {}),
   });
 }

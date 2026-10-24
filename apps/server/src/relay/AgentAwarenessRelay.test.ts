@@ -10,6 +10,8 @@ import {
   type OrchestrationV2TurnItem,
   ProjectId,
   ProviderInstanceId,
+  ProviderSessionId,
+  RuntimeRequestId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -144,6 +146,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     readonly linked?: boolean;
     readonly readShell?: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null>;
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
+    readonly readRecords?: ThreadManagementService.ThreadManagementService["Service"]["getThreadRecords"];
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -202,7 +205,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     getTimelinePage: () => Effect.die("Unused timeline read"),
     getMessageCount: () => Effect.die("unused message count"),
     getTurnItem: () => Effect.die("unused turn item read"),
-    getThreadRecords: () => Effect.die("unused record read"),
+    getThreadRecords: options.readRecords ?? (() => Effect.die("unused record read")),
     getThreadProjection: unused,
     getCheckpointContext: unused,
     getThreadSnapshot: unused,
@@ -355,6 +358,95 @@ describe("AgentAwarenessRelay", () => {
       assert.equal(publications.length, 2);
       assert.equal(publications[1]?.state?.threadTitle, "Renamed thread");
     }),
+  );
+
+  it.effect("publishes the question when its item arrives after the pending-request event", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+      const pulls = yield* Queue.unbounded<void>();
+      const { relay, currentShell, publications } = yield* makeTestRelay({
+        readRecords: (threadId, fields, filter) =>
+          store.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+        domainEvents: Stream.fromEffectRepeat(
+          Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(events))),
+        ),
+      });
+      yield* relay.start();
+      yield* Queue.take(pulls);
+      const now = yield* DateTime.now;
+      yield* store.apply({
+        id: EventId.make("notification-thread"),
+        type: "thread.created",
+        threadId: THREAD_ID,
+        occurredAt: now,
+        payload: { ...shell(), lastVisitedAt: null },
+      });
+      const request = {
+        id: RuntimeRequestId.make("notification-question"),
+        nodeId: NodeId.make("question-node"),
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "user_input" as const,
+        status: "pending" as const,
+        responseCapability: {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("session"),
+        },
+        createdAt: now,
+        resolvedAt: null,
+      };
+      yield* store.apply({
+        id: EventId.make("notification-request"),
+        type: "runtime-request.updated",
+        threadId: THREAD_ID,
+        occurredAt: now,
+        payload: request,
+      });
+      yield* Ref.set(
+        currentShell,
+        shell({ pendingRuntimeRequest: { id: request.id, kind: "user_input", createdAt: now } }),
+      );
+      yield* relay.publishThread(THREAD_ID);
+      assert.equal(publications[0]?.state?.notification, undefined);
+      const event = {
+        id: EventId.make("notification-item"),
+        type: "turn-item.updated",
+        threadId: THREAD_ID,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("question-item"),
+          threadId: THREAD_ID,
+          runId: null,
+          nodeId: request.nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          title: null,
+          status: "waiting",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "user_input_request",
+          requestId: request.id,
+          questions: [
+            { id: "target", header: "Target", question: "Where should I deploy?", options: [] },
+          ],
+        },
+      } satisfies OrchestrationV2DomainEvent;
+      yield* store.apply(event);
+      yield* Queue.offer(events, event);
+      yield* Queue.take(pulls);
+      yield* relay.drain;
+      assert.deepEqual(publications[1]?.state?.notification, {
+        requestId: request.id,
+        kind: "user_input",
+        body: "Where should I deploy?",
+        action: { kind: "user_input", questionId: "target", choices: [], allowText: true },
+      });
+    }).pipe(Effect.scoped, Effect.provide(ProjectionStore.layerMemory)),
   );
 
   it.effect("republishes unchanged state with fresh credentials after relinking", () =>

@@ -30,15 +30,27 @@ function rowKey(row: RelayAgentActivityAggregateRow): string {
   return JSON.stringify([row.environmentId, row.threadId]);
 }
 
+function attentionKey(row: RelayAgentActivityAggregateRow): string {
+  return JSON.stringify([rowKey(row), notificationPhase(row), row.notification?.requestId ?? null]);
+}
+
+function notificationPhase(row: Pick<RelayAgentActivityAggregateRow, "phase" | "notification">) {
+  if (row.notification)
+    return row.notification.kind === "user_input" ? "waiting_for_input" : "waiting_for_approval";
+  return row.phase;
+}
+
 export function rowPhasesChanged(
   previousAggregate: RelayAgentActivityAggregateState,
   nextAggregate: RelayAgentActivityAggregateState,
 ): boolean {
   if (previousAggregate.activities.length !== nextAggregate.activities.length) return true;
   const previousPhases = new Map(
-    previousAggregate.activities.map((row) => [rowKey(row), row.phase]),
+    previousAggregate.activities.map((row) => [rowKey(row), attentionKey(row)]),
   );
-  return nextAggregate.activities.some((row) => previousPhases.get(rowKey(row)) !== row.phase);
+  return nextAggregate.activities.some(
+    (row) => previousPhases.get(rowKey(row)) !== attentionKey(row),
+  );
 }
 
 function isAttentionPhase(phase: string): boolean {
@@ -68,13 +80,15 @@ function alertAllowedForPhase(
 export function attentionTransitionRows(input: TransitionInput) {
   if (input.previousAggregate === null) return [];
   const previouslyAttention = new Set(
-    input.previousAggregate.activities.filter((row) => isAttentionPhase(row.phase)).map(rowKey),
+    input.previousAggregate.activities
+      .filter((row) => isAttentionPhase(notificationPhase(row)))
+      .map(attentionKey),
   );
   return input.nextAggregate.activities.filter(
     (row) =>
-      isAttentionPhase(row.phase) &&
-      !previouslyAttention.has(rowKey(row)) &&
-      alertAllowedForPhase(input.preferences, row.phase),
+      isAttentionPhase(notificationPhase(row)) &&
+      !previouslyAttention.has(attentionKey(row)) &&
+      alertAllowedForPhase(input.preferences, notificationPhase(row)),
   );
 }
 
@@ -148,14 +162,15 @@ export function alertForTerminalAggregate(input: {
 
 export function shouldAlertForActivity(input: {
   readonly phase: RelayAgentActivityAggregateRow["phase"];
+  readonly notification?: RelayAgentActivityAggregateRow["notification"];
   readonly updatedAt: string;
   readonly preferences: RelayAgentAwarenessPreferences | null;
   readonly nowMs: number;
 }): boolean {
   return (
     input.preferences?.notificationsEnabled === true &&
-    alertAllowedForPhase(input.preferences, input.phase) &&
-    ((input.phase !== "completed" && input.phase !== "failed") ||
+    alertAllowedForPhase(input.preferences, notificationPhase(input)) &&
+    ((notificationPhase(input) !== "completed" && notificationPhase(input) !== "failed") ||
       isFreshTerminalNotification(input.updatedAt, input.nowMs))
   );
 }

@@ -116,6 +116,25 @@ export const RelayDeviceUnregistrationParams = Schema.Struct({
 });
 export type RelayDeviceUnregistrationParams = typeof RelayDeviceUnregistrationParams.Type;
 
+export const RelayAgentNotificationAction = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("approval") }),
+  Schema.Struct({
+    kind: Schema.Literal("user_input"),
+    questionId: TrimmedNonEmptyString,
+    choices: Schema.Array(Schema.String),
+    allowText: Schema.Boolean,
+  }),
+]);
+export type RelayAgentNotificationAction = typeof RelayAgentNotificationAction.Type;
+
+export const RelayAgentNotification = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  kind: Schema.Literals(["user_input", "approval"]),
+  body: TrimmedNonEmptyString,
+  action: Schema.optional(RelayAgentNotificationAction),
+});
+export type RelayAgentNotification = typeof RelayAgentNotification.Type;
+
 export const RelayAgentActivityState = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
@@ -124,6 +143,7 @@ export const RelayAgentActivityState = Schema.Struct({
   phase: RelayAgentAwarenessPhase,
   headline: TrimmedNonEmptyString,
   detail: Schema.optional(TrimmedNonEmptyString),
+  notification: Schema.optional(RelayAgentNotification),
   modelTitle: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
   deepLink: TrimmedNonEmptyString,
@@ -138,6 +158,7 @@ export const RelayAgentActivityAggregateRow = Schema.Struct({
   modelTitle: TrimmedNonEmptyString,
   phase: RelayAgentAwarenessPhase,
   status: TrimmedNonEmptyString,
+  notification: Schema.optional(RelayAgentNotification),
   updatedAt: TrimmedNonEmptyString,
   deepLink: TrimmedNonEmptyString,
 });

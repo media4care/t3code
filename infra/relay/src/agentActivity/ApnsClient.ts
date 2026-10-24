@@ -1,4 +1,5 @@
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
+import { agentNotificationCategory } from "@t3tools/shared/agentNotification";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -78,7 +79,11 @@ const decodeApnsErrorResponseJson = Schema.decodeUnknownOption(
 function contentState(state: RelayAgentActivityAggregateState) {
   return {
     name: LIVE_ACTIVITY_NAME,
-    props: JSON.stringify(state),
+    // Questions belong to alert pushes, not the five-row Live Activity payload.
+    props: JSON.stringify({
+      ...state,
+      activities: state.activities.map(({ notification: _notification, ...row }) => row),
+    }),
   };
 }
 
@@ -158,25 +163,50 @@ function makePushNotificationRequest(input: {
   readonly token: string;
   readonly notification: ApnsNotificationPayload;
 }): ApnsPushNotificationRequest {
+  const notification = input.notification;
+  let request = notification.request;
+  let body = notification.body;
+  let deepLink = notification.deepLink;
+  let threadId = notificationThreadId(notification);
+  const payload = () => ({
+    aps: {
+      alert: { title: notification.title, body },
+      sound: "default",
+      "thread-id": threadId,
+      ...(request ? { category: agentNotificationCategory(request.action) } : {}),
+    },
+    // Expo iOS exposes userInfo.body as notification.content.data for remote pushes.
+    body: {
+      environmentId: notification.environmentId,
+      threadId: notification.threadId,
+      deepLink,
+      ...(request ? { request } : {}),
+    },
+  });
+  const payloadSize = () => new TextEncoder().encode(JSON.stringify(payload())).byteLength;
+  if (payloadSize() > 4096) {
+    // Preserve exact routing IDs; a shortened ID could address a different request.
+    deepLink = "/";
+    threadId = "t3-agent-alerts";
+  }
+  if (payloadSize() > 4096) {
+    // Truncated approval/choice context must never retain actionable buttons.
+    request = undefined;
+    const characters = Array.from(body);
+    let low = 0;
+    let high = characters.length;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      body = `${characters.slice(0, middle).join("")}…`;
+      if (payloadSize() <= 4096) low = middle;
+      else high = middle - 1;
+    }
+    body = `${characters.slice(0, low).join("")}…`;
+  }
   return {
     token: input.token,
     priority: "10",
-    payload: {
-      aps: {
-        alert: {
-          title: input.notification.title,
-          body: input.notification.body,
-        },
-        sound: "default",
-        "thread-id": notificationThreadId(input.notification),
-      },
-      // Expo iOS exposes userInfo.body as notification.content.data for remote pushes.
-      body: {
-        environmentId: input.notification.environmentId,
-        threadId: input.notification.threadId,
-        deepLink: input.notification.deepLink,
-      },
-    },
+    payload: payload(),
   };
 }
 

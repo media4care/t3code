@@ -183,6 +183,18 @@ public final class T3NativeControlsModule: Module {
     UIApplication.shared.isProtectedDataAvailable
   }
 
+  @JS
+  @MainActor
+  func finishNotificationAction(identifier: String, action: String, sent: Bool) async {
+    T3NotificationActions.finish(identifier: identifier, action: action, sent: sent)
+  }
+
+  @JS
+  @MainActor
+  func notificationActionDeadline(identifier: String, action: String) async -> Double {
+    T3NotificationActions.deadline(identifier: identifier, action: action)
+  }
+
   private func launchArgument(_ flag: String) -> String? {
     let arguments = ProcessInfo.processInfo.arguments
     guard
