@@ -15,7 +15,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FolderGit2Icon, GitBranchIcon } from "lucide-react";
-import { type CSSProperties, useContext, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
 import { ensureLocalApi } from "~/localApi";
@@ -39,8 +39,9 @@ import { toastManager } from "../ui/toast";
 import { GitExplorerBranchAction } from "./GitExplorerBranchAction";
 import { GitExplorerStashAction, type GitExplorerStashActionKind } from "./GitExplorerStashAction";
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
-import { GitExplorerFolderDeletion } from "./GitExplorerFolderDeletion";
+import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
 import { GitExplorerHistory } from "./GitExplorerHistory";
+import { GitExplorerHistoryFilters } from "./GitExplorerHistoryFilters";
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { GitExplorerNotice } from "./GitExplorerNotice";
@@ -96,14 +97,35 @@ function HistoryReviewDivider({
   );
 }
 
+function GitExplorerHeader({
+  repositoryPicker,
+  children,
+}: {
+  repositoryPicker: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <WorkspacePageHeader electron={isElectron}>
+      <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <h1 className="shrink-0 text-sm font-medium max-sm:sr-only">Git Explorer</h1>
+      <div className="ml-auto flex min-w-0 items-center gap-2">
+        {repositoryPicker}
+        {children}
+      </div>
+    </WorkspacePageHeader>
+  );
+}
+
 function RepositoryExplorer({
   environmentId,
   projectId,
   worktreePath,
+  repositoryPicker,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   worktreePath?: string;
+  repositoryPicker: ReactNode;
 }) {
   const registry = useContext(RegistryContext);
   const navigate = useNavigate();
@@ -125,12 +147,15 @@ function RepositoryExplorer({
   const canManageStashes = useAtomValue(
     gitExplorerEnvironment.runAction.permissionAtom(environmentId),
   );
-  const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
+  const [branchDeletion, setBranchDeletion] = useState<{
+    references: readonly GitExplorerRef[];
+    folder?: string;
+  } | null>(null);
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : actionBusy || deletingFolder !== null || branchAction !== null || stashAction !== null
+      : actionBusy || branchDeletion !== null || branchAction !== null || stashAction !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -140,6 +165,11 @@ function RepositoryExplorer({
   const overviewQuery = useGitExplorerQuery(gitExplorerEnvironment.overview(target));
   const overview = overviewQuery.data;
   const [selectedRevision, setSelectedRevision] = useState<string | null | undefined>(undefined);
+  const [historyFilters, setHistoryFilters] = useState<GitExplorerHistoryFilters>({
+    historyScope: "all",
+    searchField: "message",
+    search: "",
+  });
   const [showReview, setShowReview] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -216,23 +246,9 @@ function RepositoryExplorer({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" ref={trackWidth}>
-      <div className="flex min-h-10 shrink-0 items-center gap-2 border-y border-border px-2 py-1">
-        {split ? (
-          <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        ) : (
-          <Button
-            variant={showBranches ? "secondary" : "ghost"}
-            size="sm"
-            aria-expanded={showBranches}
-            aria-controls="git-explorer-branches"
-            onClick={() => setShowBranches((visible) => !visible)}
-          >
-            <GitBranchIcon className="size-3.5" aria-hidden />
-            Branches
-          </Button>
-        )}
+      <GitExplorerHeader repositoryPicker={repositoryPicker}>
         {overview ? (
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 max-w-60 flex-1">
             <Select
               value={overview.selectedWorktreePath}
               onValueChange={(value) => {
@@ -245,7 +261,17 @@ function RepositoryExplorer({
               }}
             >
               <Tooltip>
-                <TooltipTrigger render={<SelectTrigger size="sm" aria-label="Review worktree" />}>
+                <TooltipTrigger
+                  render={
+                    <SelectTrigger
+                      size="compact"
+                      variant="ghost"
+                      aria-label="Worktree"
+                      className="w-full min-w-0"
+                    />
+                  }
+                >
+                  <span className="text-muted-foreground">Worktree:</span>
                   <SelectValue>
                     {overview.headBranch ?? "Detached HEAD"} ·{" "}
                     {inferProjectTitleFromPath(overview.selectedWorktreePath)}
@@ -272,12 +298,52 @@ function RepositoryExplorer({
               </SelectPopup>
             </Select>
           </div>
+        ) : null}
+      </GitExplorerHeader>
+      <div
+        className="flex shrink-0 items-center gap-2 overflow-x-auto border-y border-border px-2 py-1"
+        aria-label="Repository toolbar"
+      >
+        {!split ? (
+          <Button
+            variant={showBranches ? "secondary" : "ghost"}
+            size="xs"
+            aria-expanded={showBranches}
+            aria-controls="git-explorer-branches"
+            onClick={() => setShowBranches((visible) => !visible)}
+          >
+            <GitBranchIcon className="size-3.5" aria-hidden />
+            Branches
+          </Button>
+        ) : null}
+        {overview ? (
+          <GitExplorerToolbar
+            environmentId={environmentId}
+            input={input}
+            overview={overview}
+            selectedRevision={selectedRevision}
+            onStashAction={(action, stash) => setStashAction({ action, stash })}
+            connected={environment?.connection.phase === "connected"}
+            busy={
+              actionBusy ||
+              pendingBranch !== null ||
+              branchDeletion !== null ||
+              branchAction !== null ||
+              stashAction !== null
+            }
+            onBusyChange={setActionBusy}
+            refresh={refresh}
+          />
+        ) : null}
+        {overview ? (
+          <GitExplorerHistoryFilters filters={historyFilters} onChange={setHistoryFilters} />
         ) : (
-          <span className="min-w-0 flex-1 text-xs text-muted-foreground">Repository</span>
+          <span className="flex-1" />
         )}
+
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-xs"
           aria-label="Refresh Git Explorer"
           title="Refresh local Git data"
           disabled={overviewQuery.isPending}
@@ -286,25 +352,6 @@ function RepositoryExplorer({
           <RefreshIcon />
         </Button>
       </div>
-      {overview ? (
-        <GitExplorerToolbar
-          environmentId={environmentId}
-          input={input}
-          overview={overview}
-          selectedRevision={selectedRevision}
-          onStashAction={(action, stash) => setStashAction({ action, stash })}
-          connected={environment?.connection.phase === "connected"}
-          busy={
-            actionBusy ||
-            pendingBranch !== null ||
-            deletingFolder !== null ||
-            branchAction !== null ||
-            stashAction !== null
-          }
-          onBusyChange={setActionBusy}
-          refresh={refresh}
-        />
-      ) : null}
       {overview && stashAction ? (
         <GitExplorerStashAction
           {...stashAction}
@@ -332,14 +379,14 @@ function RepositoryExplorer({
           onClose={() => setBranchAction(null)}
         />
       ) : null}
-      {overview && deletingFolder !== null ? (
-        <GitExplorerFolderDeletion
-          folder={deletingFolder}
+      {overview && branchDeletion !== null ? (
+        <GitExplorerBranchDeletion
+          {...branchDeletion}
           environmentId={environmentId}
           input={input}
           overview={overview}
           refresh={refresh}
-          onClose={() => setDeletingFolder(null)}
+          onClose={() => setBranchDeletion(null)}
         />
       ) : null}
       {overviewQuery.error ? (
@@ -387,7 +434,17 @@ function RepositoryExplorer({
                       setBranchAction({ action, reference });
                   },
                   onDeleteFolder: (folder) => {
-                    if (!deleteUnavailable && !deletionInFlight.current) setDeletingFolder(folder);
+                    if (!deleteUnavailable && !deletionInFlight.current)
+                      setBranchDeletion({
+                        folder,
+                        references: overview.refs.filter(
+                          (ref) => ref.kind === "local" && ref.shortName.startsWith(`${folder}/`),
+                        ),
+                      });
+                  },
+                  onDeleteBranches: (references) => {
+                    if (!deleteUnavailable && !deletionInFlight.current && references.length)
+                      setBranchDeletion({ references });
                   },
                   onDelete: (reference, branchStatus) =>
                     void handleDeleteBranch(reference, branchStatus),
@@ -436,6 +493,7 @@ function RepositoryExplorer({
                   onSelect={selectRevision}
                   refresh={refresh}
                   refreshRevision={refreshRevision}
+                  filters={historyFilters}
                 />
               </section>
               {split && selectedRevision !== undefined ? (
@@ -468,7 +526,7 @@ function RepositoryExplorer({
                       busy:
                         actionBusy ||
                         pendingBranch !== null ||
-                        deletingFolder !== null ||
+                        branchDeletion !== null ||
                         branchAction !== null ||
                         stashAction !== null,
                       refresh,
@@ -516,58 +574,66 @@ export function GitExplorerPage() {
   const projectKey = (project: (typeof projects)[number]) =>
     `${project.environmentId}:${project.id}`;
 
+  const repositoryPicker = (
+    <div className="min-w-0 w-40 max-w-48 shrink sm:w-48">
+      <Select
+        value={selectedProject ? projectKey(selectedProject) : null}
+        onValueChange={(value) => {
+          const project = projects.find((candidate) => projectKey(candidate) === value);
+          if (project)
+            void navigate({
+              to: "/git",
+              search: { environmentId: project.environmentId, projectId: project.id },
+              replace: true,
+            });
+        }}
+      >
+        <SelectTrigger
+          size="compact"
+          variant="ghost"
+          aria-label="Repository"
+          className="w-full min-w-0"
+        >
+          <SelectValue placeholder="Choose a project">
+            {selectedProject?.title ?? "Choose a project"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup>
+          {projects.map((project) => (
+            <SelectItem key={projectKey(project)} value={projectKey(project)}>
+              <span className="min-w-0">
+                <span className="block truncate">{project.title}</span>
+                <span className="block truncate text-2xs text-muted-foreground">
+                  {environmentLabels.get(project.environmentId)} · {project.workspaceRoot}
+                </span>
+              </span>
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
+  );
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        <WorkspacePageHeader electron={isElectron}>
-          <FolderGit2Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <h1 className="shrink-0 text-sm font-medium">Git Explorer</h1>
-          <div className="ml-auto min-w-0 max-w-72 flex-1">
-            <Select
-              value={selectedProject ? projectKey(selectedProject) : null}
-              onValueChange={(value) => {
-                const project = projects.find((candidate) => projectKey(candidate) === value);
-                if (project)
-                  void navigate({
-                    to: "/git",
-                    search: { environmentId: project.environmentId, projectId: project.id },
-                    replace: true,
-                  });
-              }}
-            >
-              <SelectTrigger size="sm" aria-label="Repository">
-                <SelectValue placeholder="Choose a project">
-                  {selectedProject?.title ?? "Choose a project"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup>
-                {projects.map((project) => (
-                  <SelectItem key={projectKey(project)} value={projectKey(project)}>
-                    <span className="min-w-0">
-                      <span className="block truncate">{project.title}</span>
-                      <span className="block truncate text-2xs text-muted-foreground">
-                        {environmentLabels.get(project.environmentId)} · {project.workspaceRoot}
-                      </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          </div>
-        </WorkspacePageHeader>
         {selectedProject ? (
           <RepositoryExplorer
             key={projectKey(selectedProject)}
+            repositoryPicker={repositoryPicker}
             environmentId={selectedProject.environmentId}
             projectId={selectedProject.id}
             {...(search.worktreePath ? { worktreePath: search.worktreePath } : {})}
           />
         ) : (
-          <GitExplorerNotice
-            title={projects.length ? "Choose a repository" : "No projects available"}
-          >
-            Select a project to review its repository history.
-          </GitExplorerNotice>
+          <>
+            <GitExplorerHeader repositoryPicker={repositoryPicker} />
+            <GitExplorerNotice
+              title={projects.length ? "Choose a repository" : "No projects available"}
+            >
+              Select a project to review its repository history.
+            </GitExplorerNotice>
+          </>
         )}
       </div>
     </SidebarInset>

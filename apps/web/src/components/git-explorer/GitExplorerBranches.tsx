@@ -24,7 +24,6 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
-  GitForkIcon,
   GlobeIcon,
   HardDriveIcon,
   EllipsisIcon,
@@ -37,6 +36,7 @@ import { cn } from "~/lib/utils";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -66,8 +66,15 @@ interface BranchActions {
   deleteUnavailable: string | null;
   pendingBranch: string | null;
   onDeleteFolder: (path: string) => void;
+  onDeleteBranches: (references: readonly GitExplorerRef[]) => void;
   onBranchAction: (action: "switch" | "rename", reference: GitExplorerRef) => void;
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
+}
+
+interface BranchSelection {
+  selected: ReadonlyMap<string, string>;
+  onToggle: (reference: GitExplorerRef) => void;
+  disabled: boolean;
 }
 
 function BranchFolderRow({
@@ -193,6 +200,7 @@ function ReferenceRow({
   statusError,
   emphasized = false,
   actions,
+  selection,
 }: {
   reference: GitExplorerRef;
   label: string;
@@ -203,6 +211,7 @@ function ReferenceRow({
   statusError?: string | null;
   emphasized?: boolean;
   actions?: BranchActions;
+  selection?: BranchSelection;
 }) {
   const mergeDescription = statusError
     ? `Merge status unavailable. ${statusError}`
@@ -264,9 +273,20 @@ function ReferenceRow({
       }}
       className={cn(
         "group/branch flex min-w-0 items-center rounded-sm hover:bg-accent",
-        selected && "bg-primary/8",
+        (selection ? selection.selected.get(reference.name) === reference.hash : selected) &&
+          "bg-primary/8",
       )}
     >
+      {selection ? (
+        <span className="pl-2">
+          <Checkbox
+            aria-label={`Select branch ${reference.shortName}`}
+            checked={selection.selected.get(reference.name) === reference.hash}
+            disabled={selection.disabled}
+            onCheckedChange={() => selection.onToggle(reference)}
+          />
+        </span>
+      ) : null}
       <button
         type="button"
         className={cn(
@@ -276,15 +296,19 @@ function ReferenceRow({
             reference.upstream &&
             "h-auto flex-col items-start gap-0 py-1 pointer-coarse:h-auto max-sm:h-auto",
         )}
-        onClick={() => onSelect(reference.hash)}
+        onClick={() => (selection ? selection.onToggle(reference) : onSelect(reference.hash))}
         onDoubleClick={() => {
+          if (selection) return;
           if (actions && !current && !actions.deleteUnavailable && !actions.pendingBranch)
             actions.onBranchAction("switch", reference);
         }}
-        aria-current={selected ? "true" : undefined}
+        aria-current={!selection && selected ? "true" : undefined}
+        aria-pressed={
+          selection ? selection.selected.get(reference.name) === reference.hash : undefined
+        }
         aria-label={description}
       >
-        {selected ? (
+        {!selection && selected ? (
           <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
         ) : null}
         <span className="flex w-full min-w-0 items-center gap-1.5">
@@ -345,7 +369,7 @@ function ReferenceRow({
           </GitExplorerHint>
         ) : null}
       </button>
-      {reference.kind === "local" && actions ? (
+      {reference.kind === "local" && actions && !selection ? (
         <span
           className={cn(
             "mr-0.5 hidden shrink-0 items-center group-any-hover/branch:flex group-has-[:focus-visible]/branch:flex pointer-coarse:flex max-sm:flex",
@@ -401,6 +425,7 @@ function LocalBranchChunk({
   onSelect,
   active,
   actions,
+  selection,
 }: {
   rows: readonly GitExplorerBranchRow[];
   collapsed: ReadonlySet<string>;
@@ -412,6 +437,7 @@ function LocalBranchChunk({
   onSelect: (revision: string | null) => void;
   active: boolean;
   actions: BranchActions;
+  selection?: BranchSelection;
 }) {
   const [visible, setVisible] = useState(false);
   const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
@@ -467,6 +493,7 @@ function LocalBranchChunk({
               {...(status ? { status } : {})}
               statusError={query.error}
               actions={actions}
+              {...(selection ? { selection } : {})}
             />
           </div>
         );
@@ -569,6 +596,27 @@ export function GitExplorerBranches({
   stashActions: StashActions;
 }) {
   const [search, setSearch] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [selectedBranches, setSelectedBranches] = useState<ReadonlyMap<string, string>>(new Map());
+  const selectionDisabled = actions.deleteUnavailable !== null || actions.pendingBranch !== null;
+  const selectedReferences = overview.refs.filter(
+    (ref) => ref.kind === "local" && selectedBranches.get(ref.name) === ref.hash,
+  );
+  const selection: BranchSelection | undefined = selecting
+    ? {
+        selected: selectedBranches,
+        disabled: selectionDisabled,
+        onToggle: (ref) => {
+          if (selectionDisabled) return;
+          setSelectedBranches((current) => {
+            const next = new Map(current);
+            if (next.get(ref.name) === ref.hash) next.delete(ref.name);
+            else next.set(ref.name, ref.hash);
+            return next;
+          });
+        },
+      }
+    : undefined;
   const filter = search.trim().toLocaleLowerCase();
   const matches = (reference: GitExplorerRef) =>
     reference.shortName.toLocaleLowerCase().includes(filter);
@@ -605,37 +653,6 @@ export function GitExplorerBranches({
 
   return (
     <nav className="flex h-full min-h-0 min-w-0 flex-col" aria-label="Repository references">
-      <div className="flex shrink-0 gap-1 border-b border-border/60 p-1" aria-label="Workspace">
-        {[
-          {
-            label: "History",
-            revision: overview.headHash,
-            active: selectedRevision !== null,
-            Icon: GitForkIcon,
-          },
-          {
-            label: "Changes",
-            revision: null,
-            active: selectedRevision === null,
-            Icon: HardDriveIcon,
-          },
-        ].map(({ label, revision, active, Icon }) => (
-          <button
-            key={label}
-            type="button"
-            disabled={label === "History" && !overview.headHash}
-            onClick={() => onSelect(revision)}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-sm text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring pointer-coarse:h-8 max-sm:h-9",
-              active ? "bg-accent font-medium text-foreground" : "text-muted-foreground",
-            )}
-          >
-            <Icon className="size-3" aria-hidden />
-            {label}
-          </button>
-        ))}
-      </div>
       <div className="shrink-0 px-1.5 pt-1.5">
         <Input
           size="compact"
@@ -646,16 +663,79 @@ export function GitExplorerBranches({
           onChange={(event) => setSearch(event.target.value)}
         />
       </div>
+      {selecting ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1 px-3.5 py-1">
+          <label className="flex items-center gap-1.5 text-2xs">
+            <Checkbox
+              checked={
+                localRefs.length > 0 &&
+                localRefs.every((ref) => selectedBranches.get(ref.name) === ref.hash)
+              }
+              indeterminate={
+                localRefs.some((ref) => selectedBranches.get(ref.name) === ref.hash) &&
+                !localRefs.every((ref) => selectedBranches.get(ref.name) === ref.hash)
+              }
+              disabled={selectionDisabled || localRefs.length === 0}
+              onCheckedChange={(checked) =>
+                setSelectedBranches((current) => {
+                  const next = new Map(current);
+                  for (const ref of localRefs) {
+                    if (checked) next.set(ref.name, ref.hash);
+                    else next.delete(ref.name);
+                  }
+                  return next;
+                })
+              }
+            />
+            {filter ? "All matching" : "All"}
+          </label>
+          <span className="ml-auto">
+            <Button
+              variant="ghost-destructive"
+              size="xs"
+              disabled={selectionDisabled || selectedReferences.length === 0}
+              onClick={() => actions.onDeleteBranches(selectedReferences)}
+            >
+              Delete selected ({selectedReferences.length})
+            </Button>
+          </span>
+        </div>
+      ) : null}
       <div
         data-git-explorer-branches-scroll
         className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-1.5 py-2"
       >
         <section aria-label="Local branches">
-          <h2 className={HEADING_CLASS}>
-            <GitBranchIcon className="size-3" aria-hidden />
-            Local branches
-            <span className="ml-auto font-mono text-3xs tabular-nums">{localRefs.length}</span>
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-1">
+            <h2 className={HEADING_CLASS}>
+              <GitBranchIcon className="size-3" aria-hidden />
+              Local branches
+              <span className="font-mono text-3xs tabular-nums">{localRefs.length}</span>
+            </h2>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={selectionDisabled && !selecting}
+              onClick={() => {
+                setSelecting(!selecting);
+                setSelectedBranches(new Map());
+              }}
+            >
+              {selecting ? "Cancel" : "Select"}
+            </Button>
+          </div>
+          <button
+            type="button"
+            className={ROW_CLASS}
+            aria-current={selectedRevision === null ? "page" : undefined}
+            onClick={() => onSelect(null)}
+          >
+            {selectedRevision === null ? (
+              <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
+            ) : null}
+            <HardDriveIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="truncate font-medium">Working Tree</span>
+          </button>
           {localChunks.map((rows) => (
             <LocalBranchChunk
               key={rows[0]!.kind === "branch" ? rows[0]!.reference.name : rows[0]!.path}
@@ -669,6 +749,7 @@ export function GitExplorerBranches({
               onSelect={onSelect}
               active={active}
               actions={actions}
+              {...(selection ? { selection } : {})}
             />
           ))}
           {localRefs.length === 0 ? (

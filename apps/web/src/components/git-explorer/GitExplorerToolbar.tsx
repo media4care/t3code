@@ -115,10 +115,7 @@ export function GitExplorerToolbar({
   };
   return (
     <>
-      <div
-        className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1"
-        aria-label="Git actions"
-      >
+      <div className="flex shrink-0 items-center gap-0.5" aria-label="Git actions">
         {(
           [
             {
@@ -154,7 +151,7 @@ export function GitExplorerToolbar({
           <Button
             key={action}
             variant="ghost"
-            size="sm"
+            size="xs"
             title={unavailable ?? blocked ?? hint}
             disabled={unavailable !== null || blocked !== null}
             onClick={() => (action === "stash" ? setStashOpen(true) : void execute(action))}
@@ -174,7 +171,7 @@ export function GitExplorerToolbar({
               <Button
                 key={action}
                 variant={action === "drop-stash" ? "ghost-destructive" : "ghost"}
-                size="sm"
+                size="xs"
                 disabled={unavailable !== null}
                 title={unavailable ?? `${label} ${stash.name}`}
                 onClick={() => onStashAction(action, stash)}

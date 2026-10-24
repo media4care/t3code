@@ -8,9 +8,76 @@ import {
   gitExplorerEmphasizedRefs,
   gitExplorerUpstreamMergeSummary,
   prepareGitExplorerBranchDeletion,
+  prepareGitExplorerBranchesDeletion,
 } from "./gitExplorer.ts";
 
 const decodeBranchStatus = Schema.decodeUnknownSync(GitExplorerBranchStatus);
+
+describe("selected branch deletion", () => {
+  it("reviews only the chosen branches and preserves protection, stale-tip and force rules", () => {
+    const refs: GitExplorerRef[] = [
+      "feature/one",
+      "fix/two",
+      "pending",
+      "main",
+      "active",
+      "stale",
+      "not-selected",
+    ].map((shortName) => ({
+      name: `refs/heads/${shortName}`,
+      shortName,
+      kind: "local",
+      hash: "a".repeat(40),
+      upstream: null,
+      ahead: null,
+      behind: null,
+      upstreamMissing: false,
+    }));
+    const statuses = refs.map((ref) =>
+      decodeBranchStatus({
+        name: ref.name,
+        hash: ref.shortName === "stale" ? "c".repeat(40) : ref.hash,
+        targetRef: "refs/remotes/origin/main",
+        targetHash: "b".repeat(40),
+        mergeStatus: ref.shortName === "pending" ? "unmerged" : "merged",
+        reason: null,
+        deleteBlockedReason:
+          ref.shortName === "main"
+            ? "protected"
+            : ref.shortName === "active"
+              ? "checked-out"
+              : ref.shortName === "pending"
+                ? "unmerged"
+                : null,
+      }),
+    );
+    const selected = [...refs.slice(0, -1), refs[0]!];
+    const safe = prepareGitExplorerBranchesDeletion(selected, statuses);
+    expect(safe.eligible.map(({ reference }) => reference.shortName)).toEqual([
+      "feature/one",
+      "fix/two",
+    ]);
+    expect(safe.skipped.map(({ reference }) => reference.shortName)).toEqual([
+      "pending",
+      "main",
+      "active",
+      "stale",
+    ]);
+    const forced = prepareGitExplorerBranchesDeletion(selected, statuses, true);
+    expect(forced.eligible.map(({ reference }) => reference.shortName)).toEqual([
+      "feature/one",
+      "fix/two",
+      "pending",
+    ]);
+    expect(forced.eligible.map(({ deletion }) => deletion.input.force ?? false)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(forced.eligible[0]?.deletion.input.expectedHash).toBe(refs[0]?.hash);
+    expect(prepareGitExplorerBranchesDeletion([refs[0]!], []).eligible).toEqual([]);
+  });
+});
 
 describe("Git Explorer graph", () => {
   it("emphasizes first-parent history without thickening a merged feature or reused lane", () => {
