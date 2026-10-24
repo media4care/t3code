@@ -85,9 +85,10 @@ export const GitExplorerDeleteBranchInput = Schema.Struct({
   ...GitExplorerScope,
   branchName: GitExplorerLocalBranch,
   expectedHash: GitExplorerHash,
-  expectedTargetRef: Schema.String,
-  expectedTargetHash: GitExplorerHash,
+  expectedTargetRef: Schema.NullOr(Schema.String),
+  expectedTargetHash: Schema.NullOr(GitExplorerHash),
   allowEquivalent: Schema.Boolean,
+  force: Schema.optional(Schema.Boolean),
 });
 export type GitExplorerDeleteBranchInput = typeof GitExplorerDeleteBranchInput.Type;
 export const GitExplorerRunActionInput = Schema.Struct({

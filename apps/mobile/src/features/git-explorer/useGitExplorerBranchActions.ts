@@ -1,3 +1,4 @@
+import { prepareGitExplorerBranchDeletion } from "@t3tools/client-runtime/git-explorer";
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { GitExplorerBranchStatus, GitExplorerRef } from "@t3tools/contracts";
@@ -39,22 +40,6 @@ export function describeBranchMerge(status: GitExplorerBranchStatus | null) {
   }
 }
 
-export function branchDeletionBlockedReason(status: GitExplorerBranchStatus | null) {
-  if (!status) return "Wait for the merge status check.";
-  switch (status.deleteBlockedReason) {
-    case "checked-out":
-      return "This branch is checked out in a worktree.";
-    case "protected":
-      return "The base branch is protected.";
-    case "unmerged":
-      return "No complete merge or patch-equivalence match was found.";
-    case "unknown":
-      return "Deletion requires a verified merge status.";
-    case null:
-      return null;
-  }
-}
-
 export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh: () => void) {
   const target = gitExplorerTarget(params);
   const canWrite = useAtomValue(
@@ -83,23 +68,18 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
       ref.kind !== "local" ||
       ref.name !== status.name ||
       ref.hash !== status.hash ||
-      status.deleteBlockedReason !== null ||
-      (status.mergeStatus !== "merged" && status.mergeStatus !== "equivalent") ||
-      !status.targetRef ||
-      !status.targetHash
+      status.deleteBlockedReason === "protected" ||
+      status.deleteBlockedReason === "checked-out"
     )
       return;
-    const expectedTargetRef = status.targetRef;
-    const expectedTargetHash = status.targetHash;
-    const comparison = expectedTargetRef.replace(/^refs\/(?:heads|remotes)\//, "");
-    const equivalent = status.mergeStatus === "equivalent";
-    const explanation = equivalent
-      ? `Its changes have equivalent patches in ${comparison}, but the original commits are not ancestors of that branch. Delete this local branch using the equivalent changes check?`
-      : `Its commits are already merged into ${comparison}. Only the local branch is removed.`;
+    const review =
+      prepareGitExplorerBranchDeletion(ref, status) ??
+      prepareGitExplorerBranchDeletion(ref, status, true);
+    if (!review) return;
     Dialog.confirm({
-      title: `Delete local branch “${ref.shortName}”?`,
-      message: `${explanation}\n\nThe remote branch is unchanged.${expectedTargetRef.startsWith("refs/remotes/") ? " This check uses locally cached remote refs." : ""}`,
-      confirmText: "Delete branch",
+      title: review.input.force ? "Force delete branch" : "Delete branch",
+      message: review.confirmation,
+      confirmText: review.input.force ? "Force delete branch" : "Delete branch",
       destructive: true,
       onConfirm: () => {
         if (pending.current) return;
@@ -109,11 +89,7 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
           ...target,
           input: {
             ...target.input,
-            branchName: ref.name,
-            expectedHash: ref.hash,
-            expectedTargetRef,
-            expectedTargetHash,
-            allowEquivalent: equivalent,
+            ...review.input,
           },
         }).then((result) => {
           pending.current = false;
