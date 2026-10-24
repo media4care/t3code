@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
+import { GitExplorerBranchStatus, type GitExplorerRef } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
-import { formatGitExplorerSync, layoutGitGraph, gitExplorerEmphasizedRefs } from "./gitExplorer.ts";
+import {
+  formatGitExplorerSync,
+  layoutGitGraph,
+  gitExplorerEmphasizedRefs,
+  gitExplorerUpstreamMergeSummary,
+  prepareGitExplorerBranchDeletion,
+} from "./gitExplorer.ts";
+
+const decodeBranchStatus = Schema.decodeUnknownSync(GitExplorerBranchStatus);
 
 describe("Git Explorer graph", () => {
   it("emphasizes first-parent history without thickening a merged feature or reused lane", () => {
@@ -114,6 +124,53 @@ describe("Git Explorer graph", () => {
 });
 
 describe("Git Explorer upstream status", () => {
+  it("shows a merged upstream without claiming the local branch is merged or safe to delete", () => {
+    const ref: GitExplorerRef = {
+      name: "refs/heads/topic",
+      shortName: "topic",
+      kind: "local",
+      hash: "a".repeat(40),
+      upstream: "refs/remotes/origin/topic",
+      upstreamMissing: false,
+      ahead: 2,
+      behind: 4,
+    };
+    const status = decodeBranchStatus({
+      name: ref.name,
+      hash: ref.hash,
+      mergeStatus: "unmerged",
+      reason: null,
+      targetRef: "refs/remotes/origin/main",
+      targetHash: "b".repeat(40),
+      deleteBlockedReason: "unmerged",
+      upstream: { name: ref.upstream, hash: "c".repeat(40), mergeStatus: "merged", reason: null },
+    });
+    const summary = gitExplorerUpstreamMergeSummary(ref, status);
+    expect(summary.label).toBe("Upstream merged");
+    expect(summary.description).toContain("origin/topic: Merged into origin/main");
+    expect(summary.description).toContain("local remote-tracking ref");
+    expect(prepareGitExplorerBranchDeletion(ref, status)).toBeNull();
+    expect(prepareGitExplorerBranchDeletion(ref, status, true)?.confirmation).toContain(
+      summary.description,
+    );
+
+    expect(gitExplorerUpstreamMergeSummary({ ...ref, upstreamMissing: true }, status).label).toBe(
+      "Missing upstream",
+    );
+    expect(gitExplorerUpstreamMergeSummary({ ...ref, upstream: null }, status).label).toBe(
+      "No upstream",
+    );
+    expect(
+      gitExplorerUpstreamMergeSummary({ ...ref, upstream: "refs/remotes/origin/other" }, status)
+        .label,
+    ).toBe("Upstream unknown");
+    expect(gitExplorerUpstreamMergeSummary({ ...ref, hash: "d".repeat(40) }, status).label).toBe(
+      "Upstream unknown",
+    );
+    const { upstream: _upstream, ...legacyStatus } = status;
+    expect(gitExplorerUpstreamMergeSummary(ref, legacyStatus).label).toBe("Upstream unknown");
+  });
+
   const tracked = { upstream: "refs/remotes/origin/main", upstreamMissing: false };
 
   it("distinguishes synchronization, either direction, and divergence", () => {

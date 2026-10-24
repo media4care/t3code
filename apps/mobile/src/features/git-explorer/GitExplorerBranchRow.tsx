@@ -2,6 +2,7 @@ import type { GitExplorerOverviewResult, GitExplorerRef } from "@t3tools/contrac
 import {
   formatGitExplorerSync,
   gitExplorerBranchDeletionBlock,
+  gitExplorerUpstreamMergeSummary,
 } from "@t3tools/client-runtime/git-explorer";
 import { Pressable, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
@@ -85,6 +86,8 @@ export function GitExplorerBranchRow(props: {
   };
   const { hovered, hoverGesture } = useHoverGesture(ref.kind !== "local");
   const mark = syncMark(ref);
+  const upstream = gitExplorerUpstreamMergeSummary(ref, status ?? undefined);
+  const rowHeight = props.rowHeight + (ref.kind === "local" && ref.upstream ? 16 : 0);
   const current =
     ref.kind === "local" &&
     (ref.shortName === props.overview.headBranch || ref.name === props.overview.headBranch);
@@ -94,7 +97,7 @@ export function GitExplorerBranchRow(props: {
   const row = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${ref.shortName}. ${current ? "Currently checked out. " : ""}${ref.kind === "tag" ? "Tag" : ref.kind === "remote" ? "Remote-tracking branch" : `${formatGitExplorerSync(ref)}. ${mergeDescription}. ${statusDetail}`}${ref.upstream ? `. Tracks ${ref.upstream}` : ""}${ref.kind === "local" && blockedReason ? `. ${blockedReason}` : ""}`}
+      accessibilityLabel={`${ref.shortName}. ${current ? "Currently checked out. " : ""}${ref.kind === "tag" ? "Tag" : ref.kind === "remote" ? "Remote-tracking branch" : `${formatGitExplorerSync(ref)}. Local branch: ${mergeDescription}. ${statusDetail} ${upstream.description}`}${ref.upstream ? `. Tracks ${ref.upstream}` : ""}${ref.kind === "local" && blockedReason ? `. ${blockedReason}` : ""}`}
       accessibilityHint={
         ref.kind === "local" ? "Long press for branch details and actions." : undefined
       }
@@ -106,7 +109,7 @@ export function GitExplorerBranchRow(props: {
         if (event.nativeEvent.actionName === "delete") requestDelete();
       }}
       onPress={() => props.onSelect(ref.hash)}
-      style={{ height: props.rowHeight }}
+      style={{ height: rowHeight }}
       className={cn(
         "flex-row items-center gap-1 px-3",
         props.selected ? "bg-primary/10" : hovered ? "bg-row-hover" : "bg-card",
@@ -114,25 +117,36 @@ export function GitExplorerBranchRow(props: {
     >
       {current ? (
         <View
-          style={{ width: 2, height: 14, top: (props.rowHeight - 14) / 2 }}
+          style={{ width: 2, height: 14, top: (rowHeight - 14) / 2 }}
           className="absolute left-0 rounded-r-sm bg-primary"
         />
       ) : null}
-      <Text
-        numberOfLines={1}
-        ellipsizeMode="middle"
-        className="min-w-0 flex-1 text-[12px] leading-[16px]"
-      >
-        {prefix ? <Text className="text-foreground-muted">{prefix}</Text> : null}
-        <Text
-          className={cn(
-            "font-t3-medium",
-            current ? "font-t3-semibold text-primary-text" : "text-foreground",
-          )}
-        >
-          {leaf}
+      <View className="min-w-0 flex-1">
+        <Text numberOfLines={1} ellipsizeMode="middle" className="text-[12px] leading-[16px]">
+          {prefix ? <Text className="text-foreground-muted">{prefix}</Text> : null}
+          <Text
+            className={cn(
+              "font-t3-medium",
+              current ? "font-t3-semibold text-primary-text" : "text-foreground",
+            )}
+          >
+            {leaf}
+          </Text>
         </Text>
-      </Text>
+        {ref.kind === "local" && ref.upstream ? (
+          <Text
+            numberOfLines={1}
+            className={cn(
+              "text-[12px] leading-[16px]",
+              upstream.mergeStatus === "merged" || upstream.mergeStatus === "equivalent"
+                ? "text-adaptive-emerald-700-300"
+                : "text-foreground-muted",
+            )}
+          >
+            {upstream.label}
+          </Text>
+        ) : null}
+      </View>
       {mark ? (
         <Text
           numberOfLines={1}
@@ -150,14 +164,11 @@ export function GitExplorerBranchRow(props: {
         </Text>
       ) : null}
       {ref.kind === "local" ? (
-        <View
-          style={{ width: 24, height: props.rowHeight }}
-          className="items-center justify-center"
-        >
+        <View style={{ width: 24, height: rowHeight }} className="items-center justify-center">
           {hovered && canDelete ? (
             <Pressable
               accessible={false}
-              style={{ width: 24, height: props.rowHeight }}
+              style={{ width: 24, height: rowHeight }}
               className="items-center justify-center"
               onPress={(event) => {
                 event.stopPropagation();
@@ -203,8 +214,14 @@ export function GitExplorerBranchRow(props: {
         actions={[
           {
             id: "status",
-            title: mergeDescription,
+            title: `Local branch: ${mergeDescription}`,
             subtitle: statusDetail,
+            attributes: { disabled: true },
+          },
+          {
+            id: "upstream-merge",
+            title: upstream.label,
+            subtitle: upstream.description,
             attributes: { disabled: true },
           },
           {

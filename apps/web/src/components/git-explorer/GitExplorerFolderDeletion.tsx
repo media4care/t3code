@@ -4,7 +4,10 @@ import type {
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
 } from "@t3tools/contracts";
-import { describeGitExplorerMerge } from "@t3tools/client-runtime/git-explorer";
+import {
+  describeGitExplorerMerge,
+  gitExplorerUpstreamMergeSummary,
+} from "@t3tools/client-runtime/git-explorer";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -189,6 +192,16 @@ export function GitExplorerFolderDeletion({
                         ? `Force deletion · ${describeGitExplorerMerge(statusesByName.get(reference.name))}`
                         : `${deletion.input.allowEquivalent ? "Equivalent patches; original commits are not ancestors" : "Merged"} · ${deletion.input.expectedTargetRef?.replace(/^refs\/(heads|remotes)\//, "")}`}
                     </span>
+                    {reference.upstream ? (
+                      <span className="block text-muted-foreground">
+                        {
+                          gitExplorerUpstreamMergeSummary(
+                            reference,
+                            statusesByName.get(reference.name),
+                          ).description
+                        }
+                      </span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -203,6 +216,16 @@ export function GitExplorerFolderDeletion({
                       <li key={reference.name}>
                         {reference.shortName}
                         <span className="block text-muted-foreground">{reason}</span>
+                        {reference.upstream ? (
+                          <span className="block text-muted-foreground">
+                            {
+                              gitExplorerUpstreamMergeSummary(
+                                reference,
+                                statusesByName.get(reference.name),
+                              ).description
+                            }
+                          </span>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

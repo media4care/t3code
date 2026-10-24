@@ -821,8 +821,22 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const cached = snapshot.branchStatuses.get(ref.name);
           if (cached) return cached;
-          const result = yield* computeBranchStatus(snapshot, ref);
-          if (result.reason !== "read-failed") snapshot.branchStatuses.set(ref.name, result);
+          const local = yield* computeBranchStatus(snapshot, ref);
+          const upstream = ref.upstream ? snapshot.refsByName.get(ref.upstream) : undefined;
+          const result: GitExplorerBranchStatus = upstream
+            ? {
+                ...local,
+                upstream: {
+                  name: upstream.name,
+                  hash: upstream.hash,
+                  ...(upstream.hash === ref.hash
+                    ? { mergeStatus: local.mergeStatus, reason: local.reason }
+                    : yield* computeMergeAssessment(snapshot, upstream.hash, local.targetHash)),
+                },
+              }
+            : local;
+          if (result.reason !== "read-failed" && result.upstream?.reason !== "read-failed")
+            snapshot.branchStatuses.set(ref.name, result);
           return result;
         }),
       { concurrency: 4 },

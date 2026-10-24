@@ -1,6 +1,7 @@
 import {
   describeGitExplorerMerge,
   gitExplorerBranchDeletionBlock,
+  gitExplorerUpstreamMergeSummary,
   formatGitExplorerSync,
   gitExplorerEmphasizedRefs,
 } from "@t3tools/client-runtime/git-explorer";
@@ -206,9 +207,10 @@ function ReferenceRow({
   const mergeDescription = statusError
     ? `Merge status unavailable. ${statusError}`
     : describeGitExplorerMerge(status);
+  const upstream = gitExplorerUpstreamMergeSummary(reference, status);
   const description =
     reference.kind === "local"
-      ? `${reference.shortName}${current ? " · checked out" : ""} · ${formatGitExplorerSync(reference)}${reference.upstream ? ` · ${reference.upstream}` : ""} · ${mergeDescription}`
+      ? `${reference.shortName}${current ? " · checked out" : ""} · ${formatGitExplorerSync(reference)}${reference.upstream ? ` · ${reference.upstream}` : ""} · Local branch: ${mergeDescription} · ${upstream.description}`
       : `${reference.shortName} · ${reference.kind === "tag" ? "tag" : "remote-tracking branch"}`;
   const slash = label.lastIndexOf("/");
   const pending = actions?.pendingBranch === reference.name;
@@ -267,7 +269,13 @@ function ReferenceRow({
     >
       <button
         type="button"
-        className={cn(ROW_CLASS, "flex-1")}
+        className={cn(
+          ROW_CLASS,
+          "flex-1",
+          reference.kind === "local" &&
+            reference.upstream &&
+            "h-auto flex-col items-start gap-0 py-1 pointer-coarse:h-auto max-sm:h-auto",
+        )}
         onClick={() => onSelect(reference.hash)}
         onDoubleClick={() => {
           if (actions && !current && !actions.deleteUnavailable && !actions.pendingBranch)
@@ -279,39 +287,62 @@ function ReferenceRow({
         {selected ? (
           <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
         ) : null}
-        <span className="flex w-3 shrink-0 items-center justify-center" aria-hidden>
-          {reference.kind === "tag" ? (
-            <TagIcon className="size-3 text-info-foreground" />
-          ) : current ? (
-            <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-primary/40 ring-inset">
-              <span className="size-1.5 rounded-full bg-primary" />
-            </span>
-          ) : (
-            <span className="size-1 rounded-full bg-muted-foreground/40" />
-          )}
-        </span>
-        <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
-          {slash >= 0 ? (
-            <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
-          ) : null}
-          <span
-            className={cn((current || emphasized) && "font-semibold", current && "text-primary")}
-          >
-            {label.slice(slash + 1)}
+        <span className="flex w-full min-w-0 items-center gap-1.5">
+          <span className="flex w-3 shrink-0 items-center justify-center" aria-hidden>
+            {reference.kind === "tag" ? (
+              <TagIcon className="size-3 text-info-foreground" />
+            ) : current ? (
+              <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-primary/40 ring-inset">
+                <span className="size-1.5 rounded-full bg-primary" />
+              </span>
+            ) : (
+              <span className="size-1 rounded-full bg-muted-foreground/40" />
+            )}
           </span>
-        </GitExplorerHint>
-        {reference.kind === "local" ? (
-          <>
+          <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
+            {slash >= 0 ? (
+              <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
+            ) : null}
             <span
-              className={cn(
-                "shrink-0",
-                actions && "group-any-hover/branch:hidden group-has-[:focus-visible]/branch:hidden",
-              )}
+              className={cn((current || emphasized) && "font-semibold", current && "text-primary")}
             >
-              <BranchSync reference={reference} />
+              {label.slice(slash + 1)}
             </span>
-            <BranchMergeStatus status={status} description={mergeDescription} />
-          </>
+          </GitExplorerHint>
+          {reference.kind === "local" ? (
+            <>
+              {!reference.upstreamMissing ? (
+                <span
+                  className={cn(
+                    "shrink-0",
+                    actions &&
+                      "group-any-hover/branch:hidden group-has-[:focus-visible]/branch:hidden",
+                  )}
+                >
+                  <BranchSync reference={reference} />
+                </span>
+              ) : null}
+              <BranchMergeStatus
+                status={status}
+                description={`Local branch: ${mergeDescription}`}
+              />
+            </>
+          ) : null}
+        </span>
+        {reference.kind === "local" && reference.upstream ? (
+          <GitExplorerHint
+            label={upstream.description}
+            className={cn(
+              "w-full truncate pl-4.5",
+              upstream.mergeStatus === "merged"
+                ? "text-success-foreground"
+                : upstream.mergeStatus === "equivalent"
+                  ? "text-info-foreground"
+                  : "text-muted-foreground",
+            )}
+          >
+            {upstream.label}
+          </GitExplorerHint>
         ) : null}
       </button>
       {reference.kind === "local" && actions ? (
