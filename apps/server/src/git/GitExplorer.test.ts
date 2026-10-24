@@ -1191,6 +1191,81 @@ const branchFixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer branch review", (it) => {
+  it.effect(
+    "reuses unchanged merge comparisons after deletion while refreshing checkout protection",
+    () =>
+      Effect.gen(function* () {
+        const { git, projectStore, root, target } = yield* branchFixture;
+        yield* git(["switch", "-c", "merge-only", "rebased"]);
+        yield* git(["merge", "--no-ff", "--no-edit", "pending"]);
+        yield* git(["switch", "main"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        let comparisons = 0;
+        const explorer = yield* GitExplorer.GitExplorer.pipe(
+          Effect.provide(
+            GitExplorer.layer.pipe(
+              Layer.provide(projectStore),
+              Layer.provide(
+                Layer.succeed(GitVcsDriver.GitVcsDriver, {
+                  ...driver,
+                  execute: (input) => {
+                    if (input.args.includes("merge-base")) comparisons++;
+                    return driver.execute(input);
+                  },
+                }),
+              ),
+            ),
+          ),
+        );
+        const branches = ["refs/heads/rebased", "refs/heads/pending", "refs/heads/merge-only"];
+        const before = yield* explorer.overview(scope);
+        const reviewed = yield* explorer.branchStatuses({
+          ...scope,
+          snapshotId: before.snapshotId,
+          branches,
+        });
+        const initialComparisons = comparisons;
+        assert.isAbove(initialComparisons, 0);
+        assert.equal(reviewed.branches[2]?.reason, "merge-commits");
+        yield* explorer.deleteBranch({
+          ...scope,
+          branchName: "refs/heads/done",
+          expectedHash: root,
+          expectedTargetRef: "refs/remotes/origin/main",
+          expectedTargetHash: target,
+          allowEquivalent: false,
+        });
+        const afterDeletionComparisons = comparisons;
+        const after = yield* explorer.overview(scope);
+        assert.notEqual(after.snapshotId, before.snapshotId);
+        assert.deepEqual(
+          yield* explorer.branchStatuses({ ...scope, snapshotId: after.snapshotId, branches }),
+          reviewed,
+        );
+        assert.equal(comparisons, afterDeletionComparisons);
+
+        yield* git(["switch", "pending"]);
+        const checkedOut = yield* explorer.overview(scope);
+        const updated = yield* explorer.branchStatuses({
+          ...scope,
+          snapshotId: checkedOut.snapshotId,
+          branches,
+        });
+        assert.equal(updated.branches[1]?.deleteBlockedReason, "checked-out");
+        assert.equal(comparisons, afterDeletionComparisons);
+
+        yield* git(["update-ref", "refs/remotes/origin/main", root]);
+        const moved = yield* explorer.overview(scope);
+        const changed = yield* explorer.branchStatuses({
+          ...scope,
+          snapshotId: moved.snapshotId,
+          branches,
+        });
+        assert.equal(changed.branches[0]?.mergeStatus, "unmerged");
+        assert.isAbove(comparisons, afterDeletionComparisons);
+      }),
+  );
+
   it.effect("reports a rebased upstream as merged independently of the old local tip", () =>
     Effect.gen(function* () {
       const { explorer, git, statuses, target, original, pending } = yield* branchFixture;
