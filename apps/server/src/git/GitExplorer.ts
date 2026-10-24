@@ -78,6 +78,7 @@ const MAX_STASHES = 200;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_ANCESTORS = 25_000;
 const MAX_MERGE_COMMITS = 4_000;
+const MAX_MERGE_ASSESSMENTS = 4_096;
 const SNAPSHOT_TTL_MS = 30 * 60_000;
 
 type Snapshot = {
@@ -218,6 +219,10 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const snapshots = new Map<string, Snapshot>();
+  const mergeAssessments = new Map<
+    string,
+    Pick<GitExplorerBranchStatus, "mergeStatus" | "reason">
+  >();
   const mutationLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
   const contentToken = Effect.fn("GitExplorer.contentToken")((value: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
@@ -687,6 +692,8 @@ const make = Effect.gen(function* () {
     ): Effect.fn.Return<Pick<GitExplorerBranchStatus, "mergeStatus" | "reason">, GitExplorerError> {
       if (!targetHash) return { mergeStatus: "unknown", reason: "missing-base" };
       if (snapshot.shallowBoundary) return { mergeStatus: "unknown", reason: "shallow" };
+      const cached = mergeAssessments.get(`${snapshot.commonDirectory}\0${hash}\0${targetHash}`);
+      if (cached) return cached;
       const cwd = snapshot.overview.selectedWorktreePath;
       const ancestry = yield* run(cwd, ["merge-base", "--is-ancestor", hash, targetHash], {
         allowNonZero: true,
@@ -760,6 +767,21 @@ const make = Effect.gen(function* () {
     Effect.catch(() =>
       Effect.succeed({ mergeStatus: "unknown" as const, reason: "read-failed" as const }),
     ),
+    (effect, snapshot, hash, targetHash) =>
+      effect.pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            // Commit comparisons survive ref deletion; checkout/protection checks still use the current snapshot.
+            // Failed reads must be retried; shallow history and missing bases are cheap to check afresh.
+            if (!targetHash || snapshot.shallowBoundary || result.reason === "read-failed") return;
+            const key = `${snapshot.commonDirectory}\0${hash}\0${targetHash}`;
+            mergeAssessments.delete(key);
+            mergeAssessments.set(key, result);
+            if (mergeAssessments.size > MAX_MERGE_ASSESSMENTS)
+              mergeAssessments.delete(mergeAssessments.keys().next().value!);
+          }),
+        ),
+      ),
   );
   const computeBranchStatus = Effect.fn("GitExplorer.computeBranchStatus")(function* (
     snapshot: Snapshot,
