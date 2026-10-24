@@ -146,6 +146,47 @@ export function describeGitExplorerMerge(status: GitExplorerBranchStatus | undef
   return `${comparison}${status.targetRef?.startsWith("refs/remotes/") ? " Uses the local remote-tracking ref; the remote server has not been checked." : ""}`;
 }
 
+export function gitExplorerUpstreamMergeSummary(
+  reference: GitExplorerRef,
+  status: GitExplorerBranchStatus | undefined,
+) {
+  if (!reference.upstream)
+    return {
+      label: "No upstream",
+      description: "No tracking branch is configured for this local branch.",
+      mergeStatus: null,
+    };
+  const upstream = targetName(reference.upstream);
+  if (reference.upstreamMissing)
+    return {
+      label: "Missing upstream",
+      description: `Upstream ${upstream} is missing from locally fetched refs. This does not establish whether it was merged.`,
+      mergeStatus: null,
+    };
+  if (
+    !status?.upstream ||
+    status.name !== reference.name ||
+    status.hash !== reference.hash ||
+    status.upstream.name !== reference.upstream
+  )
+    return {
+      label: "Upstream unknown",
+      description: `Merge status for upstream ${upstream} has not been loaded.`,
+      mergeStatus: null,
+    };
+  const labels = {
+    merged: "Upstream merged",
+    equivalent: "Upstream equivalent",
+    unmerged: "Upstream unmerged",
+    unknown: "Upstream unknown",
+  };
+  return {
+    label: labels[status.upstream.mergeStatus],
+    description: `Upstream ${upstream}: ${describeGitExplorerMerge({ ...status, ...status.upstream })}`,
+    mergeStatus: status.upstream.mergeStatus,
+  };
+}
+
 export function gitExplorerBranchDeletionBlock(
   reference: GitExplorerRef,
   status: GitExplorerBranchStatus | undefined,
@@ -200,6 +241,9 @@ export function prepareGitExplorerBranchDeletion(
           ? `Its changes have equivalent patches in ${target}, but the original commits are not ancestors of that branch. Confirming deletes the local branch using patch equivalence.`
           : `Its commits are already merged into ${target}.`,
       "Only this local branch is removed. Remote branches and worktree files are unchanged.",
+      ...(reference.upstream
+        ? [gitExplorerUpstreamMergeSummary(reference, status).description]
+        : []),
       ...(status.targetRef?.startsWith("refs/remotes/")
         ? [
             "This comparison uses the last known remote-tracking ref. The remote server has not been checked.",

@@ -46,12 +46,8 @@ export const GitExplorerOverviewResult = Schema.Struct({
   snapshotId: Schema.String,
 });
 export type GitExplorerOverviewResult = typeof GitExplorerOverviewResult.Type;
-export const GitExplorerBranchStatus = Schema.Struct({
-  name: Schema.String,
-  hash: GitExplorerHash,
+const GitExplorerMergeAssessment = {
   mergeStatus: Schema.Literals(["merged", "equivalent", "unmerged", "unknown"]),
-  targetRef: Schema.NullOr(Schema.String),
-  targetHash: Schema.NullOr(GitExplorerHash),
   reason: Schema.NullOr(
     Schema.Literals([
       "missing-base",
@@ -61,6 +57,20 @@ export const GitExplorerBranchStatus = Schema.Struct({
       "unrelated",
       "read-failed",
     ]),
+  ),
+};
+export const GitExplorerBranchStatus = Schema.Struct({
+  name: Schema.String,
+  hash: GitExplorerHash,
+  ...GitExplorerMergeAssessment,
+  targetRef: Schema.NullOr(Schema.String),
+  targetHash: Schema.NullOr(GitExplorerHash),
+  upstream: Schema.optional(
+    Schema.Struct({
+      name: Schema.String,
+      hash: GitExplorerHash,
+      ...GitExplorerMergeAssessment,
+    }),
   ),
   deleteBlockedReason: Schema.NullOr(
     Schema.Literals(["checked-out", "protected", "unmerged", "unknown"]),

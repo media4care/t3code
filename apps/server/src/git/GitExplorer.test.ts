@@ -1191,6 +1191,89 @@ const branchFixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer branch review", (it) => {
+  it.effect("reports a rebased upstream as merged independently of the old local tip", () =>
+    Effect.gen(function* () {
+      const { explorer, git, statuses, target, original, pending } = yield* branchFixture;
+      yield* git(["update-ref", "refs/remotes/origin/rebased", target]);
+      yield* git(["branch", "--set-upstream-to=origin/rebased", "rebased"]);
+      const [rebased] = yield* statuses(["rebased"]);
+      assert.equal(rebased?.hash, original);
+      assert.equal(rebased?.mergeStatus, "equivalent");
+      assert.deepEqual(rebased?.upstream, {
+        name: "refs/remotes/origin/rebased",
+        hash: target,
+        mergeStatus: "merged",
+        reason: null,
+      });
+
+      yield* git(["update-ref", "refs/remotes/origin/pending", target]);
+      const [localOnly] = yield* statuses(["pending"]);
+      assert.equal(localOnly?.mergeStatus, "unmerged");
+      assert.equal(localOnly?.deleteBlockedReason, "unmerged");
+      assert.equal(localOnly?.upstream?.mergeStatus, "merged");
+      assert.equal(
+        (yield* explorer
+          .deleteBranch({
+            ...scope,
+            branchName: "refs/heads/pending",
+            expectedHash: pending,
+            expectedTargetRef: "refs/remotes/origin/main",
+            expectedTargetHash: target,
+            allowEquivalent: true,
+          })
+          .pipe(Effect.flip)).reason,
+        "branch-not-merged",
+      );
+    }),
+  );
+
+  it.effect("reports upstream ancestry when the old local patch comparison exceeds the limit", () =>
+    Effect.gen(function* () {
+      const { git, write, statuses, target } = yield* branchFixture;
+      yield* git(["switch", "pending"]);
+      yield* write("large.txt", `${"x".repeat(2 * 1024 * 1024)}\n`);
+      yield* git(["add", "large.txt"]);
+      yield* git(["commit", "-m", "local backup exceeding comparison limit"]);
+      yield* git(["update-ref", "refs/remotes/origin/pending", target]);
+      yield* git(["switch", "main"]);
+      const [status] = yield* statuses(["pending"]);
+      assert.equal(status?.mergeStatus, "unknown");
+      assert.equal(status?.reason, "limit");
+      assert.equal(status?.upstream?.mergeStatus, "merged");
+    }),
+  );
+
+  it.effect("refreshes upstream merge status when the tracked tip moves or disappears", () =>
+    Effect.gen(function* () {
+      const { explorer, git, statuses, pending, target } = yield* branchFixture;
+      const [initial] = yield* statuses(["pending"]);
+      assert.equal(initial?.upstream?.hash, pending);
+      assert.equal(initial?.upstream?.mergeStatus, "unmerged");
+      yield* git(["update-ref", "refs/remotes/origin/pending", target]);
+      assert.equal((yield* statuses(["pending"]))[0]?.upstream?.mergeStatus, "merged");
+      yield* git(["update-ref", "-d", "refs/remotes/origin/pending"]);
+      const [missing, unconfigured] = yield* statuses(["pending", "done"]);
+      assert.isUndefined(missing?.upstream);
+      assert.isUndefined(unconfigured?.upstream);
+      const overview = yield* explorer.overview(scope);
+      assert.isTrue(overview.refs.find((ref) => ref.shortName === "pending")?.upstreamMissing);
+      assert.isNull(overview.refs.find((ref) => ref.shortName === "done")?.upstream);
+    }),
+  );
+
+  it.effect("checks the upstream against the branch's configured release base", () =>
+    Effect.gen(function* () {
+      const { git, statuses, original } = yield* branchFixture;
+      yield* git(["update-ref", "refs/remotes/origin/rebased", original]);
+      yield* git(["update-ref", "refs/remotes/origin/v2", original]);
+      yield* git(["branch", "--set-upstream-to=origin/rebased", "rebased"]);
+      yield* git(["config", "branch.rebased.t3-merge-base-ref", "refs/remotes/origin/v2"]);
+      const [status] = yield* statuses(["rebased"]);
+      assert.equal(status?.targetRef, "refs/remotes/origin/v2");
+      assert.equal(status?.upstream?.mergeStatus, "merged");
+    }),
+  );
+
   it.effect(
     "force-deletes reviewed unmerged and unverified branches only with explicit opt-in",
     () =>
