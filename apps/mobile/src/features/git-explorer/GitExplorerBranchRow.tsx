@@ -43,6 +43,11 @@ export function GitExplorerBranchRow(props: {
   readonly selected: boolean;
   readonly onSelect: (revision: string) => void;
   readonly actions: ReturnType<typeof useGitExplorerBranchActions>;
+  readonly selection?: {
+    readonly checked: boolean;
+    readonly disabled: boolean;
+    readonly onToggle: () => void;
+  };
 }) {
   const ref = props.branch;
   const target = gitExplorerTarget(props.params);
@@ -80,7 +85,8 @@ export function GitExplorerBranchRow(props: {
       : query.isPending
         ? "Wait for the merge status check."
         : gitExplorerBranchDeletionBlock(ref, status ?? undefined, true));
-  const canDelete = ref.kind === "local" && blockedReason === null && status !== null;
+  const canDelete =
+    !props.selection && ref.kind === "local" && blockedReason === null && status !== null;
   const requestDelete = () => {
     if (canDelete && status) props.actions.confirmDelete(ref, status);
   };
@@ -96,25 +102,45 @@ export function GitExplorerBranchRow(props: {
   const leaf = props.displayName.slice(slash + 1);
   const row = (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={props.selection ? "checkbox" : "button"}
       accessibilityLabel={`${ref.shortName}. ${current ? "Currently checked out. " : ""}${ref.kind === "tag" ? "Tag" : ref.kind === "remote" ? "Remote-tracking branch" : `${formatGitExplorerSync(ref)}. Local branch: ${mergeDescription}. ${statusDetail} ${upstream.description}`}${ref.upstream ? `. Tracks ${ref.upstream}` : ""}${ref.kind === "local" && blockedReason ? `. ${blockedReason}` : ""}`}
       accessibilityHint={
-        ref.kind === "local" ? "Long press for branch details and actions." : undefined
+        props.selection
+          ? "Select this branch for deletion."
+          : ref.kind === "local"
+            ? "Long press for branch details and actions."
+            : undefined
       }
-      accessibilityState={{ selected: props.selected, busy: props.actions.busyBranch === ref.name }}
+      accessibilityState={
+        props.selection
+          ? { checked: props.selection.checked, disabled: props.selection.disabled }
+          : { selected: props.selected, busy: props.actions.busyBranch === ref.name }
+      }
+      disabled={props.selection?.disabled}
       accessibilityActions={
         canDelete ? [{ name: "delete", label: "Delete local branch" }] : undefined
       }
       onAccessibilityAction={(event) => {
         if (event.nativeEvent.actionName === "delete") requestDelete();
       }}
-      onPress={() => props.onSelect(ref.hash)}
+      onPress={() => (props.selection ? props.selection.onToggle() : props.onSelect(ref.hash))}
       style={{ height: rowHeight }}
       className={cn(
         "flex-row items-center gap-1 px-3",
-        props.selected ? "bg-primary/10" : hovered ? "bg-row-hover" : "bg-card",
+        (props.selection ? props.selection.checked : props.selected)
+          ? "bg-primary/10"
+          : hovered
+            ? "bg-row-hover"
+            : "bg-card",
       )}
     >
+      {props.selection ? (
+        <SymbolView
+          name={props.selection.checked ? "checkmark.circle.fill" : "circle"}
+          size={16}
+          tintColorClassName="accent-primary-text"
+        />
+      ) : null}
       {current ? (
         <View
           style={{ width: 2, height: 14, top: (rowHeight - 14) / 2 }}
@@ -205,7 +231,7 @@ export function GitExplorerBranchRow(props: {
       ) : null}
     </Pressable>
   );
-  if (ref.kind !== "local") return row;
+  if (ref.kind !== "local" || props.selection) return row;
   return (
     <GestureDetector gesture={hoverGesture}>
       <Menu

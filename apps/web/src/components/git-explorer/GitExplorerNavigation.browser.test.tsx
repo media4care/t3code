@@ -116,6 +116,7 @@ function Explorer({ overview }: { overview: GitExplorerOverviewResult }) {
           onSelect={setRevision}
           refresh={() => {}}
           refreshRevision={0}
+          filters={{ historyScope: "all", searchField: "message", search: "" }}
         />
       </div>
       {revision !== undefined ? (

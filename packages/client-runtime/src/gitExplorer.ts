@@ -252,3 +252,25 @@ export function prepareGitExplorerBranchDeletion(
     ].join("\n\n"),
   };
 }
+
+export function prepareGitExplorerBranchesDeletion(
+  references: readonly GitExplorerRef[],
+  statuses: readonly GitExplorerBranchStatus[],
+  force = false,
+) {
+  const byName = new Map(statuses.map((status) => [status.name, status]));
+  const eligible: {
+    reference: GitExplorerRef;
+    deletion: NonNullable<ReturnType<typeof prepareGitExplorerBranchDeletion>>;
+  }[] = [];
+  const skipped: { reference: GitExplorerRef; reason: string }[] = [];
+  for (const reference of new Map(references.map((ref) => [ref.name, ref])).values()) {
+    const status = byName.get(reference.name);
+    const deletion =
+      prepareGitExplorerBranchDeletion(reference, status) ??
+      (force ? prepareGitExplorerBranchDeletion(reference, status, true) : null);
+    if (deletion) eligible.push({ reference, deletion });
+    else skipped.push({ reference, reason: gitExplorerBranchDeletionBlock(reference, status)! });
+  }
+  return { eligible, skipped };
+}

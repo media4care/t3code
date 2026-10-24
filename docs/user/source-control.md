@@ -73,8 +73,13 @@ locally stored refs, so fetch before relying on them for recent remote merges.
 To clean up a local branch, use **Delete** on its row and confirm. On touch devices, use the
 branch menu. Unmerged branches and branches whose merge status cannot be verified require
 explicit force-deletion confirmation. This can lose commits that are not saved on another
-branch. On web and desktop, deleting a branch folder reviews all branches inside it; select
-**Force delete unmerged or unverified branches** to include those branches. Base branches and
+branch. To delete several branches together, choose **Select** on web or desktop, or
+**Select branches** on mobile, choose the local branches, then **Delete selected**. You can select
+all branches; on web and desktop, searching first limits **All matching** to the search results.
+Review the list before confirming. On web and desktop, deleting a branch folder reviews all
+branches inside it. Select **Force delete unmerged or unverified branches** in the review to
+include those branches. If a deletion fails, earlier deletions remain completed and the remaining
+branches are kept; close the review and select them again to retry. Base branches and
 branches checked out in any worktree are protected. Remote branches are never deleted.
 Branch-specific Git configuration is retained.
 

@@ -1,12 +1,15 @@
+import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   GitExplorerBranchStatus,
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
+  GitExplorerRef,
 } from "@t3tools/contracts";
 import {
   describeGitExplorerMerge,
   gitExplorerUpstreamMergeSummary,
+  prepareGitExplorerBranchesDeletion,
 } from "@t3tools/client-runtime/git-explorer";
 import {
   isAtomCommandInterrupted,
@@ -15,6 +18,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { gitExplorerEnvironment } from "~/state/git-explorer";
+import { useEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import {
@@ -28,21 +32,25 @@ import {
 import { toastManager } from "../ui/toast";
 import { prepareGitExplorerFolderDeletion } from "./gitExplorerBranches.logic";
 
-export function GitExplorerFolderDeletion({
+export function GitExplorerBranchDeletion({
   folder,
+  references,
   environmentId,
   input,
   overview,
   onClose,
   refresh,
 }: {
-  folder: string;
+  folder?: string;
+  references: readonly GitExplorerRef[];
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
   onClose: () => void;
   refresh: () => void;
 }) {
+  const allowed = useAtomValue(gitExplorerEnvironment.deleteBranch.permissionAtom(environmentId));
+  const connected = useEnvironment(environmentId)?.connection.phase === "connected";
   const readStatuses = useAtomCommand(gitExplorerEnvironment.readBranchStatuses, {
     reportFailure: false,
   });
@@ -50,14 +58,18 @@ export function GitExplorerFolderDeletion({
     reportFailure: false,
   });
   // Freeze the reviewed scope; refreshes must not add new branches to a pending deletion.
-  const [captured] = useState(() => ({ input, overview }));
+  const [captured] = useState(() => ({ input, overview, references }));
   const [statuses, setStatuses] = useState<GitExplorerBranchStatus[] | null>(null);
   const [force, setForce] = useState(false);
   const safeReview = statuses
-    ? prepareGitExplorerFolderDeletion(folder, captured.overview.refs, statuses)
+    ? folder
+      ? prepareGitExplorerFolderDeletion(folder, captured.references, statuses)
+      : prepareGitExplorerBranchesDeletion(captured.references, statuses)
     : null;
   const forceReview = statuses
-    ? prepareGitExplorerFolderDeletion(folder, captured.overview.refs, statuses, true)
+    ? folder
+      ? prepareGitExplorerFolderDeletion(folder, captured.references, statuses, true)
+      : prepareGitExplorerBranchesDeletion(captured.references, statuses, true)
     : null;
   const review = force ? forceReview : safeReview;
   const forceCount = (forceReview?.eligible.length ?? 0) - (safeReview?.eligible.length ?? 0);
@@ -69,9 +81,7 @@ export function GitExplorerFolderDeletion({
   useEffect(() => {
     let active = true;
     const load = async () => {
-      const refs = captured.overview.refs.filter(
-        (ref) => ref.kind === "local" && ref.shortName.startsWith(`${folder}/`),
-      );
+      const refs = captured.references;
       const statuses: GitExplorerBranchStatus[] = [];
       for (let index = 0; index < refs.length; index += 32) {
         const result = await readStatuses({
@@ -84,10 +94,14 @@ export function GitExplorerFolderDeletion({
         });
         if (!active) return;
         if (result._tag !== "Success") {
-          if (!isAtomCommandInterrupted(result)) {
-            const failure = squashAtomCommandFailure(result);
-            setError(failure instanceof Error ? failure.message : "Could not review branches.");
-          }
+          const failure = isAtomCommandInterrupted(result)
+            ? null
+            : squashAtomCommandFailure(result);
+          setError(
+            failure instanceof Error
+              ? failure.message
+              : "Could not review branches. Close this review and try again.",
+          );
           return;
         }
         statuses.push(...result.value.branches);
@@ -98,9 +112,9 @@ export function GitExplorerFolderDeletion({
     return () => {
       active = false;
     };
-  }, [captured, environmentId, folder, readStatuses]);
+  }, [captured, environmentId, readStatuses]);
   const remove = async () => {
-    if (!review || inFlight.current) return;
+    if (!review || inFlight.current || !allowed || !connected) return;
     inFlight.current = true;
     setPending(true);
     setError(null);
@@ -123,6 +137,7 @@ export function GitExplorerFolderDeletion({
         return;
       }
       completed.add(entry.reference.name);
+      setDeleted(new Set(completed));
     }
     toastManager.add({
       type: "success",
@@ -146,10 +161,12 @@ export function GitExplorerFolderDeletion({
     >
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Delete branches in {folder}</DialogTitle>
+          <DialogTitle>
+            {folder ? `Delete branches in ${folder}` : "Delete selected branches"}
+          </DialogTitle>
           <DialogDescription>
-            Review the local branches below. Remote branches and worktree files are unchanged. The
-            folder disappears when no branches remain.
+            Review the local branches below. Remote branches and worktree files are unchanged.
+            {folder ? " The folder disappears when no branches remain." : null}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-80 space-y-3 overflow-y-auto px-6 py-4 text-xs">
@@ -244,11 +261,11 @@ export function GitExplorerFolderDeletion({
           </Button>
           <Button
             variant="destructive"
-            disabled={!remaining.length || pending || error !== null}
+            disabled={!remaining.length || pending || error !== null || !allowed || !connected}
             onClick={() => void remove()}
           >
             {pending
-              ? "Deleting…"
+              ? `Deleting… (${deleted.size}/${review?.eligible.length ?? 0})`
               : `${force ? "Force delete" : "Delete"} ${remaining.length} ${remaining.length === 1 ? "branch" : "branches"}`}
           </Button>
         </DialogFooter>

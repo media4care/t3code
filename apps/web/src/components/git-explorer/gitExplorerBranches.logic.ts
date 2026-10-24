@@ -1,7 +1,4 @@
-import {
-  gitExplorerBranchDeletionBlock,
-  prepareGitExplorerBranchDeletion,
-} from "@t3tools/client-runtime/git-explorer";
+import { prepareGitExplorerBranchesDeletion } from "@t3tools/client-runtime/git-explorer";
 import type { GitExplorerBranchStatus, GitExplorerRef } from "@t3tools/contracts";
 
 export type GitExplorerBranchRow =
@@ -56,20 +53,9 @@ export function prepareGitExplorerFolderDeletion(
   statuses: readonly GitExplorerBranchStatus[],
   force = false,
 ) {
-  const byName = new Map(statuses.map((status) => [status.name, status]));
-  const eligible: {
-    reference: GitExplorerRef;
-    deletion: NonNullable<ReturnType<typeof prepareGitExplorerBranchDeletion>>;
-  }[] = [];
-  const skipped: { reference: GitExplorerRef; reason: string }[] = [];
-  for (const reference of references) {
-    if (reference.kind !== "local" || !reference.shortName.startsWith(`${folder}/`)) continue;
-    const status = byName.get(reference.name);
-    const deletion =
-      prepareGitExplorerBranchDeletion(reference, status) ??
-      (force ? prepareGitExplorerBranchDeletion(reference, status, true) : null);
-    if (deletion) eligible.push({ reference, deletion });
-    else skipped.push({ reference, reason: gitExplorerBranchDeletionBlock(reference, status)! });
-  }
-  return { eligible, skipped };
+  return prepareGitExplorerBranchesDeletion(
+    references.filter((ref) => ref.kind === "local" && ref.shortName.startsWith(`${folder}/`)),
+    statuses,
+    force,
+  );
 }
