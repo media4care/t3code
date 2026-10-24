@@ -16,6 +16,16 @@ const runtimeVersionPolicy =
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const iosClerkRedirectUrl = repoEnv.T3CODE_IOS_CLERK_REDIRECT_URL?.trim();
+const iosClerkRedirect = iosClerkRedirectUrl ? URL.parse(iosClerkRedirectUrl) : null;
+if (
+  iosClerkRedirectUrl &&
+  (!iosClerkRedirect?.host || ["http:", "https:", "file:"].includes(iosClerkRedirect.protocol))
+) {
+  throw new Error(
+    "T3CODE_IOS_CLERK_REDIRECT_URL must be an absolute custom-scheme URL such as com.example.app://callback.",
+  );
+}
 
 // Compiled into the native project. Without a relay, Observe's native side could dispatch to
 // Expo's own ingest before observe.ts turns it off; `.invalid` never resolves (RFC 6761).
@@ -258,6 +268,7 @@ const config: ExpoConfig = {
       "keychain-access-groups": [`$(AppIdentifierPrefix)${variant.iosBundleIdentifier}`],
     },
     infoPlist: {
+      ...(iosClerkRedirectUrl ? { ClerkOAuthRedirectUrl: iosClerkRedirectUrl } : {}),
       UISupportedInterfaceOrientations: [
         "UIInterfaceOrientationPortrait",
         "UIInterfaceOrientationLandscapeLeft",

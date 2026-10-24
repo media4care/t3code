@@ -130,3 +130,26 @@ diff --git a/ios/ClerkNativeViewHost.swift b/ios/ClerkNativeViewHost.swift
 +  }
 +  return nil
 +}
+diff --git a/ios/ClerkNativeBridge.swift b/ios/ClerkNativeBridge.swift
+index 5616f82ae37354c55ed9b89f2d259a92e8d50f63..caa9d76013079a05b2a4020ec84080bcdebd4a3b 100644
+--- a/ios/ClerkNativeBridge.swift
++++ b/ios/ClerkNativeBridge.swift
+@@ -671,10 +671,16 @@ final class ClerkNativeBridge {
+
+   private static func makeClerkOptions(proxyUrl: String?) -> Clerk.Options {
+     let middleware = Clerk.Options.MiddlewareConfig(request: [ClerkExpoHeaderMiddleware()])
++    // Locally signed variants can retain an approved OAuth callback with their own bundle identity.
++    var redirectConfig = Clerk.Options.RedirectConfig()
++    if let redirectUrl = Bundle.main.object(forInfoDictionaryKey: "ClerkOAuthRedirectUrl") as? String,
++       let scheme = URL(string: redirectUrl)?.scheme {
++      redirectConfig = .init(redirectUrl: redirectUrl, callbackUrlScheme: scheme)
++    }
+     guard let service = keychainService else {
+-      return .init(proxyUrl: proxyUrl, middleware: middleware)
++      return .init(proxyUrl: proxyUrl, redirectConfig: redirectConfig, middleware: middleware)
+     }
+-    return .init(keychainConfig: .init(service: service), proxyUrl: proxyUrl, middleware: middleware)
++    return .init(keychainConfig: .init(service: service), proxyUrl: proxyUrl, redirectConfig: redirectConfig, middleware: middleware)
+   }
+
+   @MainActor
