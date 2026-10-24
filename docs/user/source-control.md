@@ -48,12 +48,17 @@ Ahead and behind counts compare each branch with its configured upstream using l
 refs. The last recorded fetch time, when available, describes local fetch information; it does
 not confirm the remote's current state. **Refresh** rereads local Git data. Use **Fetch** on web
 or desktop, or ask an agent to fetch, if you need newer remote-tracking information.
+**No upstream** means no tracking branch is configured. **Missing upstream** means one is
+configured but its ref is absent from the locally fetched data; that does not prove a merge.
 
 Local branches also show whether they are merged into their comparison base, usually the
 remote's default branch. **Equivalent** means their commit patches already exist on that base;
 squashed or edited changes may not be recognized. Hover the indicator, or long-press the branch
-on mobile, to see its comparison. This uses locally stored refs, so fetch before relying on it
-for recent remote merges.
+on mobile, to see its comparison. Tracked branches separately show **Upstream merged**,
+**Upstream equivalent**, **Upstream unmerged**, or **Upstream unknown** against that same base.
+This identifies a rebased remote branch that was merged while the local branch still points at
+the older commits. Local changes are checked separately before deletion. Both comparisons use
+locally stored refs, so fetch before relying on them for recent remote merges.
 
 To clean up a local branch, use **Delete** on its row and confirm. On touch devices, use the
 branch menu. Unmerged branches and branches whose merge status cannot be verified require
