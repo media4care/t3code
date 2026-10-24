@@ -46,6 +46,7 @@ import {
   alertForAttentionTransition,
   alertForNewlyTerminal,
   alertForTerminalAggregate,
+  attentionTransitionRows,
   rowPhasesChanged,
   shouldAlertForActivity,
 } from "./agentActivityAlerts.ts";
@@ -540,6 +541,7 @@ const make = Effect.gen(function* () {
     readonly threadId: string;
     readonly phase: RelayAgentActivityAggregateState["activities"][number]["phase"];
     readonly updatedAt: string;
+    readonly requestId?: string;
   }) {
     return yield* activityRows
       .getForUserThread({
@@ -552,7 +554,8 @@ const make = Effect.gen(function* () {
           (current) =>
             current !== null &&
             current.phase === input.phase &&
-            current.updatedAt === input.updatedAt,
+            current.updatedAt === input.updatedAt &&
+            (input.requestId === undefined || current.notification?.requestId === input.requestId),
         ),
         Effect.catchCause((cause) =>
           Effect.logWarning("agent-activity state recheck failed; allowing queued delivery", {
@@ -607,6 +610,7 @@ const make = Effect.gen(function* () {
       threadId: input.notification.threadId,
       phase: input.notification.phase,
       updatedAt: input.notification.updatedAt,
+      ...(input.notification.request ? { requestId: input.notification.request.requestId } : {}),
     });
   });
 
@@ -873,7 +877,12 @@ const make = Effect.gen(function* () {
       notification.phase !== undefined && notification.updatedAt !== undefined
         ? shouldAlertForActivity({
             ...notification,
-            phase: notification.phase,
+            phase:
+              notification.notificationKind === "user_input"
+                ? "waiting_for_input"
+                : notification.notificationKind === "approval"
+                  ? "waiting_for_approval"
+                  : notification.phase,
             updatedAt: notification.updatedAt,
             preferences,
             nowMs: now.epochMilliseconds,
@@ -1065,6 +1074,24 @@ const make = Effect.gen(function* () {
             aggregate: input.aggregate,
             nowMs: input.nowMs,
           });
+      const questionNotifications =
+        !input.replay &&
+        delivery.kind === "live_activity_update" &&
+        input.aggregate &&
+        input.target.push_token &&
+        parsePreferences(input.target.preferences_json)?.notificationsEnabled
+          ? attentionTransitionRows({
+              // A newly armed card may not have delivered a baseline yet. Replays are excluded above.
+              previousAggregate: parseAggregate(input.target.last_aggregate_json) ?? {
+                ...input.aggregate,
+                activities: [],
+              },
+              nextAggregate: input.aggregate,
+              preferences: parsePreferences(input.target.preferences_json),
+            })
+              .filter((row) => row.notification !== undefined)
+              .map(notificationForActivity)
+          : [];
       // Use the end alert only when no companion notification will ring, preserving feedback for Live-Activity-only users.
       const alert = input.replay
         ? null
@@ -1075,7 +1102,9 @@ const make = Effect.gen(function* () {
                 aggregate: delivery.aggregate,
                 preferences: parsePreferences(input.target.preferences_json),
               })
-          : delivery.alert;
+          : questionNotifications.length > 0
+            ? null
+            : delivery.alert;
       const result = yield* deliveryQueue.enqueueLiveActivity({
         userId: input.target.user_id,
         deviceId: input.target.device_id,
@@ -1086,6 +1115,16 @@ const make = Effect.gen(function* () {
         aggregate: delivery.aggregate,
         alert,
       });
+      for (const question of questionNotifications) {
+        yield* deliveryQueue.enqueuePushNotification({
+          userId: input.target.user_id,
+          deviceId: input.target.device_id,
+          token: input.target.push_token!,
+          bundleId: input.target.bundle_id,
+          apsEnvironment: input.target.aps_environment,
+          notification: question,
+        });
+      }
       if (delivery.kind === "live_activity_end" && notification && input.target.push_token) {
         yield* deliveryQueue.enqueuePushNotification({
           userId: input.target.user_id,

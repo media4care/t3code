@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./agentNotification": {
+      "types": "./src/agentNotification.ts",
+      "import": "./src/agentNotification.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
