@@ -380,7 +380,7 @@ function GitExplorerHistoryList({
           extraData={extraData}
           onEndReached={loadMore}
           onEndReachedThreshold={0.5}
-          className="min-h-0 flex-1 overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="min-h-0 flex-1 overscroll-contain outline-none"
           renderItem={({ item: { commit, graph: row }, index }) => {
             const references = refsByHash.get(commit.hash) ?? [];
             const { visible: visibleReferences, hidden: hiddenReferences } =
