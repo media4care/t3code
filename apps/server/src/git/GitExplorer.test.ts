@@ -1191,6 +1191,102 @@ const branchFixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer branch review", (it) => {
+  it.effect(
+    "force-deletes reviewed unmerged and unverified branches only with explicit opt-in",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, pending, target, root, statuses } = yield* branchFixture;
+        yield* git(["switch", "-c", "backup/with-merge", root]);
+        yield* git(["merge", "--no-ff", "rebased", "-m", "backup merge"]);
+        const backup = yield* git(["rev-parse", "HEAD"]);
+        yield* git(["switch", "main"]);
+        assert.equal((yield* statuses(["backup/with-merge"]))[0]?.reason, "merge-commits");
+        for (const [name, hash] of [
+          ["pending", pending],
+          ["backup/with-merge", backup],
+        ]) {
+          const request = {
+            ...scope,
+            branchName: `refs/heads/${name}`,
+            expectedHash: hash!,
+            expectedTargetRef: "refs/remotes/origin/main",
+            expectedTargetHash: target,
+            allowEquivalent: false,
+          };
+          assert.equal(
+            (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+            "branch-not-merged",
+          );
+          yield* explorer.deleteBranch({ ...request, force: true });
+          assert.equal(yield* git(["branch", "--list", name!]), "");
+        }
+        assert.equal(yield* git(["rev-parse", "refs/remotes/origin/pending"]), pending);
+        assert.equal(yield* git(["symbolic-ref", "HEAD"]), "refs/heads/main");
+      }),
+  );
+
+  it.effect(
+    "force-deletes without a comparison branch while preserving the checked-out branch",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, root } = yield* fixture;
+        yield* git(["branch", "backup/no-base"]);
+        yield* git(["config", "remote.origin.url", "https://invalid.example/never-contact.git"]);
+        const request = {
+          ...scope,
+          branchName: "refs/heads/backup/no-base",
+          expectedHash: root,
+          expectedTargetRef: null,
+          expectedTargetHash: null,
+          allowEquivalent: false,
+        };
+        assert.equal(
+          (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+          "branch-not-merged",
+        );
+        yield* explorer.deleteBranch({ ...request, force: true });
+        assert.equal(yield* git(["branch", "--list", "backup/no-base"]), "");
+        assert.equal(yield* git(["rev-parse", "main"]), root);
+      }),
+  );
+
+  it.effect("force deletion still rejects protected, checked-out and changed branches", () =>
+    Effect.gen(function* () {
+      const { explorer, git, pending, target, root, fs, path } = yield* branchFixture;
+      const request = {
+        ...scope,
+        branchName: "refs/heads/pending",
+        expectedHash: pending,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: false,
+        force: true,
+      };
+      assert.equal(
+        (yield* explorer
+          .deleteBranch({ ...request, branchName: "refs/heads/main", expectedHash: target })
+          .pipe(Effect.flip)).reason,
+        "branch-protected",
+      );
+      assert.equal(
+        (yield* explorer.deleteBranch({ ...request, expectedHash: root }).pipe(Effect.flip)).reason,
+        "branch-changed",
+      );
+      assert.equal(
+        (yield* explorer.deleteBranch({ ...request, expectedTargetHash: root }).pipe(Effect.flip))
+          .reason,
+        "branch-changed",
+      );
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-force-delete-worktree-" });
+      yield* git(["worktree", "add", path.join(directory, "linked"), "pending"]);
+      assert.equal(
+        (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+        "branch-checked-out",
+      );
+      assert.equal(yield* git(["rev-parse", "pending"]), pending);
+    }),
+  );
+
   it.effect("protects a merged branch reserved by detached rebase and bisect operations", () =>
     Effect.gen(function* () {
       const { explorer, git, target, root, cwd, fs, path } = yield* branchFixture;

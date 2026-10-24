@@ -55,10 +55,13 @@ squashed or edited changes may not be recognized. Hover the indicator, or long-p
 on mobile, to see its comparison. This uses locally stored refs, so fetch before relying on it
 for recent remote merges.
 
-To clean up a merged local branch, use **Delete** on its row and confirm. On touch devices, use
-the branch menu. Deletion is available only when its changes are confirmed merged or rebased
-into the base. Base branches and branches checked out in any worktree are protected. Remote
-branches are never deleted. Branch-specific Git configuration is retained.
+To clean up a local branch, use **Delete** on its row and confirm. On touch devices, use the
+branch menu. Unmerged branches and branches whose merge status cannot be verified require
+explicit force-deletion confirmation. This can lose commits that are not saved on another
+branch. On web and desktop, deleting a branch folder reviews all branches inside it; select
+**Force delete unmerged or unverified branches** to include those branches. Base branches and
+branches checked out in any worktree are protected. Remote branches are never deleted.
+Branch-specific Git configuration is retained.
 
 ## Connect an account
 
