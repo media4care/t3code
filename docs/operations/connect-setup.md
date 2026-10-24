@@ -75,6 +75,16 @@ Development uses `t3code-dev://app`; production uses `t3code://app`. Update the 
 The Clerk Electron integration handles token
 persistence and system-browser callback delivery.
 
+## iOS native sign-in redirects
+
+Clerk defaults to `<bundleIdentifier>://callback`. The production iOS callback is
+`com.t3tools.t3code://callback`. A locally signed build with a different bundle ID can use an
+already authorized callback by setting `T3CODE_IOS_CLERK_REDIRECT_URL` before prebuilding iOS.
+This configures Clerk's native web authentication session independently of the app's bundle ID
+and Keychain storage. It does not register the callback scheme as an app-wide deep link;
+the active `ASWebAuthenticationSession` receives the OAuth return directly. The configured URL
+must already be authorized by the Clerk instance selected by the publishable key.
+
 ## Android native sign-in redirects
 
 Clerk's native Android SDK uses `clerk://<applicationId>.callback`. In the Clerk instance selected by the app's publishable key, add each supported package to **Native applications > Allowlist for mobile SSO redirect**:
