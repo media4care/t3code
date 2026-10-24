@@ -21,6 +21,28 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect("keeps fork update checks and installs off by default", () => {
+    const harness = makeHarness({ env: { T3CODE_DISABLE_AUTO_UPDATE: undefined } });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        assert.equal((yield* updates.getState).status, "disabled");
+        yield* TestClock.adjust("10 minutes");
+        assert.isFalse((yield* updates.check("manual")).checked);
+        assert.equal((yield* updates.setChannel("nightly")).status, "disabled");
+        assert.isFalse((yield* updates.download).accepted);
+        assert.isFalse((yield* updates.install).accepted);
+        assert.equal(harness.checkCount(), 0);
+        assert.equal(harness.downloadCount(), 0);
+        assert.equal(harness.quitAndInstalls(), 0);
+        assert.equal(harness.listenerCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("updates Linux .deb installs and leaves other non-AppImage installs off", () =>
     Effect.gen(function* () {
       const linuxState = (packageType: string | undefined) =>
@@ -42,7 +64,7 @@ describe("DesktopUpdates", () => {
 
   it.effect("keeps the disabled reason available after configuration and channel changes", () => {
     const harness = makeHarness({ env: { T3CODE_DISABLE_AUTO_UPDATE: "true" } });
-    const reason = "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";
+    const reason = "App updates are disabled in this build.";
 
     return Effect.scoped(
       Effect.gen(function* () {
