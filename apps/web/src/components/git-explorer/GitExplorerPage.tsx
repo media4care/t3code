@@ -1,3 +1,4 @@
+import { prepareGitExplorerBranchDeletion } from "@t3tools/client-runtime/git-explorer";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -45,7 +46,6 @@ import { GitExplorerHint } from "./GitExplorerHint";
 import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerReview } from "./GitExplorerReview";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
-import { prepareGitExplorerBranchDeletion } from "./gitExplorerBranches.logic";
 
 function HistoryReviewDivider({
   share,
@@ -162,7 +162,9 @@ function RepositoryExplorer({
     branchStatus: GitExplorerBranchStatus,
   ) => {
     if (deletionInFlight.current || deleteUnavailable !== null) return;
-    const review = prepareGitExplorerBranchDeletion(reference, branchStatus);
+    const review =
+      prepareGitExplorerBranchDeletion(reference, branchStatus) ??
+      prepareGitExplorerBranchDeletion(reference, branchStatus, true);
     if (!review) return;
     deletionInFlight.current = true;
     setPendingBranch(reference.name);

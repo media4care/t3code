@@ -1,4 +1,6 @@
 import {
+  describeGitExplorerMerge,
+  gitExplorerBranchDeletionBlock,
   formatGitExplorerSync,
   gitExplorerEmphasizedRefs,
 } from "@t3tools/client-runtime/git-explorer";
@@ -37,12 +39,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  describeGitExplorerMerge,
-  gitExplorerBranchRows,
-  gitExplorerBranchDeletionBlock,
-  type GitExplorerBranchRow,
-} from "./gitExplorerBranches.logic";
+import { gitExplorerBranchRows, type GitExplorerBranchRow } from "./gitExplorerBranches.logic";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
 
@@ -218,7 +215,7 @@ function ReferenceRow({
   const deleteBlock =
     actions?.deleteUnavailable ??
     (actions?.pendingBranch ? "Another branch deletion is in progress." : null) ??
-    gitExplorerBranchDeletionBlock(reference, status);
+    gitExplorerBranchDeletionBlock(reference, status, true);
   const showActions = (position: { x: number; y: number }) => {
     const canManage = actions && reference.kind === "local";
     const blocked =

@@ -1,5 +1,8 @@
 import type { GitExplorerOverviewResult, GitExplorerRef } from "@t3tools/contracts";
-import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
+import {
+  formatGitExplorerSync,
+  gitExplorerBranchDeletionBlock,
+} from "@t3tools/client-runtime/git-explorer";
 import { Pressable, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
@@ -13,7 +16,6 @@ import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { useActiveGitQuery } from "./useActiveGitQuery";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 import {
-  branchDeletionBlockedReason,
   describeBranchMerge,
   type useGitExplorerBranchActions,
 } from "./useGitExplorerBranchActions";
@@ -76,14 +78,8 @@ export function GitExplorerBranchRow(props: {
       ? "Refresh to retry the merge status check."
       : query.isPending
         ? "Wait for the merge status check."
-        : branchDeletionBlockedReason(status));
-  const canDelete =
-    ref.kind === "local" &&
-    blockedReason === null &&
-    status !== null &&
-    (status.mergeStatus === "merged" || status.mergeStatus === "equivalent") &&
-    status.targetRef !== null &&
-    status.targetHash !== null;
+        : gitExplorerBranchDeletionBlock(ref, status ?? undefined, true));
+  const canDelete = ref.kind === "local" && blockedReason === null && status !== null;
   const requestDelete = () => {
     if (canDelete && status) props.actions.confirmDelete(ref, status);
   };

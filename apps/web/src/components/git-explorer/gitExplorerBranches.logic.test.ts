@@ -1,9 +1,9 @@
+import { prepareGitExplorerBranchDeletion } from "@t3tools/client-runtime/git-explorer";
 import type { GitExplorerBranchStatus, GitExplorerRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   gitExplorerBranchRows,
-  prepareGitExplorerBranchDeletion,
   prepareGitExplorerFolderDeletion,
 } from "./gitExplorerBranches.logic";
 
@@ -141,6 +141,61 @@ describe("Git Explorer branch deletion review", () => {
 });
 
 describe("folder deletion review", () => {
+  it("requires force opt-in for unknown and unmerged branches and still keeps checked-out branches", () => {
+    const refs = ["backup/unverified", "backup/unmerged", "backup/active"].map((shortName) => ({
+      ...reference,
+      shortName,
+      name: `refs/heads/${shortName}`,
+    }));
+    const statuses: GitExplorerBranchStatus[] = refs.map((ref, index) => ({
+      ...merged,
+      name: ref.name,
+      mergeStatus: index === 1 ? "unmerged" : "unknown",
+      reason: index === 1 ? null : "limit",
+      deleteBlockedReason: index === 2 ? "checked-out" : index === 1 ? "unmerged" : "unknown",
+    }));
+    const safe = prepareGitExplorerFolderDeletion("backup", refs, statuses);
+    expect(safe.eligible).toHaveLength(0);
+    expect(safe.skipped[0]?.reason).toContain("analysis limit");
+    const forced = prepareGitExplorerFolderDeletion("backup", refs, statuses, true);
+    expect(forced.eligible.map(({ reference }) => reference.shortName)).toEqual([
+      "backup/unverified",
+      "backup/unmerged",
+    ]);
+    expect(forced.eligible.every(({ deletion }) => deletion.input.force === true)).toBe(true);
+    expect(forced.skipped.map(({ reference }) => reference.shortName)).toEqual(["backup/active"]);
+    expect(prepareGitExplorerFolderDeletion("backup", refs, statuses).eligible).toHaveLength(0);
+  });
+
+  it("explains force deletion without a comparison base and refuses stale or protected reviews", () => {
+    const unknown: GitExplorerBranchStatus = {
+      ...merged,
+      mergeStatus: "unknown",
+      reason: "missing-base",
+      deleteBlockedReason: "unknown",
+      targetRef: null,
+      targetHash: null,
+    };
+    const review = prepareGitExplorerBranchDeletion(reference, unknown, true);
+    expect(review?.input).toMatchObject({
+      force: true,
+      expectedTargetRef: null,
+      expectedTargetHash: null,
+    });
+    expect(review?.confirmation).toContain("Force delete");
+    expect(review?.confirmation).toContain("lose commits");
+    expect(
+      prepareGitExplorerBranchDeletion(reference, { ...unknown, hash: "c".repeat(40) }, true),
+    ).toBeNull();
+    expect(
+      prepareGitExplorerBranchDeletion(
+        reference,
+        { ...unknown, deleteBlockedReason: "protected" },
+        true,
+      ),
+    ).toBeNull();
+  });
+
   it("includes nested local branches, excludes prefix siblings and keeps blocked or stale branches", () => {
     const refs = [
       "feature/a",

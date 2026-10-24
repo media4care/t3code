@@ -4,6 +4,7 @@ import type {
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
 } from "@t3tools/contracts";
+import { describeGitExplorerMerge } from "@t3tools/client-runtime/git-explorer";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -47,9 +48,17 @@ export function GitExplorerFolderDeletion({
   });
   // Freeze the reviewed scope; refreshes must not add new branches to a pending deletion.
   const [captured] = useState(() => ({ input, overview }));
-  const [review, setReview] = useState<ReturnType<typeof prepareGitExplorerFolderDeletion> | null>(
-    null,
-  );
+  const [statuses, setStatuses] = useState<GitExplorerBranchStatus[] | null>(null);
+  const [force, setForce] = useState(false);
+  const safeReview = statuses
+    ? prepareGitExplorerFolderDeletion(folder, captured.overview.refs, statuses)
+    : null;
+  const forceReview = statuses
+    ? prepareGitExplorerFolderDeletion(folder, captured.overview.refs, statuses, true)
+    : null;
+  const review = force ? forceReview : safeReview;
+  const forceCount = (forceReview?.eligible.length ?? 0) - (safeReview?.eligible.length ?? 0);
+  const statusesByName = new Map(statuses?.map((status) => [status.name, status]));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
@@ -80,7 +89,7 @@ export function GitExplorerFolderDeletion({
         }
         statuses.push(...result.value.branches);
       }
-      if (active) setReview(prepareGitExplorerFolderDeletion(folder, refs, statuses));
+      if (active) setStatuses(statuses);
     };
     void load();
     return () => {
@@ -149,8 +158,26 @@ export function GitExplorerFolderDeletion({
           {!review && !error ? <p>Checking branches…</p> : null}
           {review ? (
             <>
+              {forceCount > 0 ? (
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={force}
+                      disabled={pending || deleted.size > 0}
+                      onChange={(event) => setForce(event.target.checked)}
+                    />
+                    Force delete unmerged or unverified branches ({forceCount})
+                  </label>
+                  <p className="text-muted-foreground">
+                    This can lose commits that are not saved on another branch. This cannot be
+                    undone from Git Explorer. Checked-out and protected branches are kept.
+                  </p>
+                </div>
+              ) : null}
               <p className="font-medium">
-                Delete {remaining.length} merged or patch-equivalent{" "}
+                {force ? "Force delete" : "Delete"} {remaining.length}{" "}
+                {force ? "" : "merged or patch-equivalent "}
                 {remaining.length === 1 ? "branch" : "branches"}
               </p>
               <ul className="space-y-2">
@@ -158,10 +185,9 @@ export function GitExplorerFolderDeletion({
                   <li key={reference.name}>
                     <span className="font-medium">{reference.shortName}</span>
                     <span className="block text-muted-foreground">
-                      {deletion.input.allowEquivalent
-                        ? "Equivalent patches; original commits are not ancestors"
-                        : "Merged"}{" "}
-                      · {deletion.input.expectedTargetRef.replace(/^refs\/(heads|remotes)\//, "")}
+                      {deletion.input.force
+                        ? `Force deletion · ${describeGitExplorerMerge(statusesByName.get(reference.name))}`
+                        : `${deletion.input.allowEquivalent ? "Equivalent patches; original commits are not ancestors" : "Merged"} · ${deletion.input.expectedTargetRef?.replace(/^refs\/(heads|remotes)\//, "")}`}
                     </span>
                   </li>
                 ))}
@@ -200,7 +226,7 @@ export function GitExplorerFolderDeletion({
           >
             {pending
               ? "Deleting…"
-              : `Delete ${remaining.length} ${remaining.length === 1 ? "branch" : "branches"}`}
+              : `${force ? "Force delete" : "Delete"} ${remaining.length} ${remaining.length === 1 ? "branch" : "branches"}`}
           </Button>
         </DialogFooter>
       </DialogPopup>

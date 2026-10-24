@@ -659,13 +659,13 @@ const make = Effect.gen(function* () {
         ),
     );
   };
-  const computeBranchStatus = Effect.fn("GitExplorer.computeBranchStatus")(function* (
+  const branchDeletionContext = (
     snapshot: Snapshot,
     ref: GitExplorerRef,
-  ) {
+  ): GitExplorerBranchStatus => {
     const targetRef = baseForBranch(snapshot, ref.name);
     const targetHash = targetRef ? (snapshot.refsByName.get(targetRef)?.hash ?? null) : null;
-    const result: GitExplorerBranchStatus = {
+    return {
       name: ref.name,
       hash: ref.hash,
       targetRef,
@@ -678,22 +678,25 @@ const make = Effect.gen(function* () {
           ? "checked-out"
           : null,
     };
-    const classify = Effect.gen(function* (): Effect.fn.Return<
-      Pick<GitExplorerBranchStatus, "mergeStatus" | "reason">,
-      GitExplorerError
-    > {
+  };
+  const computeMergeAssessment = Effect.fn("GitExplorer.computeMergeAssessment")(
+    function* (
+      snapshot: Snapshot,
+      hash: string,
+      targetHash: string | null,
+    ): Effect.fn.Return<Pick<GitExplorerBranchStatus, "mergeStatus" | "reason">, GitExplorerError> {
       if (!targetHash) return { mergeStatus: "unknown", reason: "missing-base" };
       if (snapshot.shallowBoundary) return { mergeStatus: "unknown", reason: "shallow" };
       const cwd = snapshot.overview.selectedWorktreePath;
-      const ancestry = yield* run(cwd, ["merge-base", "--is-ancestor", ref.hash, targetHash], {
+      const ancestry = yield* run(cwd, ["merge-base", "--is-ancestor", hash, targetHash], {
         allowNonZero: true,
       });
       if (ancestry.exitCode === 0) return { mergeStatus: "merged", reason: null };
       if (ancestry.exitCode !== 1) return { mergeStatus: "unknown", reason: "read-failed" };
-      const common = yield* run(cwd, ["merge-base", ref.hash, targetHash], { allowNonZero: true });
+      const common = yield* run(cwd, ["merge-base", hash, targetHash], { allowNonZero: true });
       if (common.exitCode === 1) return { mergeStatus: "unknown", reason: "unrelated" };
       if (common.exitCode !== 0) return { mergeStatus: "unknown", reason: "read-failed" };
-      const range = `${targetHash}...${ref.hash}`;
+      const range = `${targetHash}...${hash}`;
       const walk = yield* run(cwd, [
         "rev-list",
         "--left-right",
@@ -708,7 +711,7 @@ const make = Effect.gen(function* () {
       if (commits.some((commit) => commit.startsWith(">") && commit.split(" ").length > 2))
         return { mergeStatus: "unknown", reason: "merge-commits" };
       const patches = yield* Effect.forEach(
-        [`${ref.hash}..${targetHash}`, `${targetHash}..${ref.hash}`],
+        [`${hash}..${targetHash}`, `${targetHash}..${hash}`],
         (range) =>
           run(
             cwd,
@@ -752,13 +755,21 @@ const make = Effect.gen(function* () {
         .filter(Boolean)
         .some((line) => !basePatches.has(line.split(" ")[0]));
       return { mergeStatus: unique ? "unmerged" : "equivalent", reason: null };
-    }).pipe(
-      Effect.timeout("10 seconds"),
-      Effect.catch(() =>
-        Effect.succeed({ mergeStatus: "unknown" as const, reason: "read-failed" as const }),
-      ),
-    );
-    const status = { ...result, ...(yield* classify) };
+    },
+    Effect.timeout("10 seconds"),
+    Effect.catch(() =>
+      Effect.succeed({ mergeStatus: "unknown" as const, reason: "read-failed" as const }),
+    ),
+  );
+  const computeBranchStatus = Effect.fn("GitExplorer.computeBranchStatus")(function* (
+    snapshot: Snapshot,
+    ref: GitExplorerRef,
+  ) {
+    const result = branchDeletionContext(snapshot, ref);
+    const status = {
+      ...result,
+      ...(yield* computeMergeAssessment(snapshot, ref.hash, result.targetHash)),
+    };
     return {
       ...status,
       deleteBlockedReason:
@@ -824,7 +835,8 @@ const make = Effect.gen(function* () {
     if (
       !input.branchName.startsWith("refs/heads/") ||
       !HASH.test(input.expectedHash) ||
-      !HASH.test(input.expectedTargetHash)
+      (input.expectedTargetHash !== null && !HASH.test(input.expectedTargetHash)) ||
+      (input.expectedTargetRef === null) !== (input.expectedTargetHash === null)
     )
       return yield* new GitExplorerError({ operation: "delete-branch", reason: "invalid-branch" });
     const context = yield* resolve(input);
@@ -856,7 +868,9 @@ const make = Effect.gen(function* () {
           operation: "delete-branch",
           reason: "branch-changed",
         });
-      const status = yield* computeBranchStatus(snapshot, ref);
+      const status = input.force
+        ? branchDeletionContext(snapshot, ref)
+        : yield* computeBranchStatus(snapshot, ref);
       if (
         status.targetRef !== input.expectedTargetRef ||
         status.targetHash !== input.expectedTargetHash
@@ -876,6 +890,7 @@ const make = Effect.gen(function* () {
           reason: "branch-checked-out",
         });
       if (
+        !input.force &&
         status.mergeStatus !== "merged" &&
         !(status.mergeStatus === "equivalent" && input.allowEquivalent)
       )
@@ -893,14 +908,15 @@ const make = Effect.gen(function* () {
         "for-each-ref",
         "--format=%(refname)%00%(objectname)",
         input.branchName,
-        input.expectedTargetRef,
+        ...(input.expectedTargetRef ? [input.expectedTargetRef] : []),
       ])).stdout
         .split("\n")
         .map((line) => line.split("\0"));
       if (
         hashes.find(([name]) => name === input.branchName)?.[1] !== input.expectedHash ||
-        hashes.find(([name]) => name === input.expectedTargetRef)?.[1] !==
-          input.expectedTargetHash ||
+        (input.expectedTargetRef !== null &&
+          hashes.find(([name]) => name === input.expectedTargetRef)?.[1] !==
+            input.expectedTargetHash) ||
         (yield* readMergeConfig(latest.cwd)).signature !== snapshot.mergeConfig.signature ||
         (yield* readShallowBoundary(latest.commonDirectory)) !== snapshot.shallowBoundary
       )
@@ -1043,7 +1059,9 @@ const make = Effect.gen(function* () {
               ],
               stdin: [
                 "start",
-                `verify ${input.expectedTargetRef} ${input.expectedTargetHash}`,
+                ...(input.expectedTargetRef
+                  ? [`verify ${input.expectedTargetRef} ${input.expectedTargetHash}`]
+                  : []),
                 `delete ${input.branchName} ${input.expectedHash}`,
                 "prepare",
                 "commit",
@@ -1073,8 +1091,9 @@ const make = Effect.gen(function* () {
             const rows = fresh.output.stdout.split("\n").map((line) => line.split("\0"));
             if (
               rows.find(([name]) => name === input.branchName)?.[1] !== input.expectedHash ||
-              rows.find(([name]) => name === input.expectedTargetRef)?.[1] !==
-                input.expectedTargetHash
+              (input.expectedTargetRef !== null &&
+                rows.find(([name]) => name === input.expectedTargetRef)?.[1] !==
+                  input.expectedTargetHash)
             )
               return yield* new GitExplorerError({
                 operation: "delete-branch",
