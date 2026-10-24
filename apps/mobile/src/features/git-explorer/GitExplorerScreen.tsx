@@ -17,25 +17,34 @@ import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
 import { useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
-export function GitRepositoriesScreen() {
+export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
   const navigation = useNavigation();
   const projects = useProjects();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const insets = useSafeAreaInsets();
+  const workspace = useWorkspaceTabs();
   return (
     <>
-      <AppBar
-        title="Git Explorer"
-        subtitle="Choose a repository"
-        onBack={() => navigation.goBack()}
-      />
+      {props.workspace && Platform.OS === "ios" ? null : (
+        <AppBar
+          title="Git Explorer"
+          subtitle="Choose a repository"
+          sidebar={!props.workspace}
+          onBack={props.workspace ? undefined : () => navigation.goBack()}
+        />
+      )}
       <ScreenContent>
         <FlatList
           data={projects}
           keyExtractor={(item) => JSON.stringify([item.environmentId, item.id])}
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={{ paddingBottom: insets.bottom }}
+          contentContainerStyle={{
+            paddingBottom: props.workspace
+              ? Math.max(insets.bottom, workspace?.bottomClearance ?? 0)
+              : insets.bottom,
+          }}
           ListEmptyComponent={
             <EmptyState
               variant="plain"
