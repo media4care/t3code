@@ -72,6 +72,10 @@ t3code://app/
 Add the corresponding origin to the Clerk instance's Backend API `allowed_origins` array.
 Development uses `t3code-dev://app`; production uses `t3code://app`. Update the array with
 `PATCH https://api.clerk.com/v1/instance` using the Clerk secret key, preserving existing entries.
+Forks using the existing production Clerk configuration must keep `t3code://app` as the
+renderer origin and Clerk callback scheme, including in packaging customization. Isolate the
+app with its bundle ID, Electron profile, and T3 home instead. Changing the production origin
+to `t3code-dev://app` prevents account controls from loading when that origin is not allowed.
 The Clerk Electron integration handles token
 persistence and system-browser callback delivery.
 
