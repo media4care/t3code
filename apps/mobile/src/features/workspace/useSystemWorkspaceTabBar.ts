@@ -29,7 +29,6 @@ export function useSidebarWorkspaceTabs(): "picker" | "toolbar" | null {
 export function useCompactWorkspaceTabs() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const deviceType = useDeviceType();
-  // The compact glass picker reserves the trailing edge for a separate compose button.
   return (
     Platform.OS === "ios" &&
     deviceType !== "pad" &&

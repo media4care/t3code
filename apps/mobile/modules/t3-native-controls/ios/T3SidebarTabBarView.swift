@@ -2,27 +2,9 @@ import ExpoModulesCore
 import UIKit
 
 private final class WorkspaceTabBar: UITabBar {
-  var onContentLayout: ((CGRect) -> Void)?
-
-  override func layoutSubviews() {
-    super.layoutSubviews()
-    // iOS 26.6 doesn't copy item identifiers onto its tab buttons; the bar holds no other controls.
-    let identified = tabButtons(in: self) { $0.accessibilityIdentifier?.hasPrefix("workspace-tab-") == true }
-    let buttons = identified.isEmpty ? tabButtons(in: self) { _ in true } : identified
-    let row = buttons.reduce(CGRect.null) { $0.union(convert($1.bounds, from: $1)) }
-    if !row.isNull { onContentLayout?(row) }
-  }
-
   override func safeAreaInsetsDidChange() {
     super.safeAreaInsetsDidChange()
     invalidateIntrinsicContentSize()
-  }
-
-  private func tabButtons(in view: UIView, matching match: (UIView) -> Bool) -> [UIView] {
-    view.subviews.filter { !$0.isHidden }.flatMap { subview in
-      if subview is UIControl, match(subview) { return [subview] }
-      return tabButtons(in: subview, matching: match)
-    }
   }
 }
 
@@ -30,26 +12,15 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   let onSelectionChange = EventDispatcher()
   let onCompose = EventDispatcher()
   private let tabBar = WorkspaceTabBar()
-  private let composeButton = UIButton(type: .system)
-  private lazy var tabBarTrailing = tabBar.trailingAnchor.constraint(equalTo: trailingAnchor)
+  private let composeItem = UITabBarItem(title: nil, image: nil, tag: -1)
   private var itemsByTab: [String: UITabBarItem] = [:]
   var tabs = ["threads", "pullRequests", "gitExplorer", "usage", "settings"] {
     didSet { if tabs != oldValue { updateItems() } }
   }
   var selectedTab = "threads" { didSet { updateSelection() } }
   var selectedColor: UIColor = .systemBlue { didSet { tabBar.tintColor = selectedColor } }
-  var compact = false {
-    didSet {
-      tabBarTrailing.constant = showsCompose ? (compact ? -64 : -76) : 0
-      tabBar.setNeedsLayout()
-    }
-  }
   var showsCompose = false {
-    didSet {
-      composeButton.isHidden = !showsCompose
-      tabBarTrailing.constant = showsCompose ? (compact ? -64 : -76) : 0
-      setNeedsLayout()
-    }
+    didSet { if showsCompose != oldValue { updateItems() } }
   }
   var appearance = "light" {
     didSet { overrideUserInterfaceStyle = appearance == "dark" ? .dark : .light }
@@ -68,32 +39,15 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
     addSubview(tabBar)
     NSLayoutConstraint.activate([
       tabBar.leadingAnchor.constraint(equalTo: leadingAnchor),
-      tabBarTrailing,
+      tabBar.trailingAnchor.constraint(equalTo: trailingAnchor),
       tabBar.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
-    // UIKit's floating row changes with window geometry. Follow its laid-out items
-    // instead of estimating their position from a second set of safe-area updates.
-    tabBar.onContentLayout = { [weak self] frame in self?.layoutCompose(alongside: frame) }
-    composeButton.accessibilityLabel = "New chat"
-    composeButton.addAction(UIAction { [weak self] _ in self?.onCompose() }, for: .touchUpInside)
-    composeButton.isHidden = true
-    addSubview(composeButton)
-    configureCompose()
+    // Keep compose inside the bar so UIKit owns its layout and touch target.
+    composeItem.image = tabIcon(UIImage(systemName: "square.and.pencil"))
+    composeItem.accessibilityLabel = "New thread"
+    composeItem.accessibilityIdentifier = "workspace-compose"
     prepareItems()
     updateItems()
-  }
-
-  private func configureCompose() {
-    var configuration: UIButton.Configuration
-    if #available(iOS 26.0, *) {
-      configuration = .glass()
-    } else {
-      configuration = .gray()
-    }
-    configuration.cornerStyle = .capsule
-    configuration.baseForegroundColor = .label
-    configuration.image = tabIcon(UIImage(systemName: "square.and.pencil"))
-    composeButton.configuration = configuration
   }
 
   private func prepareItems() {
@@ -112,25 +66,16 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   }
 
   private func updateItems() {
-    tabBar.items = tabs.enumerated().compactMap { index, tab in
+    let navigationItems = tabs.enumerated().compactMap { index, tab -> UITabBarItem? in
       guard let item = itemsByTab[tab] else { return nil }
       item.tag = index
       return item
     }
+    tabBar.items = (showsCompose ? [composeItem] : []) + navigationItems
     updateSelection()
   }
 
-  private func layoutCompose(alongside frame: CGRect) {
-    guard showsCompose, frame.height > 0 else { return }
-    let row = convert(frame, from: tabBar)
-    let size = row.height + 8
-    composeButton.frame = CGRect(x: row.maxX + 16, y: row.midY - size / 2, width: size, height: size)
-  }
-
   override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-    if showsCompose, let target = composeButton.hitTest(convert(point, to: composeButton), with: event) {
-      return target
-    }
     return tabBar.hitTest(convert(point, to: tabBar), with: event)
   }
 
@@ -139,15 +84,42 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
     updateSelection()
   }
 
-  // Give symbols and bitmap assets the same image box; UIKit otherwise scales symbols independently.
+  // Symbols include unequal transparent padding, so centering their image boxes alone
+  // leaves the pencil visibly below its neighbors. Align the rendered ink instead.
   private func tabIcon(_ image: UIImage?) -> UIImage? {
     guard let image else { return nil }
     let canvas = CGSize(width: 28, height: 28)
     let scale = min(24 / image.size.width, 24 / image.size.height)
     let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-    return UIGraphicsImageRenderer(size: canvas).image { _ in
+    let renderer = UIGraphicsImageRenderer(size: canvas)
+    let raster = renderer.image { _ in
       image.draw(in: CGRect(x: (canvas.width - size.width) / 2, y: (canvas.height - size.height) / 2, width: size.width, height: size.height))
-    }.withRenderingMode(.alwaysTemplate)
+    }
+    guard let cgImage = raster.cgImage else { return raster.withRenderingMode(.alwaysTemplate) }
+    let width = cgImage.width
+    let height = cgImage.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
+      guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+      context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return true
+    }
+    guard rendered else { return raster.withRenderingMode(.alwaysTemplate) }
+    var minX = width, minY = height, maxX = -1, maxY = -1
+    for y in 0..<height {
+      for x in 0..<width where pixels[(y * width + x) * 4 + 3] > 0 {
+        minX = min(minX, x)
+        minY = min(minY, y)
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+      }
+    }
+    guard maxX >= minX, maxY >= minY else { return raster.withRenderingMode(.alwaysTemplate) }
+    let offset = CGPoint(
+      x: CGFloat(width - minX - maxX - 1) / (2 * raster.scale),
+      y: CGFloat(height - minY - maxY - 1) / (2 * raster.scale)
+    )
+    return renderer.image { _ in raster.draw(at: offset) }.withRenderingMode(.alwaysTemplate)
   }
 
   private func updateSelection() {
@@ -157,6 +129,12 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   }
 
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
+    if item === composeItem {
+      // Compose is an action; keep the current section selected when returning from a draft.
+      updateSelection()
+      onCompose()
+      return
+    }
     guard tabs.indices.contains(item.tag) else { return }
     onSelectionChange(["tab": tabs[item.tag]])
   }
