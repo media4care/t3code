@@ -88,6 +88,11 @@ export function WorkspaceNativeTabs(props: {
   const { width } = useWindowDimensions();
   const { colors } = useControlTheme();
   const selectedTab = workspace.state.selectedTab;
+  const handleNewTask = () => {
+    Keyboard.dismiss();
+    workspace.dispatch({ type: "select", tab: "threads" });
+    startNewTask();
+  };
   const selectedSlot = workspace.settingsOpen ? -1 : primaryTabs.indexOf(selectedTab);
   const request = {
     selectedScreenKey: selectedSlot === -1 ? "settings" : NATIVE_WORKSPACE_TAB_SLOTS[selectedSlot]!,
@@ -170,11 +175,7 @@ export function WorkspaceNativeTabs(props: {
         >
           <WorkspaceSidebarTabs
             compact={floatingTabs}
-            onNewTask={
-              floatingTabs && !workspace.settingsOpen && selectedTab === "threads"
-                ? startNewTask
-                : undefined
-            }
+            onNewTask={floatingTabs ? handleNewTask : undefined}
           />
         </View>
       ) : null}
