@@ -27,6 +27,14 @@ describe("ElectronProtocol", () => {
     unhandleMock.mockReset();
   });
 
+  it.each([
+    { isDevelopment: false, url: "t3code://app/", scheme: "t3code" },
+    { isDevelopment: true, url: "t3code-dev://app/", scheme: "t3code-dev" },
+  ])("uses the authorized renderer origin $url", ({ isDevelopment, url, scheme }) => {
+    assert.equal(ElectronProtocol.getDesktopUrl(isDevelopment), url);
+    assert.equal(ElectronProtocol.getDesktopScheme(isDevelopment), scheme);
+  });
+
   it.effect("serves the bundled client from disk without a backend", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -39,12 +47,14 @@ describe("ElectronProtocol", () => {
       });
       const protocol = yield* ElectronProtocol.ElectronProtocol;
       yield* protocol.registerDesktopProtocol({
-        scheme: "t3code",
+        scheme: ElectronProtocol.getDesktopScheme(false),
         assetDirectory: directory,
         clerkFrontendApiHostname: undefined,
       });
       const request = (pathname: string, init?: RequestInit) =>
-        Effect.promise(() => handler!(new Request(`t3code://app${pathname}`, init)));
+        Effect.promise(() =>
+          handler!(new Request(new URL(pathname, ElectronProtocol.getDesktopUrl(false)), init)),
+        );
 
       const page = yield* request("/settings/connections");
       assert.equal(yield* Effect.promise(() => page.text()), "<html>app</html>");

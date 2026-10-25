@@ -13,19 +13,19 @@ import * as Scope from "effect/Scope";
 import * as Electron from "electron";
 
 export const DESKTOP_HOST = "app";
-const DESKTOP_PRODUCTION_SCHEME = "t3code";
-const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+// Production Clerk authorizes this origin. Forks can isolate their bundle ID and
+// profile, but must preserve the renderer origin when using the production key.
+const DESKTOP_URLS = {
+  production: "t3code://app/",
+  development: "t3code-dev://app/",
+} as const;
 
 export function getDesktopScheme(isDevelopment: boolean): string {
-  return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
-}
-
-function getDesktopOrigin(isDevelopment: boolean): string {
-  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
+  return new URL(getDesktopUrl(isDevelopment)).protocol.slice(0, -1);
 }
 
 export function getDesktopUrl(isDevelopment: boolean): string {
-  return `${getDesktopOrigin(isDevelopment)}/`;
+  return DESKTOP_URLS[isDevelopment ? "development" : "production"];
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
@@ -111,7 +111,7 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
 function registerDesktopSchemePrivilegesSync(): void {
   Electron.protocol.registerSchemesAsPrivileged([
     {
-      scheme: DESKTOP_PRODUCTION_SCHEME,
+      scheme: getDesktopScheme(false),
       privileges: {
         standard: true,
         secure: true,
@@ -123,7 +123,7 @@ function registerDesktopSchemePrivilegesSync(): void {
       },
     },
     {
-      scheme: DESKTOP_DEVELOPMENT_SCHEME,
+      scheme: getDesktopScheme(true),
       privileges: {
         standard: true,
         secure: true,

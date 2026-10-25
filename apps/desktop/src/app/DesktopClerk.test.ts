@@ -171,6 +171,10 @@ describe("DesktopClerk", () => {
         [{ path: NodePath.join(NodePath.resolve(clerkStateDir), "clerk") }],
       ]);
       assert.notStrictEqual(createClerkBridgeMock.mock.calls[0]?.[0]?.storage, storageAdapter);
+      assert.deepEqual(createClerkBridgeMock.mock.calls[0]?.[0].renderer, {
+        scheme: isDevelopment ? "t3code-dev" : "t3code",
+        host: "app",
+      });
     },
   );
 
