@@ -170,7 +170,6 @@ export function WorkspaceNativeTabs(props: {
         >
           <WorkspaceSidebarTabs
             compact={floatingTabs}
-            reserveComposeSpace={floatingTabs}
             onNewTask={
               floatingTabs && !workspace.settingsOpen && selectedTab === "threads"
                 ? startNewTask

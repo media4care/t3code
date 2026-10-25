@@ -13,7 +13,6 @@ const NativeSidebarTabBar = requireNativeView<
     selectedColor: string;
     appearance: string;
     showsCompose: boolean;
-    compact?: boolean;
     onSelectionChange: (event: NativeSyntheticEvent<{ tab: string }>) => void;
     onCompose: () => void;
   }
@@ -22,7 +21,6 @@ const NativeSidebarTabBar = requireNativeView<
 export function WorkspaceSidebarTabs(props: {
   readonly onNewTask?: () => void;
   readonly compact?: boolean;
-  readonly reserveComposeSpace?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
   const order = useNavigationTabOrder();
@@ -45,7 +43,6 @@ export function WorkspaceSidebarTabs(props: {
       selectedColor={colors["--color-primary"]}
       appearance={colorScheme}
       showsCompose={Boolean(props.onNewTask)}
-      compact={props.compact}
       onCompose={() => props.onNewTask?.()}
       onSelectionChange={({ nativeEvent }) => {
         const tab = tabs.find((candidate) => candidate === nativeEvent.tab);
@@ -57,14 +54,7 @@ export function WorkspaceSidebarTabs(props: {
         position: "absolute",
         bottom: 0,
         left: props.compact ? 8 : 0,
-        // Keep the tab icons in place when Compose disappears on other destinations.
-        right:
-          (props.compact ? 12 : 0) +
-          ((props.reserveComposeSpace ?? props.compact) && !props.onNewTask
-            ? props.compact
-              ? 64
-              : 76
-            : 0),
+        right: props.compact ? 12 : 0,
         height: 128,
       }}
     />
