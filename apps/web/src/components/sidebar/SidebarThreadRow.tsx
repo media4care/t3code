@@ -559,7 +559,8 @@ type SidebarThreadRowProps = {
   currentEnvironmentId: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
-  scratchMachineLabel: string | null;
+  // True once threads span machines, so every row names its own.
+  showEnvironmentLabel: boolean;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
@@ -799,7 +800,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : thread.modelSelection.model;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
-  const showsScratchMachine = !thread.branch && props.scratchMachineLabel !== null;
+  const machineLabel = props.showEnvironmentLabel ? props.environmentLabel : null;
 
   const detailsTooltip = (
     <SidebarThreadTooltip
@@ -1123,16 +1124,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   ) : null;
 
   const remoteMachineIcon =
-    isRemote && !showsScratchMachine ? (
-      <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-        <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
+    isRemote || machineLabel !== null ? (
+      <span className="inline-flex items-center gap-1 text-sidebar-muted-foreground/70">
+        <EnvironmentMachineIcon
+          aria-hidden
+          kind={props.environmentMachine}
+          className="size-3.5 shrink-0"
+        />
+        {machineLabel !== null ? <span className="max-w-24 truncate">{machineLabel}</span> : null}
       </span>
     ) : null;
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
     !thread.branch &&
-    !showsScratchMachine &&
+    machineLabel === null &&
     prBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
@@ -1144,15 +1150,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           <span className="flex min-w-0 flex-1">
             <MiddleTruncate value={thread.branch} showTitle={false} />
           </span>
-        </>
-      ) : showsScratchMachine ? (
-        <>
-          <EnvironmentMachineIcon
-            aria-hidden
-            kind={props.environmentMachine}
-            className="size-3 shrink-0"
-          />
-          <span className="min-w-0 flex-1 truncate">{props.scratchMachineLabel}</span>
         </>
       ) : (
         <span className="flex-1" />
