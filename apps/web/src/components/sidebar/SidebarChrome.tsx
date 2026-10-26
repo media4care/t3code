@@ -12,6 +12,8 @@ import {
   type HistoryDirection,
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { resolveGitExplorerSearch } from "../../lib/chatThreadActions";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
@@ -220,6 +222,7 @@ function SidebarUtilityItem({
 
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
+  const threadContext = useHandleNewThread();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
   const isOnUtilityPage = useLocation({
@@ -244,7 +247,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handleGitExplorerClick = () => {
     closeMobileSidebar();
-    void navigate({ to: "/git" });
+    void navigate({ to: "/git", search: resolveGitExplorerSearch(threadContext) });
   };
 
   const handleUsageClick = () => {

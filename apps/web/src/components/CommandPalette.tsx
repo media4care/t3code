@@ -139,7 +139,11 @@ import {
   waitForProject,
 } from "../state/entities";
 import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
-import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
+import {
+  resolveGitExplorerSearch,
+  resolveThreadActionProjectRef,
+  startNewThreadFromContext,
+} from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -1581,12 +1585,7 @@ function OpenCommandPaletteDialog(props: {
     run: async () => {
       await navigate({
         to: "/git",
-        search: contextualProjectRef
-          ? {
-              environmentId: contextualProjectRef.environmentId,
-              projectId: contextualProjectRef.projectId,
-            }
-          : {},
+        search: resolveGitExplorerSearch({ activeThread, activeDraftThread, defaultProjectRef }),
       });
     },
   });
