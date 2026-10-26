@@ -193,8 +193,8 @@ function RepositoryExplorer({
   ) => {
     if (deletionInFlight.current || deleteUnavailable !== null) return;
     const review =
-      prepareGitExplorerBranchDeletion(reference, branchStatus) ??
-      prepareGitExplorerBranchDeletion(reference, branchStatus, true);
+      prepareGitExplorerBranchDeletion(reference, branchStatus, false, environment?.label) ??
+      prepareGitExplorerBranchDeletion(reference, branchStatus, true, environment?.label);
     if (!review) return;
     deletionInFlight.current = true;
     setPendingBranch(reference.name);
@@ -204,7 +204,7 @@ function RepositoryExplorer({
     if (confirmed._tag === "Success" && confirmed.value) {
       const result = await deleteBranch({ environmentId, input: { ...input, ...review.input } });
       if (result._tag === "Success") {
-        toastManager.add({ type: "success", title: `Deleted local branch ${reference.shortName}` });
+        toastManager.add({ type: "success", title: `Deleted branch ${reference.shortName}` });
       } else if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         toastManager.add({

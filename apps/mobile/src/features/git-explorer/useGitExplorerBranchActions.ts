@@ -45,11 +45,10 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
   const canWrite = useAtomValue(
     gitExplorerEnvironment.deleteBranch.permissionAtom(target.environmentId),
   );
-  const connected = useWorkspaceEnvironments().some(
-    (environment) =>
-      environment.environmentId === target.environmentId &&
-      environment.connectionState === "connected",
+  const environment = useWorkspaceEnvironments().find(
+    (environment) => environment.environmentId === target.environmentId,
   );
+  const connected = environment?.connectionState === "connected";
   const run = useAtomCommand(gitExplorerEnvironment.deleteBranch, { reportFailure: false });
   const pending = useRef(false);
   const [busyBranch, setBusyBranch] = useState<string | null>(null);
@@ -73,8 +72,8 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     )
       return;
     const review =
-      prepareGitExplorerBranchDeletion(ref, status) ??
-      prepareGitExplorerBranchDeletion(ref, status, true);
+      prepareGitExplorerBranchDeletion(ref, status, false, environment?.environmentLabel) ??
+      prepareGitExplorerBranchDeletion(ref, status, true, environment?.environmentLabel);
     if (!review) return;
     Dialog.confirm({
       title: review.input.force ? "Force delete branch" : "Delete branch",

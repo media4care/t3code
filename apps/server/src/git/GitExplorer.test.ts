@@ -1504,6 +1504,43 @@ it.layer(layer)("GitExplorer branch review", (it) => {
       }),
   );
 
+  it.effect("deletes an unrelated branch when a registered worktree directory is missing", () =>
+    Effect.gen(function* () {
+      const { explorer, git, pending, target, root, fs, path, cwd } = yield* branchFixture;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-missing-worktree-" });
+      const linked = path.join(parent, "linked");
+      yield* git(["worktree", "add", "-b", "unavailable", linked, root]);
+      yield* fs.remove(linked, { recursive: true });
+      const request = {
+        ...scope,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: false,
+        force: true,
+      };
+      assert.equal(
+        (yield* explorer
+          .deleteBranch({
+            ...request,
+            branchName: "refs/heads/unavailable",
+            expectedHash: root,
+          })
+          .pipe(Effect.flip)).reason,
+        "branch-checked-out",
+      );
+      yield* explorer.deleteBranch({
+        ...request,
+        branchName: "refs/heads/pending",
+        expectedHash: pending,
+      });
+      assert.equal(yield* git(["branch", "--list", "pending"]), "");
+      assert.equal(yield* git(["rev-parse", "unavailable"]), root);
+      assert.isTrue(yield* fs.exists(path.join(cwd, ".git", "worktrees", "linked", "HEAD")));
+      assert.isFalse(yield* fs.exists(path.join(cwd, ".git", "worktrees", "linked", "HEAD.lock")));
+      assert.isFalse(yield* fs.exists(linked));
+    }),
+  );
+
   it.effect("holds every registered worktree HEAD lock until the ref transaction completes", () =>
     Effect.gen(function* () {
       const { projectStore, git, target, original, cwd, fs, path } = yield* branchFixture;
