@@ -15,6 +15,7 @@ type ComposerModelSelectionState = Pick<
 interface ThreadContextLike {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  worktreePath?: string | null;
 }
 
 interface NewThreadHandler {
@@ -80,6 +81,22 @@ export function resolveThreadActionProjectRef(
     );
   }
   return context.defaultProjectRef;
+}
+
+export function resolveGitExplorerSearch(context: {
+  readonly activeThread: ThreadContextLike | null | undefined;
+  readonly activeDraftThread: ThreadContextLike | null;
+  readonly defaultProjectRef?: ScopedProjectRef | null;
+}) {
+  const thread = context.activeThread ?? context.activeDraftThread;
+  const project = thread ?? context.defaultProjectRef;
+  return project
+    ? {
+        environmentId: project.environmentId,
+        projectId: project.projectId,
+        ...(thread?.worktreePath ? { worktreePath: thread.worktreePath } : {}),
+      }
+    : {};
 }
 
 export async function startNewThreadFromContext(
