@@ -50,7 +50,8 @@ export function GitExplorerBranchDeletion({
   refresh: () => void;
 }) {
   const allowed = useAtomValue(gitExplorerEnvironment.deleteBranch.permissionAtom(environmentId));
-  const connected = useEnvironment(environmentId)?.connection.phase === "connected";
+  const environment = useEnvironment(environmentId);
+  const connected = environment?.connection.phase === "connected";
   const readStatuses = useAtomCommand(gitExplorerEnvironment.readBranchStatuses, {
     reportFailure: false,
   });
@@ -165,7 +166,9 @@ export function GitExplorerBranchDeletion({
             {folder ? `Delete branches in ${folder}` : "Delete selected branches"}
           </DialogTitle>
           <DialogDescription>
-            Review the local branches below. Remote branches and worktree files are unchanged.
+            Review the branches in the repository on{" "}
+            {environment?.label || "the selected environment"}. Branches on Git remotes and worktree
+            files are unchanged.
             {folder ? " The folder disappears when no branches remain." : null}
           </DialogDescription>
         </DialogHeader>

@@ -20,6 +20,7 @@ import { Button } from "../../components/ui/Button";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useWorkspaceEnvironments } from "../../state/workspace";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 
 export function GitExplorerBranchDeletion(props: {
@@ -35,6 +36,9 @@ export function GitExplorerBranchDeletion(props: {
     snapshotId: props.overview.snapshotId,
     references: props.references,
   }));
+  const environment = useWorkspaceEnvironments().find(
+    (environment) => environment.environmentId === captured.target.environmentId,
+  );
   const readStatuses = useAtomCommand(gitExplorerEnvironment.readBranchStatuses, {
     reportFailure: false,
   });
@@ -148,7 +152,9 @@ export function GitExplorerBranchDeletion(props: {
                   Delete selected branches
                 </Text>
                 <Text className="text-foreground-muted">
-                  Review the local branches below. Remote branches and worktree files are unchanged.
+                  Review the branches in the repository on{" "}
+                  {environment?.environmentLabel || "the selected environment"}. Branches on Git
+                  remotes and worktree files are unchanged.
                 </Text>
                 {error ? (
                   <Text accessibilityRole="alert" className="text-danger-foreground">

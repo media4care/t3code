@@ -220,6 +220,19 @@ describe("Git Explorer upstream status", () => {
     expect(prepareGitExplorerBranchDeletion(ref, status, true)?.confirmation).toContain(
       summary.description,
     );
+    const remoteReview = prepareGitExplorerBranchDeletion(ref, status, true, "Mac Studio");
+    expect(remoteReview?.confirmation).toContain('Force delete branch "topic"?');
+    expect(remoteReview?.confirmation).toContain("Repository location: Mac Studio.");
+    expect(remoteReview?.confirmation).toContain("repository on that environment");
+    expect(remoteReview?.input).toEqual(prepareGitExplorerBranchDeletion(ref, status, true)?.input);
+    expect(
+      prepareGitExplorerBranchDeletion(
+        { ...ref, upstream: status.targetRef },
+        { ...status, upstream: { ...status.upstream!, name: status.targetRef! } },
+        true,
+        "Mac Studio",
+      )?.confirmation,
+    ).not.toContain("Upstream origin/main:");
 
     expect(gitExplorerUpstreamMergeSummary({ ...ref, upstreamMissing: true }, status).label).toBe(
       "Missing upstream",

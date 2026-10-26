@@ -220,6 +220,7 @@ export function prepareGitExplorerBranchDeletion(
   reference: GitExplorerRef,
   status: GitExplorerBranchStatus | undefined,
   force = false,
+  environmentLabel?: string,
 ) {
   if (!status || gitExplorerBranchDeletionBlock(reference, status, force) !== null) return null;
   const equivalent = status.mergeStatus === "equivalent";
@@ -234,14 +235,15 @@ export function prepareGitExplorerBranchDeletion(
       ...(force ? { force: true } : {}),
     },
     confirmation: [
-      `${force ? "Force delete" : "Delete"} local branch "${reference.shortName}"?`,
+      `${force ? "Force delete" : "Delete"} branch "${reference.shortName}"?`,
+      `Repository location: ${environmentLabel || "the selected environment"}.`,
       force
         ? `${describeGitExplorerMerge(status)} Force deletion can lose commits that are not saved on another branch. This cannot be undone from Git Explorer.`
         : equivalent
           ? `Its changes have equivalent patches in ${target}, but the original commits are not ancestors of that branch. Confirming deletes the local branch using patch equivalence.`
           : `Its commits are already merged into ${target}.`,
-      "Only this local branch is removed. Remote branches and worktree files are unchanged.",
-      ...(reference.upstream
+      "This removes the branch from the repository on that environment. Branches on Git remotes and worktree files are unchanged.",
+      ...(reference.upstream && reference.upstream !== status.targetRef
         ? [gitExplorerUpstreamMergeSummary(reference, status).description]
         : []),
       ...(status.targetRef?.startsWith("refs/remotes/")

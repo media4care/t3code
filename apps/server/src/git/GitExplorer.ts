@@ -960,19 +960,50 @@ const make = Effect.gen(function* () {
           operation: "delete-branch",
           reason: "branch-changed",
         });
+      // Registered worktrees can be offline or missing. Their administrative
+      // directories still own the HEAD locks; opening each checkout would block
+      // deletion of unrelated branches when any old checkout is unavailable.
+      const worktreeDirectories = yield* Effect.gen(function* () {
+        const directory = path.join(latest.commonDirectory, "worktrees");
+        const entries = yield* fs.readDirectory(directory).pipe(
+          Effect.catchIf(
+            (cause) => cause.reason._tag === "NotFound",
+            () => Effect.succeed([] as string[]),
+          ),
+        );
+        return new Map(
+          yield* Effect.forEach(
+            entries,
+            (entry) =>
+              Effect.gen(function* () {
+                const gitDirectory = path.join(directory, entry);
+                const gitFile = (yield* fs.readFileString(
+                  path.join(gitDirectory, "gitdir"),
+                )).trim();
+                return [path.dirname(path.resolve(gitDirectory, gitFile)), gitDirectory] as const;
+              }),
+            { concurrency: 4 },
+          ),
+        );
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitExplorerError({
+              operation: "delete-branch-worktrees",
+              reason: "read-failed",
+              cause,
+            }),
+        ),
+      );
       const heads = yield* Effect.forEach(
         latest.worktrees.filter((worktree) => !worktree.bare),
         (worktree) =>
           Effect.gen(function* () {
-            const gitDirectory = yield* canonical(
-              (yield* run(worktree.path, [
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-dir",
-              ])).stdout.trim(),
-            );
-            const relative = path.relative(latest.commonDirectory, gitDirectory);
-            if (relative !== "" && path.dirname(relative) !== "worktrees")
+            const gitDirectory =
+              worktree === latest.worktrees[0]
+                ? latest.commonDirectory
+                : worktreeDirectories.get(path.resolve(worktree.path));
+            if (!gitDirectory)
               return yield* new GitExplorerError({
                 operation: "delete-branch",
                 reason: "invalid-worktree",
