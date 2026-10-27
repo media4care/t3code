@@ -103,6 +103,14 @@ describe("opening a workspace tab", () => {
     ]);
   });
 
+  it("opens Git Explorer without restoring a remembered detail page", () => {
+    const state = { routes: [home, thread] };
+    const selections = { threads: thread.params, pullRequests: pullRequest.params };
+    expect(names(workspaceTabNavigationState(state, "gitExplorer", selections, columns))).toEqual([
+      "Home",
+    ]);
+  });
+
   it("keeps the route that is already open, so re-selecting a tab doesn't rebuild it", () => {
     const next = workspaceTabNavigationState(
       { routes: [home, thread] },

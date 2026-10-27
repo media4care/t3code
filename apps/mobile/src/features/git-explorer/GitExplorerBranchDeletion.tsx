@@ -59,6 +59,7 @@ export function GitExplorerBranchDeletion(props: {
     : null;
   const review = force ? forceReview : safeReview;
   const forceCount = (forceReview?.eligible.length ?? 0) - (safeReview?.eligible.length ?? 0);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Load and cancel the branch safety review while the confirmation sheet is mounted.
   useEffect(() => {
     let active = true;
     const load = async () => {

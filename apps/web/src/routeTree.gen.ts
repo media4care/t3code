@@ -272,8 +272,8 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
-  '/guest': typeof GuestRoute
   '/git': typeof GitRoute
+  '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/new': typeof ChatNewRoute
@@ -314,8 +314,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
-  '/guest': typeof GuestRoute
   '/git': typeof GitRoute
+  '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/new': typeof ChatNewRoute
@@ -359,8 +359,8 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
-  '/guest': typeof GuestRoute
   '/git': typeof GitRoute
+  '/guest': typeof GuestRoute
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/_chat/new': typeof ChatNewRoute
@@ -405,8 +405,8 @@ export interface FileRouteTypes {
     | '/'
     | '/connect'
     | '/connect-agent'
-    | '/guest'
     | '/git'
+    | '/guest'
     | '/pair'
     | '/welcome'
     | '/new'
@@ -447,8 +447,8 @@ export interface FileRouteTypes {
   to:
     | '/connect'
     | '/connect-agent'
-    | '/guest'
     | '/git'
+    | '/guest'
     | '/pair'
     | '/welcome'
     | '/new'
@@ -491,8 +491,8 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/connect'
     | '/connect-agent'
-    | '/guest'
     | '/git'
+    | '/guest'
     | '/pair'
     | '/welcome'
     | '/_chat/new'
@@ -536,8 +536,8 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ConnectRoute: typeof ConnectRoute
   ConnectAgentRoute: typeof ConnectAgentRoute
-  GuestRoute: typeof GuestRoute
   GitRoute: typeof GitRoute
+  GuestRoute: typeof GuestRoute
   PairRoute: typeof PairRoute
   WelcomeRoute: typeof WelcomeRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
@@ -931,8 +931,8 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ConnectRoute: ConnectRoute,
   ConnectAgentRoute: ConnectAgentRoute,
-  GuestRoute: GuestRoute,
   GitRoute: GitRoute,
+  GuestRoute: GuestRoute,
   PairRoute: PairRoute,
   WelcomeRoute: WelcomeRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,

@@ -8,9 +8,7 @@ export function WorkspaceExtraTab(props: {
 }) {
   return (
     <>
-      <NativeStackScreenOptions
-        options={{ headerSearchBarOptions: undefined }}
-      />
+      <NativeStackScreenOptions options={{ headerSearchBarOptions: undefined }} />
       {props.tab === "gitExplorer" ? (
         <GitRepositoriesScreen workspace />
       ) : (

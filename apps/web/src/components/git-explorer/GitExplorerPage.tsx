@@ -228,6 +228,7 @@ function RepositoryExplorer({
       : null,
   );
   const previousStatusAt = useRef(0);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh the Git snapshot when the live repository status changes.
   useEffect(() => {
     if (!status.dataUpdatedAt || previousStatusAt.current === status.dataUpdatedAt) return;
     const hadStatus = previousStatusAt.current !== 0;
