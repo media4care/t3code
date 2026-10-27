@@ -46,7 +46,8 @@ const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
   const architecture = yield* HostProcess.Architecture;
 
   const packageJsonPath = requireForNodePty.resolve("node-pty/package.json");
-  const packageDir = path.dirname(packageJsonPath);
+  // Electron can stat archive members, but chmod needs the unpacked helper node-pty executes.
+  const packageDir = path.dirname(packageJsonPath).replace(/\.asar([\\/])/, ".asar.unpacked$1");
   const candidates = [
     path.join(packageDir, "build", "Release", "spawn-helper"),
     path.join(packageDir, "build", "Debug", "spawn-helper"),

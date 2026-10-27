@@ -1,4 +1,6 @@
 import * as NodeEvents from "node:events";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- The native spawn callback checks execute permission synchronously.
+import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -6,7 +8,9 @@ import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Scheduler from "effect/Scheduler";
 import { vi } from "vite-plus/test";
 
@@ -71,6 +75,50 @@ const layerTestFor = (platform: NodeJS.Platform = "win32") =>
   );
 
 const layerTest = layerTestFor();
+
+it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "makes the unpacked macOS spawn helper executable before starting a packaged terminal",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pty-asar-" });
+      const archivedPackage = path.join(root, "app.asar/node_modules/node-pty");
+      const unpackedPackage = path.join(root, "app.asar.unpacked/node_modules/node-pty");
+      const helper = path.join(unpackedPackage, "build/Release/spawn-helper");
+      yield* fs.makeDirectory(path.dirname(helper), { recursive: true });
+      yield* fs.writeFileString(helper, "spawn helper", { mode: 0o644 });
+      spawn.mockImplementationOnce(() => {
+        NodeFS.accessSync(helper, NodeFS.constants.X_OK);
+        return makeNativeProcess();
+      });
+
+      const adapter = yield* PtyAdapter.PtyAdapter.pipe(
+        Effect.provide(
+          NodePtyAdapter.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(FileSystem.FileSystem, {
+                  ...fs,
+                  // Electron can stat archive members, but chmod needs their unpacked files.
+                  exists: (file) => fs.exists(file.replace(archivedPackage, unpackedPackage)),
+                }),
+                Layer.succeed(Path.Path, { ...path, dirname: () => archivedPackage }),
+                Layer.succeed(HostProcess.Platform, "darwin"),
+                Layer.succeed(HostProcess.Architecture, "arm64"),
+                Layer.succeed(NodePtyAdapter.NodePtyModuleLoaderRef, () =>
+                  Promise.resolve(fakeNodePty),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      const process = yield* adapter.spawn({ ...spawnInput, shell: "/bin/zsh" });
+      assert.equal(process.pid, 42);
+      assert.equal((yield* fs.stat(helper)).mode & 0o777, 0o755);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("waits for the Windows PID without requiring output", () =>
   Effect.gen(function* () {
