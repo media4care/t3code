@@ -20,6 +20,7 @@ import { useNavigation } from "@react-navigation/native";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 import { useEnvironmentScope } from "../../state/session";
+import { useThreadProjection } from "../../state/use-thread-detail";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import {
   basename,
@@ -126,6 +127,11 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     AuthSourceControlWriteScope,
   );
   const threadId = props.threadId;
+  const threadDetail = useThreadProjection({
+    environmentId: EnvironmentId.make(String(environmentId)),
+    threadId: props.hasThread === false ? null : ThreadId.make(String(threadId)),
+  });
+  const thread = threadDetail?.projection.thread ?? null;
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";
@@ -262,11 +268,22 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     });
   };
 
+  const openGitExplorer = () => {
+    if (!thread || !isRepo) return;
+    navigation.navigate("GitExplorer", {
+      environmentId: String(environmentId),
+      projectId: String(thread.projectId),
+      ...(thread.worktreePath ? { worktreePath: thread.worktreePath } : {}),
+    });
+  };
+
   return {
+    canOpenGitExplorer: isRepo && thread !== null,
     currentBranchLabel,
     isRepo,
     openFiles,
     openGitInspector,
+    openGitExplorer,
     openReview,
     quickAction,
     quickActionHint,
@@ -383,6 +400,14 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
             icon: { name: "text.bubble", type: "sfSymbol" },
             label: "Review changes",
             onPress: model.openReview,
+            type: "action",
+          },
+          {
+            description: "History, branches, and changes",
+            disabled: !model.canOpenGitExplorer,
+            icon: { name: "point.topleft.down.curvedto.point.bottomright.up", type: "sfSymbol" },
+            label: "Git Explorer",
+            onPress: model.openGitExplorer,
             type: "action",
           },
           ...(props.onMergeBack
@@ -563,6 +588,14 @@ function threadGitMenuDefinition(
             ? "Available after the first message"
             : "Turn diffs and worktree changes",
         onPress: model.openReview,
+      },
+      {
+        id: "git-explorer",
+        title: "Git Explorer",
+        icon: "point.topleft.down.curvedto.point.bottomright.up",
+        disabled: !model.canOpenGitExplorer,
+        subtitle: "History, branches, and changes",
+        onPress: model.openGitExplorer,
       },
       {
         id: "git-more",
