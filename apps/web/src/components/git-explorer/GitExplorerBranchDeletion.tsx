@@ -79,6 +79,7 @@ export function GitExplorerBranchDeletion({
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
+  // oxlint-disable-next-line t3code/react-effect-budget -- Load and cancel the branch safety review while the confirmation dialog is mounted.
   useEffect(() => {
     let active = true;
     const load = async () => {

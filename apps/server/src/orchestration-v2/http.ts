@@ -268,7 +268,7 @@ export const layer = HttpApiBuilder.group(
               Effect.map((page) =>
                 args.query.compactIds === "1" ? { ...page, idTable: true as const } : page,
               ),
-                Effect.catch(
+              Effect.catch(
                 Effect.fnUntraced(function* (cause) {
                   if (isThreadNotFound(cause))
                     return yield* failEnvironmentNotFound("thread_not_found");

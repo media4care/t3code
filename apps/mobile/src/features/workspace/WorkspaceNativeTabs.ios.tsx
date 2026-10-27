@@ -4,7 +4,7 @@ import {
   useEnabledNavigationTabs,
 } from "./navigation-tabs";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { View, useWindowDimensions, type NativeSyntheticEvent } from "react-native";
+import { Keyboard, View, useWindowDimensions, type NativeSyntheticEvent } from "react-native";
 import { Tabs, type TabSelectedEvent, type TabSelectionRejectedEvent } from "react-native-screens";
 
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";

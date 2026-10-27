@@ -23,11 +23,7 @@ import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
-import {
-  getLocalEnvironmentBootstraps,
-  pickProjectFavicon,
-  probeRemoteEditors,
-} from "./window.ts";
+import { getLocalEnvironmentBootstraps, pickProjectFavicon, probeRemoteEditors } from "./window.ts";
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   executablePath: "wsl.exe",

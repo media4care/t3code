@@ -11,10 +11,10 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 
-interface ExplorerTarget<Input = GitExplorerOverviewInput> {
+type ExplorerTarget<Input = GitExplorerOverviewInput> = {
   readonly environmentId: EnvironmentId;
   readonly input: Input;
-}
+};
 
 export function createGitExplorerEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,

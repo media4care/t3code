@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
@@ -242,9 +243,7 @@ describe("remote environment authorization", () => {
         },
         { method: "GET", url: "https://remote.example.com/ws", accessToken: "ws-ticket" },
       ]);
-      expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2",
-      );
+      expect(url).toBe("wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2");
     }),
   );
 
@@ -363,14 +362,14 @@ describe("remote environment authorization", () => {
         wsBaseUrl: "wss://remote.example.com/ws",
         httpBaseUrl: "https://remote.example.com/",
         accessToken: "access-token",
-        dpopProof: "proof",
+        createProof: () => Effect.succeed("proof"),
         clientMetadata,
       }).pipe(provideRemoteHttp(fetch.fetchFn));
       expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=dpop-ticket&clientSurface=web&clientAppVersion=1.2.3",
+        "wss://remote.example.com/ws?wsTicket=dpop-ticket&dpop=proof&clientSurface=web&clientAppVersion=1.2.3",
       );
       expectFetchCall(fetch.calls, 1, {
-        url: "https://remote.example.com/api/auth/websocket-ticket",
+        url: "https://remote.example.com/api/auth/websocket-ticket/rpc",
         method: "POST",
         headers: { authorization: "DPoP access-token", dpop: "proof" },
       });

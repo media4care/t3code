@@ -764,9 +764,10 @@ const make = Effect.gen(function* () {
       return { mergeStatus: unique ? "unmerged" : "equivalent", reason: null };
     },
     Effect.timeout("10 seconds"),
-    Effect.catch(() =>
-      Effect.succeed({ mergeStatus: "unknown" as const, reason: "read-failed" as const }),
-    ),
+    Effect.orElseSucceed(() => ({
+      mergeStatus: "unknown" as const,
+      reason: "read-failed" as const,
+    })),
     (effect, snapshot, hash, targetHash) =>
       effect.pipe(
         Effect.tap((result) =>
