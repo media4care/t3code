@@ -189,7 +189,7 @@ function GitExplorerHistoryList({
   );
   const handledRefresh = useRef(refreshRevision);
   const refreshHistory = query.refresh;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize paged history with repository refreshes from other Explorer actions.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize paged history with repository refreshes from other Explorer actions.
   useEffect(() => {
     if (handledRefresh.current === refreshRevision) return;
     handledRefresh.current = refreshRevision;

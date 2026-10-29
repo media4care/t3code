@@ -20,7 +20,7 @@ import { useNavigation } from "@react-navigation/native";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 import { useEnvironmentScope } from "../../state/session";
-import { useThreadProjection } from "../../state/use-thread-detail";
+import { useQuietThreadShell } from "../../state/entities";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import {
   basename,
@@ -127,11 +127,14 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     AuthSourceControlWriteScope,
   );
   const threadId = props.threadId;
-  const threadDetail = useThreadProjection({
-    environmentId: EnvironmentId.make(String(environmentId)),
-    threadId: props.hasThread === false ? null : ThreadId.make(String(threadId)),
-  });
-  const thread = threadDetail?.projection.thread ?? null;
+  const thread = useQuietThreadShell(
+    props.hasThread === false
+      ? null
+      : {
+          environmentId: EnvironmentId.make(String(environmentId)),
+          threadId: ThreadId.make(String(threadId)),
+        },
+  );
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";

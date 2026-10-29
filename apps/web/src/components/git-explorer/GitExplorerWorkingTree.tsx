@@ -87,23 +87,25 @@ export function GitExplorerWorkingTree({
     const file = selectedFile;
     const changeToken = patch.data.changeToken;
     setConfirming(true);
-    try {
-      const confirmed = await ensureLocalApi().dialogs.confirm(
+    return ensureLocalApi()
+      .dialogs.confirm(
         file.stage === "untracked"
           ? `Delete the untracked file ${file.path}? It has no committed version to restore.`
           : `Discard unstaged changes in ${file.path}? Staged changes are kept.`,
         { variant: "destructive" },
-      );
-      if (confirmed)
-        await execute({
-          action: "discard",
-          filePaths: [file.path],
-          fileStage: file.stage as "unstaged" | "untracked",
-          changeToken,
-        });
-    } finally {
-      setConfirming(false);
-    }
+      )
+      .then(async (confirmed) => {
+        if (confirmed)
+          await execute({
+            action: "discard",
+            filePaths: [file.path],
+            fileStage: file.stage as "unstaged" | "untracked",
+            changeToken,
+          });
+      })
+      .finally(() => {
+        setConfirming(false);
+      });
   };
   return (
     <>
