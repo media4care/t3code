@@ -446,7 +446,10 @@ describe("AgentAwarenessRelay", () => {
         body: "Where should I deploy?",
         action: { kind: "user_input", questionId: "target", choices: [], allowText: true },
       });
-    }).pipe(Effect.scoped, Effect.provide(ProjectionStore.layerMemory)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+    ),
   );
 
   it.effect("republishes unchanged state with fresh credentials after relinking", () =>

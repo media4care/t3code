@@ -21,7 +21,7 @@ import { isElectron } from "~/env";
 import { ensureLocalApi } from "~/localApi";
 import { RESIZABLE_WIDTH_PROPERTY, useResizableWidth } from "~/hooks/useResizableWidth";
 import { observeResize } from "~/lib/observeResize";
-import { inferProjectTitleFromPath } from "~/lib/projectPaths";
+import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { Route } from "~/routes/git";
 import { useProjects } from "~/state/entities";
@@ -228,7 +228,7 @@ function RepositoryExplorer({
       : null,
   );
   const previousStatusAt = useRef(0);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh the Git snapshot when the live repository status changes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh the Git snapshot when the live repository status changes.
   useEffect(() => {
     if (!status.dataUpdatedAt || previousStatusAt.current === status.dataUpdatedAt) return;
     const hadStatus = previousStatusAt.current !== 0;

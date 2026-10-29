@@ -661,7 +661,6 @@ it.effect(
               method: "browser-session-cookie",
               scopes: [],
             },
-            {},
             yield* ServerBrowser.ServerBrowser,
             () => Effect.void,
           ).pipe(Layer.provide(configRpcServices)),

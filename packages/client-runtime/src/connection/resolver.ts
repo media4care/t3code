@@ -174,18 +174,15 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
 
-  return Effect.fnUntraced(
-    function* (target: RelayConnectionTarget) {
-      const authorized = yield* remote.authorizeDpop({
-        expectedEnvironmentId: target.environmentId,
-      });
-      return {
-        ...authorized,
-        target,
-      } satisfies PreparedConnection;
-    },
-    Effect.withSpan("clientRuntime.connection.broker.relay"),
-  );
+  return Effect.fnUntraced(function* (target: RelayConnectionTarget) {
+    const authorized = yield* remote.authorizeDpop({
+      expectedEnvironmentId: target.environmentId,
+    });
+    return {
+      ...authorized,
+      target,
+    } satisfies PreparedConnection;
+  }, Effect.withSpan("clientRuntime.connection.broker.relay"));
 });
 
 const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(function* () {

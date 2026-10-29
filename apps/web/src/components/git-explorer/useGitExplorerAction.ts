@@ -46,38 +46,39 @@ export function useGitExplorerAction({
     setPending(true);
     setFailureMessage(null);
     onBusyChange(true);
-    try {
-      const result = await run({
-        environmentId,
-        input: {
-          ...input,
-          ...action,
-          expectedHead: expected.headHash,
-          expectedBranch: expected.headBranch,
-        },
+    return run({
+      environmentId,
+      input: {
+        ...input,
+        ...action,
+        expectedHead: expected.headHash,
+        expectedBranch: expected.headBranch,
+      },
+    })
+      .then((result) => {
+        if (result._tag === "Success") {
+          toastManager.add({ type: "success", title: result.value.message });
+          return true;
+        }
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          const description = error instanceof Error ? error.message : "Refresh and try again.";
+          setFailureMessage(description);
+          toastManager.add({
+            type: "error",
+            title: "Git action failed",
+            description,
+          });
+        }
+        return false;
+      })
+      .finally(() => {
+        refresh();
+        void refreshStatus({ environmentId, input: { cwd: overview.selectedWorktreePath } });
+        inFlight.current = false;
+        setPending(false);
+        onBusyChange(false);
       });
-      if (result._tag === "Success") {
-        toastManager.add({ type: "success", title: result.value.message });
-        return true;
-      }
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        const description = error instanceof Error ? error.message : "Refresh and try again.";
-        setFailureMessage(description);
-        toastManager.add({
-          type: "error",
-          title: "Git action failed",
-          description,
-        });
-      }
-      return false;
-    } finally {
-      refresh();
-      void refreshStatus({ environmentId, input: { cwd: overview.selectedWorktreePath } });
-      inFlight.current = false;
-      setPending(false);
-      onBusyChange(false);
-    }
   };
   return { execute, pending, allowed, failureMessage };
 }

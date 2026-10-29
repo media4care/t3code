@@ -1,6 +1,6 @@
-
 import * as Alchemy from "alchemy";
 import * as Axiom from "@alchemy.run/axiom";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
+import { MobileMonitoring } from "./mobileTelemetry/monitoring.ts";
 import { RelayMonitoring } from "./monitoring.ts";
 
 const relayRecentSpansQuery = (dataset: string) =>
@@ -41,6 +42,37 @@ export const RelayObservability = Effect.gen(function* () {
     })),
   });
 
+  // expo-observe data, forwarded by src/mobileTelemetry. Mobile spans share the traces dataset.
+  const mobileLogs = yield* Axiom.Dataset("MobileLogsDataset", {
+    name: relayResourceNameForStage("t3-code-mobile-logs", stage),
+    kind: "otel:logs:v1",
+    description: "T3 Code mobile app errors, crashes, and log events from expo-observe.",
+    retentionDays: 30,
+    useRetentionPeriod: true,
+  });
+  const mobileMetrics = yield* Axiom.Dataset("MobileMetricsDataset", {
+    name: relayResourceNameForStage("t3-code-mobile-metrics", stage),
+    kind: "otel:metrics:v1",
+    description: "T3 Code mobile app startup and update metrics from expo-observe.",
+    retentionDays: 30,
+    useRetentionPeriod: true,
+  });
+  const mobileTelemetryIngestToken = yield* Axiom.ApiToken("MobileTelemetryAxiomIngestToken", {
+    name: relayResourceNameForStage("t3-code-mobile-telemetry-ingest", stage),
+    description: "Owned by Alchemy. Scoped ingest token the relay forwards mobile telemetry with.",
+    datasetCapabilities: Output.map(
+      Output.all(traces.name, mobileLogs.name, mobileMetrics.name),
+      (datasets) =>
+        Object.fromEntries(datasets.map((dataset) => [dataset, { ingest: ["create" as const] }])),
+    ),
+  });
+
+  const mobileSourceMaps = yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
+    name: mobileSourceMapsBucketName(stage),
+    // R2 refuses to delete a non-empty bucket, which would half tear down every non-prod stage.
+    forceDestroy: stage !== "prod",
+  });
+
   yield* Axiom.View("RelayRecentSpansView", {
     name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
     description: "Recent relay HTTP request spans.",
@@ -49,9 +81,20 @@ export const RelayObservability = Effect.gen(function* () {
   });
 
   yield* RelayMonitoring(traces);
+  yield* MobileMonitoring(mobileLogs, traces);
 
-  return { traces, workerIngestToken } as const;
+  return {
+    traces,
+    workerIngestToken,
+    mobileLogs,
+    mobileMetrics,
+    mobileTelemetryIngestToken,
+    mobileSourceMaps,
+  } as const;
 });
+
+const mobileSourceMapsBucketName = (stage: string) =>
+  relayResourceNameForStage("t3-code-mobile-sourcemaps", stage);
 
 export const withSpanAttributes =
   (attributes: Record<string, unknown>) =>

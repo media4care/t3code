@@ -1,22 +1,12 @@
 # Diagnostics and privacy
 
 This build does not collect or send product usage events, analytics identifiers, or automatic
-relay and mobile traces. No telemetry opt-out is needed. Local logs and resource diagnostics
+relay and mobile traces or mobile crash reports. No telemetry opt-out is needed. Local logs and resource diagnostics
 remain available for troubleshooting.
 
 Connections to hosted services, such as T3 Connect and your configured coding providers, still
 use those services to perform the actions you request. Their service-side logging is separate
 from the app's diagnostics.
-
-## Mobile app crash reports
-
-When the iOS or Android app crashes or hits an error, it sends a report to T3 Code: the error
-message, the stack trace, the app version, and the device model and OS version. Each launch also
-sends startup timings, and every report carries a random ID for the install. Reports go through
-the T3 Connect relay to Axiom. They do not include your threads, prompts, or connection details,
-but an error message can quote a value the app was handling.
-
-To stop sending them, turn off **Send crash reports** in **Settings > About T3 Code > Diagnostics**.
 
 ## Export diagnostics to your own receiver
 

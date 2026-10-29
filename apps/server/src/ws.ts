@@ -30,7 +30,6 @@ import {
   type AuthEnvironmentScope,
   type ScheduledTaskListResult,
   AuthSessionId,
-  ClientSurface,
   type DiscoveredLocalServerList,
   type EditorId,
   type FileManagerRevealKind,
@@ -616,9 +615,6 @@ function toAuthAccessStreamEvent(
       };
   }
 }
-
-const isClientSurface = Schema.is(ClientSurface);
-const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 
 function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (

@@ -59,7 +59,7 @@ export function GitExplorerBranchDeletion(props: {
     : null;
   const review = force ? forceReview : safeReview;
   const forceCount = (forceReview?.eligible.length ?? 0) - (safeReview?.eligible.length ?? 0);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Load and cancel the branch safety review while the confirmation sheet is mounted.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load and cancel the branch safety review while the confirmation sheet is mounted.
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -93,7 +93,7 @@ export function GitExplorerBranchDeletion(props: {
     inFlight.current = true;
     setPending(true);
     const completed = new Set(deleted);
-    try {
+    const deleteReviewed = async () => {
       for (const entry of review.eligible) {
         if (completed.has(entry.reference.name)) continue;
         const result = await deleteBranch({
@@ -113,11 +113,12 @@ export function GitExplorerBranchDeletion(props: {
         setDeleted(new Set(completed));
       }
       props.onClose();
-    } finally {
+    };
+    return deleteReviewed().finally(() => {
       inFlight.current = false;
       setPending(false);
       props.onRefresh();
-    }
+    });
   };
   const remaining = review?.eligible.filter((entry) => !deleted.has(entry.reference.name)) ?? [];
   const statusesByName = new Map(statuses?.map((status) => [status.name, status]));
