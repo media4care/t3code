@@ -29,6 +29,7 @@ import {
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
 import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
+import type { GitExplorerParams } from "../git-explorer/useGitExplorer";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -92,6 +93,7 @@ export type ThreadGitMenuProps = {
   readonly threadId: ThreadId | string;
   readonly currentBranch: string | null;
   readonly hasThread?: boolean;
+  readonly gitExplorerTarget?: Omit<GitExplorerParams, "environmentId">;
   readonly gitStatus: VcsStatusResult | null;
   readonly gitOperationLabel: string | null;
   readonly onOpenFilesInspector?: () => void;
@@ -271,17 +273,24 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     });
   };
 
+  const gitExplorerTarget =
+    props.gitExplorerTarget ??
+    (thread
+      ? {
+          projectId: String(thread.projectId),
+          ...(thread.worktreePath ? { worktreePath: thread.worktreePath } : {}),
+        }
+      : null);
   const openGitExplorer = () => {
-    if (!thread || !isRepo) return;
+    if (!gitExplorerTarget || !isRepo) return;
     navigation.navigate("GitExplorer", {
       environmentId: String(environmentId),
-      projectId: String(thread.projectId),
-      ...(thread.worktreePath ? { worktreePath: thread.worktreePath } : {}),
+      ...gitExplorerTarget,
     });
   };
 
   return {
-    canOpenGitExplorer: isRepo && thread !== null,
+    canOpenGitExplorer: isRepo && gitExplorerTarget !== null,
     currentBranchLabel,
     isRepo,
     openFiles,

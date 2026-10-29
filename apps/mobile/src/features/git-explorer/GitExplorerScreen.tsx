@@ -16,6 +16,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
+import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
@@ -228,6 +229,11 @@ function GitExplorerRepository(props: {
                     : "Fetch unknown"}{" "}
                   · local refs
                 </Text>
+                <GitExplorerSyncControls
+                  params={params}
+                  overview={overview}
+                  onRefresh={explorer.refresh}
+                />
               </View>
               {!branchRail && branchesVisible ? (
                 <View style={{ height: 240 }} className="border-b border-border bg-card">

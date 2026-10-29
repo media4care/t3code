@@ -46,6 +46,13 @@ export function DraftThreadHeader(props: {
   };
   const requiresThread = () =>
     Dialog.alert("Available after the first message", "This action needs a saved thread.");
+  const gitExplorerTarget = props.cwd
+    ? { projectId: String(props.project.id), worktreePath: props.cwd }
+    : undefined;
+  const openGitExplorer = () => {
+    if (!gitExplorerTarget || status.data?.isRepo === false) return;
+    navigation.navigate("GitExplorer", { environmentId, ...gitExplorerTarget });
+  };
   return (
     <ThreadHeader
       draft
@@ -59,11 +66,12 @@ export function DraftThreadHeader(props: {
       inspectorMode={null}
       onToggleInspector={openFiles}
       onOpenFilesInspector={openFiles}
-      onOpenGitInspector={requiresThread}
+      onOpenGitInspector={openGitExplorer}
       gitControls={{
         environmentId,
         threadId: props.thread.id,
         hasThread: false,
+        gitExplorerTarget,
         currentBranch: props.thread.branch,
         gitStatus: status.data,
         gitOperationLabel: progress.currentLabel,
