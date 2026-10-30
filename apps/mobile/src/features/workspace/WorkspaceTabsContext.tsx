@@ -59,6 +59,7 @@ function createWorkspaceTabsModel() {
     pullRequests: 0,
     gitExplorer: 0,
     usage: 0,
+    insights: 0,
     settings: 0,
   };
   return {

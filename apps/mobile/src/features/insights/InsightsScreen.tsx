@@ -1,0 +1,806 @@
+import { useNowMinuteMs } from "../../lib/clock";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useAtomValue } from "@effect/atom-react";
+import { useNavigation } from "@react-navigation/native";
+import {
+  EnvironmentId,
+  ProjectId,
+  type InsightEvidence,
+  type InsightRecommendation,
+  type InsightStatus,
+  type InsightsReport,
+  type InsightsSettings,
+} from "@t3tools/contracts";
+import {
+  actionableInsight,
+  defaultInsightsSettings,
+  insightsModelChoices,
+  INSIGHT_STATUS_LABELS,
+} from "@t3tools/client-runtime/insights";
+import { useState } from "react";
+import {
+  FlatList,
+  Platform,
+  Pressable,
+  RefreshControl,
+  Switch,
+  TextInput,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppBar } from "../../components/ui/AppBar";
+import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { Menu } from "../../components/ui/Menu";
+import { ScreenContent } from "../../components/ui/ScreenContent";
+import { useEnvironments } from "../../state/environments";
+import { useProjects } from "../../state/entities";
+import { environmentPresentations } from "../../state/presentation";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+
+function Picker({
+  label,
+  value,
+  choices,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  choices: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Menu
+      actions={choices.map((choice) => ({
+        id: choice.value,
+        title: choice.label,
+        state: choice.value === value ? "on" : "off",
+      }))}
+      onPressAction={({ nativeEvent }) => onChange(nativeEvent.event)}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        className="min-h-11 justify-center rounded-xl border border-border-subtle px-4 py-2"
+      >
+        <Text className="text-sm text-foreground">
+          {choices.find((choice) => choice.value === value)?.label ?? label} ▾
+        </Text>
+      </Pressable>
+    </Menu>
+  );
+}
+
+export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?: boolean }) {
+  const { environments } = useEnvironments();
+  const [selected, setSelected] = useState<EnvironmentId | null>(null);
+  const environment = environments.find((e) => e.environmentId === selected) ?? environments[0];
+  const navigation = useNavigation();
+  return (
+    <>
+      {inWorkspace && Platform.OS === "ios" ? null : (
+        <AppBar
+          title="Insights"
+          subtitle="Improve your agent workflows"
+          sidebar={!inWorkspace}
+          onBack={inWorkspace ? undefined : () => navigation.goBack()}
+        />
+      )}
+      <ScreenContent>
+        <View className="px-4 py-2">
+          <Picker
+            label="Insights environment"
+            value={environment?.environmentId ?? ""}
+            choices={environments.map((e) => ({
+              value: e.environmentId,
+              label: `${e.label}${e.connection.phase === "connected" ? "" : " · Offline"}`,
+            }))}
+            onChange={(id) => setSelected(EnvironmentId.make(id))}
+          />
+        </View>
+        {environment ? (
+          <EnvironmentInsights
+            key={environment.environmentId}
+            environmentId={environment.environmentId}
+            connected={environment.connection.phase === "connected"}
+          />
+        ) : (
+          <EmptyState
+            title="Connect an environment"
+            detail="Insights uses the threads and providers on your T3 server."
+            variant="plain"
+          />
+        )}
+      </ScreenContent>
+    </>
+  );
+}
+
+function EnvironmentInsights({
+  environmentId,
+  connected,
+}: {
+  environmentId: EnvironmentId;
+  connected: boolean;
+}) {
+  const query = useEnvironmentQuery(serverEnvironment.insightsLive({ environmentId, input: {} }));
+  const canOperate = useAtomValue(
+    serverEnvironment.configureInsights.permissionAtom(environmentId),
+  );
+  const now = useNowMinuteMs();
+  const selectDetail = useSelectWorkspaceDetail();
+  const [tab, setTab] = useState("review");
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [filter, setFilter] = useState("active");
+  const [search, setSearch] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const insets = useSafeAreaInsets();
+  const workspace = useWorkspaceTabs();
+  const run = useAtomCommand(serverEnvironment.runInsights);
+  const configure = useAtomCommand(serverEnvironment.configureInsights);
+  const snapshot = query.data;
+  const active =
+    snapshot?.reports.some((report) => report.status === "analyzing") ||
+    Boolean(
+      snapshot?.latestAnalysis &&
+      ["preparing", "queued", "starting", "running", "waiting"].includes(
+        snapshot.latestAnalysis.status,
+      ),
+    );
+  const recommendations =
+    tab === "review"
+      ? []
+      : (snapshot?.recommendations ?? []).filter(
+          (rec) =>
+            (filter === "all" ||
+              (filter === "active" ? actionableInsight(rec, now) : rec.status === filter)) &&
+            `${rec.title} ${rec.targetFile ?? ""}`.toLowerCase().includes(search.toLowerCase()),
+        );
+  const runNow = async () => {
+    setBusy(true);
+    const result = await run({ environmentId, input: {} });
+    if (result._tag === "Success") {
+      setSelectedReportId(null);
+      setTab("review");
+    }
+    query.refresh();
+    setBusy(false);
+  };
+  return (
+    <FlatList
+      data={recommendations}
+      keyExtractor={(rec) => rec.id}
+      keyboardShouldPersistTaps="handled"
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{
+        padding: 16,
+        paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0) + 24,
+        gap: 12,
+      }}
+      refreshControl={
+        <RefreshControl refreshing={query.isPending && !!snapshot} onRefresh={query.refresh} />
+      }
+      ListHeaderComponent={
+        <View className="gap-4">
+          <Text className="font-t3-semibold text-2xl text-foreground">
+            Make the next run better.
+          </Text>
+          <Text className="text-sm text-foreground-muted">
+            Evidence, impediments, and improvements from your workflows.
+          </Text>
+          {!connected && (
+            <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
+              This environment is offline. Reconnect to load insights.
+            </Text>
+          )}
+          {query.error && (
+            <Text accessibilityRole="alert" className="text-sm text-danger">
+              {query.error}
+            </Text>
+          )}
+          <View className="flex-row flex-wrap gap-2">
+            <Button
+              label={busy || active ? "Refreshing insights…" : "Refresh insights"}
+              icon="arrow.clockwise"
+              accessibilityHint="Run a fresh Astra max review and show the latest insights."
+              disabled={!snapshot?.settings || !canOperate || !connected || busy || active}
+              onPress={() => {
+                void runNow();
+              }}
+            />
+            <Button
+              label="Settings"
+              icon="gearshape"
+              onPress={() => setSettingsOpen(!settingsOpen)}
+            />
+          </View>
+          {snapshot?.settings && (
+            <View className="gap-2">
+              <Text className="text-xs text-foreground-muted">
+                Astra · Max ·{" "}
+                {snapshot.schedule?.enabled
+                  ? `Daily at ${snapshot.settings.timeOfDay} (server local time)`
+                  : "Paused"}
+              </Text>
+              <Button
+                label={snapshot.schedule?.enabled ? "Pause daily review" : "Resume daily review"}
+                tone="text"
+                disabled={!canOperate || !connected}
+                onPress={() => {
+                  const settings = snapshot.settings;
+                  if (settings)
+                    void configure({
+                      environmentId,
+                      input: { ...settings, enabled: !snapshot.schedule?.enabled },
+                    });
+                }}
+              />
+              {snapshot.schedule?.lastRunError && (
+                <Text accessibilityRole="alert" className="text-sm text-danger">
+                  {snapshot.schedule.lastRunError}
+                </Text>
+              )}
+            </View>
+          )}
+          {(settingsOpen || (snapshot && !snapshot.settings)) && (
+            <SettingsForm
+              key={
+                snapshot?.settings
+                  ? `${snapshot.settings.projectId}:${snapshot.settings.timeOfDay}:${snapshot.settings.enabled}`
+                  : "new"
+              }
+              environmentId={environmentId}
+              initial={snapshot?.settings ?? null}
+              disabled={!canOperate || !connected}
+              onSaved={() => {
+                setSettingsOpen(false);
+                query.refresh();
+              }}
+            />
+          )}
+          {snapshot?.latestAnalysis && (
+            <Button
+              label={`Latest analyst thread · ${snapshot.latestAnalysis.status}`}
+              tone="text"
+              onPress={() => {
+                const latest = snapshot.latestAnalysis;
+                if (latest)
+                  selectDetail({
+                    name: "Thread",
+                    params: { environmentId, threadId: latest.threadId },
+                  });
+              }}
+            />
+          )}
+          <Picker
+            label="Insights view"
+            value={tab}
+            choices={[
+              { value: "review", label: "Daily review" },
+              { value: "recommendations", label: "Recommendations" },
+              { value: "history", label: "Improvement history" },
+            ]}
+            onChange={(value) => {
+              setTab(value);
+              setFilter(value === "history" ? "implemented" : "active");
+            }}
+          />
+          {tab === "review" ? (
+            snapshot?.reports.length ? (
+              <DailyReview
+                environmentId={environmentId}
+                reports={snapshot.reports}
+                selectedReportId={selectedReportId}
+                onSelectReport={setSelectedReportId}
+              />
+            ) : (
+              <EmptyState
+                variant="plain"
+                title="Your first review starts here"
+                detail="Enable daily insights and choose Refresh insights. Reports will cite the threads behind each recommendation."
+              />
+            )
+          ) : (
+            <>
+              <TextInput
+                accessibilityLabel="Search recommendations"
+                placeholder="Search recommendations…"
+                value={search}
+                onChangeText={setSearch}
+                className="min-h-12 rounded-xl border border-border-subtle px-4 text-foreground"
+              />
+              <Picker
+                label="Recommendation status"
+                value={filter}
+                choices={[
+                  { value: "active", label: "Actionable" },
+                  { value: "all", label: "All statuses" },
+                  ...Object.entries(INSIGHT_STATUS_LABELS).map(([value, label]) => ({
+                    value,
+                    label,
+                  })),
+                ]}
+                onChange={setFilter}
+              />
+              {snapshot?.truncated && (
+                <Text className="text-xs text-foreground-muted">
+                  Showing the 250 most recently updated recommendations.
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      }
+      ListEmptyComponent={
+        tab !== "review" ? (
+          <EmptyState
+            variant="plain"
+            title={tab === "history" ? "Track the changes you make" : "No recommendations here"}
+            detail={
+              tab === "history"
+                ? "Mark a recommendation implemented and add its change reference. Later reviews will assess its effect."
+                : "Recommendations appear when evidence supports a useful change. Use the filter to revisit dismissed or deferred items."
+            }
+          />
+        ) : undefined
+      }
+      renderItem={({ item }) => (
+        <View className="overflow-hidden rounded-2xl border border-border-subtle bg-surface">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: expanded === item.id }}
+            onPress={() => setExpanded(expanded === item.id ? null : item.id)}
+            className="gap-2 p-4"
+          >
+            <Text className="text-xs text-foreground-muted">
+              {item.priority.toUpperCase()} · {item.category} · {INSIGHT_STATUS_LABELS[item.status]}
+            </Text>
+            <Text className="font-t3-semibold text-base text-foreground">{item.title}</Text>
+            <Text numberOfLines={2} className="text-sm text-foreground-muted">
+              {item.observation}
+            </Text>
+            <Text className="text-xs text-foreground-muted">
+              {item.confidence} confidence · {item.occurrences} reports
+            </Text>
+          </Pressable>
+          {expanded === item.id && (
+            <RecommendationDetail
+              key={`${item.id}:${item.updatedAt}`}
+              environmentId={environmentId}
+              summary={item}
+              disabled={!canOperate || !connected}
+            />
+          )}
+        </View>
+      )}
+    />
+  );
+}
+
+function SettingsForm({
+  environmentId,
+  initial,
+  disabled,
+  onSaved,
+}: {
+  environmentId: EnvironmentId;
+  initial: InsightsSettings | null;
+  disabled: boolean;
+  onSaved: () => void;
+}) {
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const providers =
+    useAtomValue(environmentPresentations.providersByEnvironmentAtom).get(environmentId) ?? [];
+  const choices = insightsModelChoices(providers);
+  const defaults =
+    initial ?? (projects[0] ? defaultInsightsSettings(projects[0].id, providers) : null);
+  const [draft, setDraft] = useState(defaults);
+  const [busy, setBusy] = useState(false);
+  const configure = useAtomCommand(serverEnvironment.configureInsights);
+  const value = draft ?? defaults;
+  if (!value)
+    return (
+      <EmptyState
+        variant="plain"
+        title="Astra and a project are needed"
+        detail="Enable a Codex provider with Astra and add a project to this environment."
+      />
+    );
+  const update = (patch: Partial<InsightsSettings>) => setDraft({ ...value, ...patch });
+  const save = async () => {
+    setBusy(true);
+    const result = await configure({ environmentId, input: value });
+    if (result._tag === "Success") onSaved();
+    setBusy(false);
+  };
+  return (
+    <View className="gap-4 rounded-2xl border border-border-subtle p-4">
+      <Text className="font-t3-semibold text-foreground">Daily workflow review</Text>
+      <Text className="text-sm text-foreground-muted">
+        The selected provider analyzes excerpts from these projects. Recommendations are implemented
+        only when you start work on them.
+      </Text>
+      <Picker
+        label="Analysis project"
+        value={value.projectId}
+        choices={projects.map((p) => ({ value: p.id, label: p.title }))}
+        onChange={(id) => update({ projectId: ProjectId.make(id) })}
+      />
+      <Picker
+        label="Analysis provider"
+        value={`${value.modelSelection.instanceId}/${value.modelSelection.model}`}
+        choices={choices.map((choice) => ({ value: choice.key, label: choice.label }))}
+        onChange={(key) => {
+          const choice = choices.find((c) => c.key === key);
+          if (choice) update({ modelSelection: choice.selection });
+        }}
+      />
+      <Text className="text-sm text-foreground">Daily time · server local time</Text>
+      <TextInput
+        accessibilityLabel="Daily analysis time"
+        value={value.timeOfDay}
+        onChangeText={(timeOfDay) => update({ timeOfDay })}
+        placeholder="09:00"
+        className="min-h-12 rounded-xl border border-border-subtle px-4 text-foreground"
+      />
+      <Text className="text-sm text-foreground">Lookback days (1–90)</Text>
+      <TextInput
+        accessibilityLabel="Lookback days"
+        keyboardType="number-pad"
+        value={String(value.lookbackDays)}
+        onChangeText={(text) => update({ lookbackDays: Number(text) })}
+        className="min-h-12 rounded-xl border border-border-subtle px-4 text-foreground"
+      />
+      <Text className="text-sm text-foreground">Maximum runs per analysis (10–200)</Text>
+      <TextInput
+        accessibilityLabel="Maximum runs"
+        keyboardType="number-pad"
+        value={String(value.maxRuns)}
+        onChangeText={(text) => update({ maxRuns: Number(text) })}
+        className="min-h-12 rounded-xl border border-border-subtle px-4 text-foreground"
+      />
+      <View className="flex-row items-center justify-between">
+        <Text className="text-sm text-foreground">All projects</Text>
+        <Switch
+          accessibilityLabel="Analyze all projects"
+          value={value.projectIds.length === 0}
+          onValueChange={(all) => update({ projectIds: all ? [] : [value.projectId] })}
+        />
+      </View>
+      {value.projectIds.length > 0 &&
+        projects.map((project) => (
+          <View key={project.id} className="flex-row items-center justify-between gap-2">
+            <Text className="flex-1 text-sm text-foreground">{project.title}</Text>
+            <Switch
+              accessibilityLabel={`Analyze ${project.title}`}
+              value={value.projectIds.includes(project.id)}
+              onValueChange={(checked) => {
+                const next = checked
+                  ? [...value.projectIds, project.id]
+                  : value.projectIds.filter((id) => id !== project.id);
+                if (next.length) update({ projectIds: next });
+              }}
+            />
+          </View>
+        ))}
+      <Text className="text-xs text-foreground-muted">
+        The server must be running at the scheduled time. Activity carries forward within the
+        lookback window. Larger batches use more context.
+      </Text>
+      <Button
+        label={initial ? "Save settings" : "Enable daily insights"}
+        tone="primary"
+        loading={busy}
+        disabled={disabled}
+        onPress={() => {
+          void save();
+        }}
+      />
+    </View>
+  );
+}
+
+function DailyReview({
+  environmentId,
+  reports,
+  selectedReportId,
+  onSelectReport,
+}: {
+  environmentId: EnvironmentId;
+  reports: readonly InsightsReport[];
+  selectedReportId: string | null;
+  onSelectReport: (id: string) => void;
+}) {
+  const summary = reports.find((report) => report.id === selectedReportId) ?? reports[0];
+  const detail = useEnvironmentQuery(
+    summary ? serverEnvironment.insightReport({ environmentId, input: { id: summary.id } }) : null,
+  );
+  const selectDetail = useSelectWorkspaceDetail();
+  const loaded = detail.data;
+  const report = loaded && summary && loaded.status === summary.status ? loaded : summary;
+  if (!report) return null;
+  return (
+    <View className="gap-4">
+      <Picker
+        label="Review date"
+        value={report.id}
+        choices={reports.map((r) => ({
+          value: r.id,
+          label: `${new Date(r.createdAt).toLocaleDateString()} · ${r.status}`,
+        }))}
+        onChange={onSelectReport}
+      />
+      <View className="flex-row flex-wrap gap-3">
+        {[
+          { label: "Runs reviewed", value: report.metrics.runs },
+          { label: "Tool failures", value: report.metrics.toolFailures },
+          { label: "Questions & approvals", value: report.metrics.humanRequests },
+          {
+            label: "Recorded tokens",
+            value: report.metrics.runsWithTokenUsage
+              ? report.metrics.tokens.toLocaleString()
+              : "Unavailable",
+          },
+        ].map((metric) => (
+          <View
+            key={metric.label}
+            className="min-w-36 flex-1 rounded-xl border border-border-subtle p-4"
+          >
+            <Text className="font-t3-semibold text-2xl text-foreground">{metric.value}</Text>
+            <Text className="text-xs text-foreground-muted">{metric.label}</Text>
+          </View>
+        ))}
+      </View>
+      <Text className="text-xs text-foreground-muted">
+        Sampled activity. Token coverage: {report.metrics.runsWithTokenUsage}/{report.metrics.runs}{" "}
+        runs. Completion is not verified task success.
+      </Text>
+      <Text className="text-base text-foreground">{report.summary}</Text>
+      <Button
+        label="Open analysis thread"
+        tone="text"
+        onPress={() =>
+          selectDetail({ name: "Thread", params: { environmentId, threadId: report.threadId } })
+        }
+      />
+      {report.wins.length > 0 && (
+        <Text className="font-t3-semibold text-foreground">What worked well</Text>
+      )}
+      {report.wins.map((win) => (
+        <View key={win.text} className="gap-2">
+          <Text className="text-sm text-foreground">{win.text}</Text>
+          <Evidence
+            environmentId={environmentId}
+            evidence={report.evidence.filter((e) => win.evidenceIds.includes(e.id))}
+          />
+        </View>
+      ))}
+      <Text className="font-t3-semibold text-foreground">Coverage and limitations</Text>
+      {report.limitations.map((limitation) => (
+        <Text key={limitation} className="text-xs text-foreground-muted">
+          • {limitation}
+        </Text>
+      ))}
+      {reports.length > 1 && (
+        <View className="gap-2">
+          <Text className="text-sm text-foreground">Runs reviewed per analysis</Text>
+          <View
+            className="h-20 flex-row items-end gap-2"
+            accessible
+            accessibilityLabel="Runs reviewed in recent analyses, oldest to newest"
+          >
+            {reports
+              .slice(0, 14)
+              .reverse()
+              .map((r) => (
+                <View
+                  key={r.id}
+                  className="flex-1 rounded-t bg-primary"
+                  style={{
+                    height: Math.max(
+                      3,
+                      (r.metrics.runs /
+                        Math.max(1, ...reports.map((entry) => entry.metrics.runs))) *
+                        80,
+                    ),
+                  }}
+                />
+              ))}
+          </View>
+          <Text className="text-xs text-foreground-muted">
+            A run can appear again when it changes.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function RecommendationDetail({
+  environmentId,
+  summary,
+  disabled,
+}: {
+  environmentId: EnvironmentId;
+  summary: InsightRecommendation;
+  disabled: boolean;
+}) {
+  const query = useEnvironmentQuery(
+    serverEnvironment.insightRecommendation({ environmentId, input: { id: summary.id } }),
+  );
+  const loaded = query.data;
+  const rec = loaded && loaded.updatedAt === summary.updatedAt ? loaded : summary;
+  const [note, setNote] = useState(rec.note);
+  const [reference, setReference] = useState(rec.implementationRef ?? "");
+  const [busy, setBusy] = useState(false);
+  const update = useAtomCommand(serverEnvironment.updateInsight);
+  const implement = useAtomCommand(serverEnvironment.implementInsight);
+  const selectDetail = useSelectWorkspaceDetail();
+  const act = async (status: InsightStatus) => {
+    setBusy(true);
+    await update({
+      environmentId,
+      input: {
+        id: rec.id,
+        status,
+        note,
+        implementationRef: reference || null,
+        deferredUntil:
+          status === "deferred"
+            ? rec.status === "deferred"
+              ? rec.deferredUntil
+              : new Date(Date.now() + 7 * 86400000).toISOString()
+            : null,
+      },
+    });
+    query.refresh();
+    setBusy(false);
+  };
+  const start = async () => {
+    setBusy(true);
+    const result = await implement({ environmentId, input: { id: rec.id } });
+    if (result._tag === "Success")
+      selectDetail({ name: "Thread", params: { environmentId, threadId: result.value.threadId } });
+    setBusy(false);
+  };
+  return (
+    <View className="gap-4 border-t border-border-subtle p-4">
+      {rec.targetFile && (
+        <Text selectable className="text-xs text-primary-text">
+          {rec.targetFile}
+        </Text>
+      )}
+      {[
+        { title: "Recommendation", text: rec.recommendation },
+        { title: "Suggested change", text: rec.suggestedChange },
+        { title: "Expected impact", text: rec.expectedImpact },
+        { title: "How to validate", text: rec.validation },
+      ].map((section) => (
+        <View key={section.title} className="gap-1">
+          <Text className="font-t3-semibold text-sm text-foreground">{section.title}</Text>
+          <Text selectable className="text-sm text-foreground-muted">
+            {section.text}
+          </Text>
+        </View>
+      ))}
+      <Evidence environmentId={environmentId} evidence={rec.evidence} />
+      {rec.assessments.map((assessment) => (
+        <View key={assessment.reportId} className="gap-2">
+          <Text className="font-t3-semibold text-sm text-foreground">
+            {assessment.outcome.replaceAll("_", " ")}
+          </Text>
+          <Text className="text-sm text-foreground-muted">{assessment.explanation}</Text>
+          <Evidence environmentId={environmentId} evidence={assessment.evidence} />
+        </View>
+      ))}
+      <TextInput
+        accessibilityLabel="Decision note"
+        value={note}
+        onChangeText={setNote}
+        placeholder="Decision note"
+        multiline
+        className="min-h-16 rounded-xl border border-border-subtle p-3 text-foreground"
+      />
+      <TextInput
+        accessibilityLabel="Implementation reference"
+        value={reference}
+        onChangeText={setReference}
+        placeholder="Commit, PR, or change reference"
+        className="min-h-12 rounded-xl border border-border-subtle p-3 text-foreground"
+      />
+      <Button
+        label={rec.implementationThreadId ? "Open implementation" : "Start implementation"}
+        tone="primary"
+        disabled={disabled || busy}
+        onPress={() => {
+          void start();
+        }}
+      />
+      <Button
+        label="Save note"
+        disabled={disabled || busy}
+        onPress={() => {
+          void act(rec.status);
+        }}
+      />
+      <View className="flex-row flex-wrap gap-2">
+        {(["accepted", "deferred", "dismissed", "implemented", "open"] as const)
+          .filter((status) => status !== rec.status)
+          .map((status) => (
+            <Button
+              key={status}
+              label={
+                status === "open"
+                  ? "Reopen"
+                  : status === "deferred"
+                    ? "Defer 7 days"
+                    : status === "implemented"
+                      ? "Mark implemented"
+                      : status === "dismissed"
+                        ? "Dismiss"
+                        : "Accept"
+              }
+              disabled={disabled || busy}
+              onPress={() => {
+                void act(status);
+              }}
+            />
+          ))}
+      </View>
+      {rec.history.map((event) => (
+        <Text
+          key={`${event.at}:${event.status}:${event.note}`}
+          className="text-xs text-foreground-muted"
+        >
+          {new Date(event.at).toLocaleDateString()} · {INSIGHT_STATUS_LABELS[event.status]} ·{" "}
+          {event.note}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function Evidence({
+  environmentId,
+  evidence,
+}: {
+  environmentId: EnvironmentId;
+  evidence: readonly InsightEvidence[];
+}) {
+  const [open, setOpen] = useState(false);
+  const selectDetail = useSelectWorkspaceDetail();
+  if (!evidence.length) return null;
+  return (
+    <View className="gap-3">
+      <Button
+        label={`${open ? "Hide" : "Show"} evidence (${evidence.length})`}
+        tone="text"
+        onPress={() => setOpen(!open)}
+      />
+      {open &&
+        evidence.map((item) => (
+          <View key={item.id} className="gap-2 rounded-xl border border-border-subtle p-3">
+            <Button
+              label={item.title}
+              tone="text"
+              onPress={() =>
+                selectDetail({ name: "Thread", params: { environmentId, threadId: item.threadId } })
+              }
+            />
+            <Text selectable className="text-xs text-foreground-muted">
+              {item.kind} · {item.itemId ?? item.runId}
+            </Text>
+            <Text selectable className="text-xs text-foreground">
+              {item.text}
+            </Text>
+          </View>
+        ))}
+    </View>
+  );
+}

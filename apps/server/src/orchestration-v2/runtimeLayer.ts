@@ -1,3 +1,4 @@
+import * as Insights from "../insights/InsightsService.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -373,6 +374,15 @@ export const layerProduction = Layer.mergeAll(
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerScheduledTaskProvided,
+  Insights.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerScheduledTaskProvided,
+        layerThreadLaunchProvided,
+        layerOrchestratorProvided,
+      ),
+    ),
+  ),
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
   GuestShareService.layer.pipe(
