@@ -1,3 +1,4 @@
+import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { InsightsDashboard } from "./InsightsDashboard";
 import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinuteMs } from "../../lib/clock";
@@ -13,7 +14,9 @@ import {
   type InsightsSettings,
 } from "@t3tools/contracts";
 import {
-  actionableInsight,
+  INSIGHT_IMPLEMENTATION_FILTERS,
+  matchesInsightFilter,
+  insightImplementationUrl,
   defaultInsightsSettings,
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
@@ -21,6 +24,7 @@ import {
 import { useState } from "react";
 import {
   FlatList,
+  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -161,8 +165,7 @@ function EnvironmentInsights({
       : (snapshot?.recommendations ?? [])
           .filter(
             (rec) =>
-              (filter === "all" ||
-                (filter === "active" ? actionableInsight(rec, now) : rec.status === filter)) &&
+              matchesInsightFilter(rec, filter, now) &&
               `${rec.title} ${rec.targetFile ?? ""}`.toLowerCase().includes(search.toLowerCase()),
           )
           .sort(
@@ -288,12 +291,12 @@ function EnvironmentInsights({
             choices={[
               { value: "review", label: "Dashboard" },
               { value: "recommendations", label: "Recommendations" },
-              { value: "history", label: "Improvement history" },
+              { value: "history", label: "Implementation" },
             ]}
             onChange={(value) => {
               setFocusedRecommendationId(null);
               setTab(value);
-              setFilter(value === "history" ? "implemented" : "active");
+              setFilter(value === "history" ? "all" : "active");
             }}
           />
           {tab === "review" ? (
@@ -310,9 +313,10 @@ function EnvironmentInsights({
                   setFocusedRecommendationId(id);
                   setTab("recommendations");
                 }}
-                onOpenHistory={() => {
+                onOpenHistory={(filter = "all") => {
                   setFocusedRecommendationId(null);
-                  setFilter("implemented");
+                  setSearch("");
+                  setFilter(filter);
                   setTab("history");
                 }}
               />
@@ -338,10 +342,13 @@ function EnvironmentInsights({
                 choices={[
                   { value: "active", label: "Actionable" },
                   { value: "all", label: "All statuses" },
-                  ...Object.entries(INSIGHT_STATUS_LABELS).map(([value, label]) => ({
-                    value,
-                    label,
-                  })),
+                  ...INSIGHT_IMPLEMENTATION_FILTERS,
+                  ...Object.entries(INSIGHT_STATUS_LABELS)
+                    .filter(([value]) => value !== "implemented")
+                    .map(([value, label]) => ({
+                      value,
+                      label,
+                    })),
                 ]}
                 onChange={setFilter}
               />
@@ -378,7 +385,13 @@ function EnvironmentInsights({
             <Text className="text-xs text-foreground-muted">
               {item.priority.toUpperCase()} · {item.category} · {INSIGHT_STATUS_LABELS[item.status]}
             </Text>
+            <InsightImplementationBadge recommendation={item} />
             <Text className="font-t3-semibold text-base text-foreground">{item.title}</Text>
+            {item.implementationRef && (
+              <Text numberOfLines={1} className="text-xs text-foreground-muted">
+                Change: {item.implementationRef}
+              </Text>
+            )}
             <Text className="text-xs text-foreground-muted">
               {item.confidence} confidence · {item.occurrences} reports
             </Text>
@@ -533,7 +546,7 @@ function DailyReview({
   selectedReportId: string | null;
   onSelectReport: (id: string) => void;
   onOpenRecommendation: (id: string) => void;
-  onOpenHistory: () => void;
+  onOpenHistory: (filter?: string) => void;
 }) {
   const summary =
     snapshot.reports.find((report) => report.id === selectedReportId) ?? snapshot.reports[0];
@@ -593,6 +606,7 @@ function RecommendationDetail({
   const rec = loaded && loaded.updatedAt === summary.updatedAt ? loaded : summary;
   const [note, setNote] = useState(rec.note);
   const [reference, setReference] = useState(rec.implementationRef ?? "");
+  const implementationUrl = insightImplementationUrl(rec.implementationRef);
   const [busy, setBusy] = useState(false);
   const update = useAtomCommand(serverEnvironment.updateInsight);
   const implement = useAtomCommand(serverEnvironment.implementInsight);
@@ -626,6 +640,58 @@ function RecommendationDetail({
   };
   return (
     <View className="gap-4 border-t border-border-subtle p-4">
+      <View className="gap-3 rounded-xl border border-border-subtle bg-surface p-4">
+        <Text className="font-t3-semibold text-sm text-foreground">Implementation</Text>
+        <InsightImplementationBadge recommendation={rec} />
+        <Text className="text-xs text-foreground-muted">
+          {rec.status === "implemented"
+            ? "Completion recorded. Later reviews assess whether the change helped."
+            : "Completion has not been recorded. Confirm it after checking the change."}
+        </Text>
+        <Text selectable className="text-xs text-foreground-muted">
+          {rec.implementationRef || "No change reference recorded."}
+        </Text>
+        {implementationUrl && (
+          <Button
+            label="Open change reference"
+            tone="text"
+            onPress={() => {
+              void Linking.openURL(implementationUrl);
+            }}
+          />
+        )}
+        {rec.implementationThreadId ? (
+          <Button
+            label="Open implementation thread"
+            tone="text"
+            onPress={() => {
+              if (rec.implementationThreadId)
+                selectDetail({
+                  name: "Thread",
+                  params: { environmentId, threadId: rec.implementationThreadId },
+                });
+            }}
+          />
+        ) : (
+          rec.status !== "implemented" && (
+            <Button
+              label="Start implementation"
+              disabled={disabled || busy}
+              onPress={() => {
+                void start();
+              }}
+            />
+          )
+        )}
+        <Button
+          label={rec.status === "implemented" ? "Reopen" : "Mark implemented"}
+          tone={rec.status === "implemented" ? "secondary" : "primary"}
+          disabled={disabled || busy}
+          onPress={() => {
+            void act(rec.status === "implemented" ? "open" : "implemented");
+          }}
+        />
+      </View>
       {rec.targetFile && (
         <Text selectable className="text-xs text-primary-text">
           {rec.targetFile}
@@ -671,14 +737,6 @@ function RecommendationDetail({
         className="min-h-12 rounded-xl border border-border-subtle p-3 text-foreground"
       />
       <Button
-        label={rec.implementationThreadId ? "Open implementation" : "Start implementation"}
-        tone="primary"
-        disabled={disabled || busy}
-        onPress={() => {
-          void start();
-        }}
-      />
-      <Button
         label="Save note"
         disabled={disabled || busy}
         onPress={() => {
@@ -686,8 +744,11 @@ function RecommendationDetail({
         }}
       />
       <View className="flex-row flex-wrap gap-2">
-        {(["accepted", "deferred", "dismissed", "implemented", "open"] as const)
-          .filter((status) => status !== rec.status)
+        {(["accepted", "deferred", "dismissed", "open"] as const)
+          .filter(
+            (status) =>
+              status !== rec.status && !(status === "open" && rec.status === "implemented"),
+          )
           .map((status) => (
             <Button
               key={status}
@@ -696,11 +757,9 @@ function RecommendationDetail({
                   ? "Reopen"
                   : status === "deferred"
                     ? "Defer 7 days"
-                    : status === "implemented"
-                      ? "Mark implemented"
-                      : status === "dismissed"
-                        ? "Dismiss"
-                        : "Accept"
+                    : status === "dismissed"
+                      ? "Dismiss"
+                      : "Accept"
               }
               disabled={disabled || busy}
               onPress={() => {

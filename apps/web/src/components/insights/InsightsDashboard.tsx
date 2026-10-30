@@ -12,7 +12,12 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import type { EnvironmentId, InsightsReport, InsightsSnapshot } from "@t3tools/contracts";
-import { INSIGHT_STATUS_LABELS } from "@t3tools/client-runtime/insights";
+import {
+  INSIGHT_STATUS_LABELS,
+  INSIGHT_IMPLEMENTATION_LABELS,
+  insightImplementationStatus,
+} from "@t3tools/client-runtime/insights";
+import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { InsightsEvidence } from "./InsightsEvidence";
@@ -38,7 +43,7 @@ export function InsightsDashboard({
   report: InsightsReport;
   snapshot: InsightsSnapshot;
   onOpenRecommendation: (id: string) => void;
-  onOpenHistory: () => void;
+  onOpenHistory: (filter?: string) => void;
   onSelectReport: (id: string) => void;
 }) {
   const { metrics } = report;
@@ -46,10 +51,10 @@ export function InsightsDashboard({
     .filter((r) => report.recommendationIds.includes(r.id))
     .toSorted((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
   const outcomes = OUTCOMES.map((entry) => ({ ...entry, value: metrics[entry.key] }));
-  const counts = Object.entries(INSIGHT_STATUS_LABELS).map(([status, label]) => ({
+  const counts = Object.entries(INSIGHT_IMPLEMENTATION_LABELS).map(([status, label]) => ({
     status,
     label,
-    value: snapshot.recommendations.filter((r) => r.status === status).length,
+    value: snapshot.recommendations.filter((r) => insightImplementationStatus(r) === status).length,
   }));
   const recent = snapshot.reports
     .filter((r) => r.scopeKey === report.scopeKey && ["completed", "empty"].includes(r.status))
@@ -198,7 +203,10 @@ export function InsightsDashboard({
                       <Badge variant={r.priority === "high" ? "warning" : "secondary"}>
                         {r.priority}
                       </Badge>
-                      {r.category} · {INSIGHT_STATUS_LABELS[r.status]}
+                      {r.category}
+                      <InsightImplementationBadge recommendation={r} />
+                      {(r.status === "deferred" || r.status === "dismissed") &&
+                        INSIGHT_STATUS_LABELS[r.status]}
                     </span>
                   </span>
                   <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -273,31 +281,47 @@ export function InsightsDashboard({
 
         <section className="rounded-xl border border-border bg-card p-5">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">Improvement tracking</h3>
-            <Button size="compact" variant="ghost" onClick={onOpenHistory}>
-              History
+            <h3 className="text-sm font-semibold">Implementation progress</h3>
+            <Button size="compact" variant="ghost" onClick={() => onOpenHistory()}>
+              View all
               <ArrowRightIcon />
             </Button>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {snapshot.truncated ? "Latest 250 recommendations" : "Across all reviews"}
+          <p className="mt-2 text-sm">
+            <span className="text-2xl font-semibold tabular-nums">
+              {snapshot.recommendations.filter((r) => r.status === "implemented").length}
+            </span>
+            <span className="text-muted-foreground">
+              {" "}
+              / {snapshot.recommendations.length} implemented
+            </span>
           </p>
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 space-y-1">
             {counts.map((entry) => (
-              <div key={entry.status} className="flex items-center gap-3 text-xs">
-                <span className="w-20 text-muted-foreground">{entry.label}</span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
-                  <div
-                    className={`h-full rounded-full ${entry.status === "implemented" ? "bg-success" : entry.status === "dismissed" ? "bg-muted-foreground/40" : "bg-primary/70"}`}
+              <button
+                type="button"
+                key={entry.status}
+                onClick={() => onOpenHistory(`implementation:${entry.status}`)}
+                aria-label={`${entry.value} ${entry.label.toLowerCase()} recommendations. View recommendations.`}
+                className="flex w-full items-center gap-3 rounded-md px-1 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <span className="w-28 text-muted-foreground">{entry.label}</span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+                  <span
+                    className={`block h-full rounded-full ${entry.status === "implemented" ? "bg-success" : entry.status === "started" ? "bg-primary" : "bg-muted-foreground/40"}`}
                     style={{
                       width: `${(entry.value / Math.max(1, snapshot.recommendations.length)) * 100}%`,
                     }}
                   />
-                </div>
+                </span>
                 <span className="w-6 text-right font-medium tabular-nums">{entry.value}</span>
-              </div>
+              </button>
             ))}
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {snapshot.truncated ? "Latest 250 recommendations. " : ""}Based on recorded
+            implementation status.
+          </p>
         </section>
       </div>
 

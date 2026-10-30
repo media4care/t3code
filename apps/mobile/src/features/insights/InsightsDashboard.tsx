@@ -1,7 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import type { EnvironmentId, InsightsReport, InsightsSnapshot } from "@t3tools/contracts";
-import { INSIGHT_STATUS_LABELS } from "@t3tools/client-runtime/insights";
+import {
+  INSIGHT_STATUS_LABELS,
+  INSIGHT_IMPLEMENTATION_LABELS,
+  insightImplementationStatus,
+} from "@t3tools/client-runtime/insights";
+import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
@@ -63,7 +68,7 @@ export function InsightsDashboard({
   report: InsightsReport;
   snapshot: InsightsSnapshot;
   onOpenRecommendation: (id: string) => void;
-  onOpenHistory: () => void;
+  onOpenHistory: (filter?: string) => void;
   onSelectReport: (id: string) => void;
 }) {
   const selectDetail = useSelectWorkspaceDetail();
@@ -71,10 +76,10 @@ export function InsightsDashboard({
   const recommendations = snapshot.recommendations
     .filter((r) => report.recommendationIds.includes(r.id))
     .sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
-  const counts = Object.entries(INSIGHT_STATUS_LABELS).map(([status, label]) => ({
+  const counts = Object.entries(INSIGHT_IMPLEMENTATION_LABELS).map(([status, label]) => ({
     status,
     label,
-    value: snapshot.recommendations.filter((r) => r.status === status).length,
+    value: snapshot.recommendations.filter((r) => insightImplementationStatus(r) === status).length,
   }));
   const recent = snapshot.reports
     .filter((r) => r.scopeKey === report.scopeKey && ["completed", "empty"].includes(r.status))
@@ -181,6 +186,7 @@ export function InsightsDashboard({
                 <Text numberOfLines={2} className="font-t3-medium text-sm text-foreground">
                   {rec.title}
                 </Text>
+                <InsightImplementationBadge recommendation={rec} />
                 <Text className="text-xs text-foreground-muted">
                   {rec.priority.toUpperCase()} · {rec.category} ·{" "}
                   {INSIGHT_STATUS_LABELS[rec.status]}
@@ -238,18 +244,26 @@ export function InsightsDashboard({
 
       <View className="gap-3 rounded-2xl border border-border-subtle bg-surface p-4">
         <View className="flex-row items-center justify-between">
-          <Text className="font-t3-semibold text-sm text-foreground">Improvement tracking</Text>
-          <Button label="History" tone="text" onPress={onOpenHistory} />
+          <Text className="font-t3-semibold text-sm text-foreground">Implementation progress</Text>
+          <Button label="View all" tone="text" onPress={() => onOpenHistory()} />
         </View>
-        <Text className="text-xs text-foreground-muted">
-          {snapshot.truncated ? "Latest 250 recommendations" : "Across all reviews"}
+        <Text className="font-t3-semibold text-2xl text-foreground">
+          {snapshot.recommendations.filter((r) => r.status === "implemented").length} /{" "}
+          {snapshot.recommendations.length}{" "}
+          <Text className="text-sm text-foreground-muted">implemented</Text>
         </Text>
         {counts.map((entry) => (
-          <View key={entry.status} className="flex-row items-center gap-3">
-            <Text className="w-20 text-xs text-foreground-muted">{entry.label}</Text>
+          <Pressable
+            key={entry.status}
+            accessibilityRole="button"
+            accessibilityLabel={`${entry.value} ${entry.label.toLowerCase()} recommendations. View recommendations.`}
+            onPress={() => onOpenHistory(`implementation:${entry.status}`)}
+            className="min-h-11 flex-row items-center gap-3"
+          >
+            <Text className="w-28 text-xs text-foreground-muted">{entry.label}</Text>
             <View className="h-1.5 flex-1 overflow-hidden rounded-full bg-subtle-strong">
               <View
-                className="h-full rounded-full bg-primary"
+                className={`h-full rounded-full ${entry.status === "not_implemented" ? "bg-foreground-muted" : "bg-primary"}`}
                 style={{
                   width: `${(entry.value / Math.max(1, snapshot.recommendations.length)) * 100}%`,
                 }}
@@ -258,8 +272,12 @@ export function InsightsDashboard({
             <Text className="w-6 text-right font-t3-medium text-xs text-foreground">
               {entry.value}
             </Text>
-          </View>
+          </Pressable>
         ))}
+        <Text className="text-xs text-foreground-muted">
+          {snapshot.truncated ? "Latest 250 recommendations. " : ""}Based on recorded implementation
+          status.
+        </Text>
       </View>
 
       {recent.length > 1 && (
