@@ -1316,6 +1316,19 @@ export function createServerEnvironmentAtoms<R, E>(
             )?.recentRuns.find((run) => run.id === input.runId)?.status,
         ),
     }),
+    qaTests: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:qa:tests",
+      tag: WS_METHODS.qaTests,
+      staleTimeMs: 0,
+      refreshTrigger: ({ environmentId, input }) =>
+        Atom.make(
+          (get) =>
+            AsyncResult.getOrElse(
+              get(qaLive({ environmentId, input: { projectId: input.projectId } })),
+              () => null,
+            )?.recentRuns.find((run) => run.id === input.runId)?.status,
+        ),
+    }),
     startAffectedQa: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:start-affected",
       tag: WS_METHODS.qaStartAffected,

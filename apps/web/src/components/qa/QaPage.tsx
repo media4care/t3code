@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIcon,
   ArrowLeftIcon,
@@ -34,6 +34,7 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
+import { QaTestList } from "./QaTestList";
 
 export function QaPage() {
   const projects = useProjects();
@@ -302,6 +303,7 @@ function ProjectQa({
           environmentId={environmentId}
           projectId={projectId}
           runId={selectedRun}
+          supportsTests={snapshot?.testResultsAvailable ?? false}
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
@@ -465,22 +467,31 @@ function RunDetails({
   environmentId,
   projectId,
   runId,
+  supportsTests,
   onClose,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   runId: string;
+  supportsTests: boolean;
   onClose: () => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Bring the selected run into the scrollable QA viewport when it opens.
+  useEffect(() => {
+    panel.current?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, []);
   const query = useEnvironmentQuery(
     serverEnvironment.qaDetails({ environmentId, input: { projectId, runId } }),
   );
   const data = query.data;
   return (
-    <section aria-label="Run details" className="rounded-xl border border-border p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">{data?.run.suite.name ?? "Run details"}</h2>
-        <div className="flex gap-2">
+    <section ref={panel} aria-label="Run details" className="rounded-xl border border-border p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 className="min-w-0 flex-1 basis-48 break-words text-lg font-semibold">
+          {data?.run.suite.name ?? "Run details"}
+        </h2>
+        <div className="ml-auto flex shrink-0 gap-2">
           <Button variant="ghost" size="sm" onClick={query.refresh}>
             Refresh output
           </Button>
@@ -522,17 +533,27 @@ function RunDetails({
             {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
           </p>
           {data.run.note ? <p className="mt-3 text-sm">{data.run.note}</p> : null}
-          {data.outputTruncated ? (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Output truncated; showing the most recent output.
+          {supportsTests ? (
+            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
+          ) : (
+            <p className="mt-4 text-sm text-muted-foreground">
+              Update this environment’s server to view individual test results.
             </p>
-          ) : null}
-          <pre className="mt-4 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-xs">
-            {data.output ||
-              (data.run.status === "running"
-                ? "Waiting for output. Refresh to see progress."
-                : "No output captured.")}
-          </pre>
+          )}
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium">Run output</summary>
+            {data.outputTruncated ? (
+              <p className="mt-3 text-sm text-muted-foreground">
+                Output truncated; showing the most recent output.
+              </p>
+            ) : null}
+            <pre className="mt-4 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-xs">
+              {data.output ||
+                (data.run.status === "running"
+                  ? "Waiting for output. Refresh to see progress."
+                  : "No output captured.")}
+            </pre>
+          </details>
           {data.reportXml ? (
             <details className="mt-4">
               <summary className="cursor-pointer text-sm font-medium">Saved JUnit report</summary>

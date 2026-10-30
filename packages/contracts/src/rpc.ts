@@ -7,6 +7,8 @@ import {
   QaRunInput,
   QaRun,
   QaRunDetails,
+  QaTestsInput,
+  QaTestResults,
   QaSnapshot,
 } from "./qa.ts";
 import { ThreadId } from "./baseSchemas.ts";
@@ -586,6 +588,7 @@ export const WS_METHODS = {
   qaCancelAffected: "qa.cancelAffected",
   qaCancel: "qa.cancel",
   qaDetails: "qa.details",
+  qaTests: "qa.tests",
   qaSetSchedule: "qa.setSchedule",
   qaImport: "qa.import",
   insightsSubscribe: "insights.subscribe",
@@ -2022,6 +2025,11 @@ const WsQaDetailsRpc = Rpc.make(WS_METHODS.qaDetails, {
   success: QaRunDetails,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
+const WsQaTestsRpc = Rpc.make(WS_METHODS.qaTests, {
+  payload: QaTestsInput,
+  success: QaTestResults,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
 
 const WsInsightsSubscribeRpc = Rpc.make(WS_METHODS.insightsSubscribe, {
   payload: Schema.Struct({}),
@@ -2211,6 +2219,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsQaCancelAffectedRpc,
   WsQaCancelRpc,
   WsQaDetailsRpc,
+  WsQaTestsRpc,
   WsQaSetScheduleRpc,
   WsQaImportRpc,
   WsInsightsSubscribeRpc,

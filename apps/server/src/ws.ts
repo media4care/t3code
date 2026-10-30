@@ -2027,6 +2027,7 @@ export const layerWsRpc = (
         [WS_METHODS.qaCancelAffected]: (input) => qa.cancelAffected(input),
         [WS_METHODS.qaCancel]: (input) => qa.cancel(input),
         [WS_METHODS.qaDetails]: (input) => qa.details(input),
+        [WS_METHODS.qaTests]: (input) => qa.tests(input),
         [WS_METHODS.qaSetSchedule]: (input) => qa.setSchedule(input),
         [WS_METHODS.qaImport]: (input) => qa.importReport(input),
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),

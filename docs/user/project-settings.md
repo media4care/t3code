@@ -121,6 +121,13 @@ Without a report, a zero exit code is labelled **Command passed**, with no infer
 test count. Run details retain the command, working directory, starting Git revision,
 uncommitted-change indicator, timestamps, exit status, and up to 131,072 characters of recent output.
 History and reports stay on the execution environment, outside the repository.
+Choose **View tests** on a suite to browse individual names, pass/fail/skipped
+results, durations, and expandable failure or skip details. Search by name, group,
+or file, filter by result, and page through large reports. The list also works for
+older runs and imported CI results. Existing saved reports work without rerunning;
+runs without JUnit reports cannot show individual tests. **Run output** keeps the
+command log available below the list.
+
 QA shows each suite's latest run and the project's 50 most recent runs. Freshness
 is separate from the result: a pass can need a rerun, and an unchanged input set
 does not hide a failed attempt. Suites also retain the time of their last pass.

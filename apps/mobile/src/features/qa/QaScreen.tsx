@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useRef, useState, type ComponentRef } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -23,6 +23,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import { QaDashboard } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
+import { QaTestList } from "./QaTestList";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 export function QaScreen() {
@@ -98,6 +99,11 @@ function ProjectQa({
   );
   const [busy, setBusy] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const viewRun = (id: string) => {
+    setSelectedRun(id);
+    scroll.current?.scrollTo({ y: 0, animated: false });
+  };
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
   const snapshot = query.data;
@@ -112,7 +118,7 @@ function ProjectQa({
   const runSuite = async (suiteId: string) => {
     setBusy(true);
     const result = await start({ environmentId, input: { projectId, suiteId } });
-    if (result._tag === "Success") setSelectedRun(result.value.id);
+    if (result._tag === "Success") viewRun(result.value.id);
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -122,6 +128,7 @@ function ProjectQa({
   };
   return (
     <ScrollView
+      ref={scroll}
       contentContainerStyle={{
         padding: 16,
         paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0) + 24,
@@ -165,9 +172,11 @@ function ProjectQa({
       ) : null}
       {selectedRun ? (
         <RunDetails
+          key={selectedRun}
           environmentId={environmentId}
           projectId={projectId}
           runId={selectedRun}
+          supportsTests={snapshot?.testResultsAvailable ?? false}
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
@@ -179,7 +188,7 @@ function ProjectQa({
           projectId={projectId}
           snapshot={snapshot}
           connected={connected}
-          onView={setSelectedRun}
+          onView={viewRun}
         />
       ) : null}
       {snapshot?.freshness && counts.total > 0 ? (
@@ -235,7 +244,7 @@ function ProjectQa({
           onCancel={(runId) => {
             void cancelRun(runId);
           }}
-          onView={setSelectedRun}
+          onView={viewRun}
         />
       ) : null}
       {snapshot?.recentRuns.length ? (
@@ -253,7 +262,7 @@ function ProjectQa({
               key={run.id}
               accessibilityRole="button"
               accessibilityLabel={`View ${run.suite.name} run`}
-              onPress={() => setSelectedRun(run.id)}
+              onPress={() => viewRun(run.id)}
               className="gap-2 rounded-xl border border-border-subtle p-4"
             >
               <Text className="font-t3-semibold">
@@ -278,17 +287,20 @@ function RunDetails({
   environmentId,
   projectId,
   runId,
+  supportsTests,
   onClose,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   runId: string;
+  supportsTests: boolean;
   onClose: () => void;
 }) {
   const query = useEnvironmentQuery(
     serverEnvironment.qaDetails({ environmentId, input: { projectId, runId } }),
   );
   const [showReport, setShowReport] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
   const data = query.data;
   return (
     <View className="gap-3 rounded-2xl border border-border-subtle p-4">
@@ -308,18 +320,34 @@ function RunDetails({
             {data.run.dirty ? " + changes" : ""}
           </Text>
           {data.run.note ? <Text>{data.run.note}</Text> : null}
-          {data.outputTruncated ? (
+          {supportsTests ? (
+            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
+          ) : (
             <Text className="text-sm text-foreground-muted">
-              Output truncated; showing the most recent output.
+              Update this environment’s server to view individual test results.
             </Text>
+          )}
+          <Button
+            label={showOutput ? "Hide output" : "Run output"}
+            tone="text"
+            onPress={() => setShowOutput(!showOutput)}
+          />
+          {showOutput ? (
+            <>
+              {data.outputTruncated ? (
+                <Text className="text-sm text-foreground-muted">
+                  Output truncated; showing the most recent output.
+                </Text>
+              ) : null}
+              <View className="max-h-80">
+                <ScrollView nestedScrollEnabled>
+                  <Text selectable className="font-mono text-xs">
+                    {data.output || "No output captured yet. Refresh to see progress."}
+                  </Text>
+                </ScrollView>
+              </View>
+            </>
           ) : null}
-          <View className="max-h-80">
-            <ScrollView nestedScrollEnabled>
-              <Text selectable className="font-mono text-xs">
-                {data.output || "No output captured yet. Refresh to see progress."}
-              </Text>
-            </ScrollView>
-          </View>
           {data.reportXml ? (
             <Button
               label={showReport ? "Hide JUnit report" : "View JUnit report"}

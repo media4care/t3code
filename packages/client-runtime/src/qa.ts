@@ -6,10 +6,26 @@ import {
   type QaSuite,
   type QaTestKind,
   type QaScheduleConfiguration,
+  type QaTestCase,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 export const decodeQaCiReport = Schema.decodeUnknownSync(Schema.fromJsonString(QaCiReport));
+
+export const QA_TEST_FILTERS = [
+  { value: "all", label: "All tests" },
+  { value: "failed", label: "Failed" },
+  { value: "passed", label: "Passed" },
+  { value: "skipped", label: "Skipped" },
+] as const;
+export type QaTestFilter = (typeof QA_TEST_FILTERS)[number]["value"];
+
+export function qaTestDuration(test: QaTestCase) {
+  if (test.durationMs === null) return "Not reported";
+  return test.durationMs < 1000
+    ? `${Math.round(test.durationMs)} ms`
+    : `${(test.durationMs / 1000).toFixed(2)} s`;
+}
 
 export function qaScheduleLabel(configuration: QaScheduleConfiguration) {
   const timing = configuration.timing;

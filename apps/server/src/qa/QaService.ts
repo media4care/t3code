@@ -3,6 +3,7 @@ import {
   QaConfiguration,
   QaRun,
   QaSchedule,
+  QA_TEST_PAGE_SIZE,
   ProjectId,
   type QaSetScheduleInput,
   type QaImportInput,
@@ -11,6 +12,8 @@ import {
   type QaRunInput,
   type QaRunDetails,
   type QaSnapshot,
+  type QaTestsInput,
+  type QaTestResults,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -68,6 +71,7 @@ export class QaService extends Context.Service<
     readonly cancelAffected: (input: QaProjectInput) => Effect.Effect<void, QaError>;
     readonly cancel: (input: QaRunInput) => Effect.Effect<void, QaError>;
     readonly details: (input: QaRunInput) => Effect.Effect<QaRunDetails, QaError>;
+    readonly tests: (input: QaTestsInput) => Effect.Effect<QaTestResults, QaError>;
     readonly setSchedule: (input: QaSetScheduleInput) => Effect.Effect<void, QaError>;
     readonly importReport: (input: QaImportInput) => Effect.Effect<QaRun, QaError>;
   }
@@ -211,6 +215,7 @@ const make = Effect.gen(function* () {
       schedule: yield* readSchedule(input),
       latestCiRuns: yield* Effect.forEach(ci, (row) => decodeRun(row.run_json)),
       branch: yield* git(root, ["branch", "--show-current"]),
+      testResultsAvailable: true,
     };
   }, Effect.mapError(storageError));
 
@@ -232,6 +237,48 @@ const make = Effect.gen(function* () {
       reportXml: rows[0].report_xml,
     };
   }, Effect.mapError(storageError));
+
+  const tests = Effect.fn("QaService.tests")(function* (input: QaTestsInput) {
+    const { run, reportXml } = yield* details(input);
+    const offset = input.offset ?? 0;
+    const empty = { run, tests: [], total: 0, matched: 0, offset, nextOffset: null };
+    if (reportXml === null)
+      return {
+        ...empty,
+        unavailableReason:
+          run.status === "running"
+            ? "Individual results will appear when this run produces its report."
+            : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
+      };
+    const parsed = yield* Effect.try(() => {
+      const tests: QaTestResults["tests"][number][] = [];
+      const terms = (input.search ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+      let matched = 0;
+      const summary = parseJunitReport(reportXml, (test) => {
+        if (input.status && test.status !== input.status) return;
+        const searchable = `${test.name} ${test.group ?? ""} ${test.file ?? ""}`.toLowerCase();
+        if (!terms.every((term) => searchable.includes(term))) return;
+        if (matched >= offset && tests.length < QA_TEST_PAGE_SIZE) tests.push(test);
+        matched += 1;
+      });
+      return {
+        run,
+        tests,
+        total: summary.tests,
+        matched,
+        offset,
+        nextOffset: offset + tests.length < matched ? offset + tests.length : null,
+        unavailableReason: null,
+      };
+    }).pipe(Effect.result);
+    return parsed._tag === "Success"
+      ? parsed.success
+      : {
+          ...empty,
+          unavailableReason:
+            "The saved report could not be read. Open the run output and report for details.",
+        };
+  });
 
   const save = Effect.fn("QaService.save")(function* (value: QaRunDetails) {
     yield* sql`UPDATE qa_runs SET status = ${value.run.status}, run_json = ${yield* encodeRun(value.run)},
@@ -801,6 +848,7 @@ const make = Effect.gen(function* () {
     cancelAffected,
     cancel,
     details,
+    tests,
     setSchedule,
     importReport,
     subscribe: (input) =>
