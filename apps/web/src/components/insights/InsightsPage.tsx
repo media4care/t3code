@@ -1,3 +1,5 @@
+import { InsightsDashboard } from "./InsightsDashboard";
+import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -6,7 +8,6 @@ import { ArrowLeftIcon, LightbulbIcon, RefreshCwIcon, Settings2Icon } from "luci
 import {
   EnvironmentId,
   ProjectId,
-  type InsightEvidence,
   type InsightRecommendation,
   type InsightStatus,
   type InsightsSettings,
@@ -33,6 +34,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Badge } from "../ui/badge";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
@@ -106,7 +108,7 @@ export function InsightsPage() {
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <WorkspacePageContainer width="expanded">
+        <WorkspacePageContainer width="expanded" className="gap-4">
           {environmentId ? (
             <EnvironmentInsights
               key={environmentId}
@@ -149,6 +151,7 @@ function EnvironmentInsights({
   const now = Date.parse(`${useNowMinute()}Z`);
   const [tab, setTab] = useState("review");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [selectedRecommendationId, setSelectedRecommendationId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const run = useAtomCommand(serverEnvironment.runInsights);
@@ -168,6 +171,7 @@ function EnvironmentInsights({
     const result = await run({ environmentId, input: {} });
     if (result._tag === "Success") {
       setSelectedReportId(null);
+      setSelectedRecommendationId(null);
       setTab("review");
     }
     query.refresh();
@@ -177,21 +181,26 @@ function EnvironmentInsights({
     <>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Make the next run better.</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Evidence, impediments, and improvements from your agent workflows.
-          </p>
+          <h2 className="text-2xl font-semibold tracking-tight">Workflow overview</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Your agents at a glance.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={!connected}
-            onClick={query.refresh}
-            aria-label="Reload saved reports"
-          >
-            <RefreshCwIcon />
-            Reload reports
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={!connected}
+                  onClick={query.refresh}
+                  aria-label="Reload saved reports"
+                />
+              }
+            >
+              <RefreshCwIcon />
+            </TooltipTrigger>
+            <TooltipPopup>Reload saved reports</TooltipPopup>
+          </Tooltip>
           <Button variant="outline" onClick={() => setSettingsOpen(!settingsOpen)}>
             <Settings2Icon />
             Settings
@@ -263,7 +272,7 @@ function EnvironmentInsights({
           )}
         </div>
       )}
-      {snapshot?.latestAnalysis && (
+      {snapshot?.latestAnalysis && (active || snapshot.latestAnalysis.status === "failed") && (
         <Link
           to="/$environmentId/$threadId"
           params={{ environmentId, threadId: snapshot.latestAnalysis.threadId }}
@@ -276,7 +285,7 @@ function EnvironmentInsights({
         <>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Insights views">
             {[
-              { value: "review", label: "Daily review" },
+              { value: "review", label: "Dashboard" },
               {
                 value: "recommendations",
                 label: `Recommendations (${snapshot.recommendations.filter((r) => actionableInsight(r, now)).length})`,
@@ -288,7 +297,10 @@ function EnvironmentInsights({
                 aria-selected={tab === entry.value}
                 variant={tab === entry.value ? "secondary" : "ghost"}
                 key={entry.value}
-                onClick={() => setTab(entry.value)}
+                onClick={() => {
+                  setSelectedRecommendationId(null);
+                  setTab(entry.value);
+                }}
               >
                 {entry.label}
               </Button>
@@ -300,6 +312,14 @@ function EnvironmentInsights({
               snapshot={snapshot}
               selectedReportId={selectedReportId}
               onSelectReport={setSelectedReportId}
+              onOpenRecommendation={(id) => {
+                setSelectedRecommendationId(id);
+                setTab("recommendations");
+              }}
+              onOpenHistory={() => {
+                setSelectedRecommendationId(null);
+                setTab("history");
+              }}
             />
           ) : (
             <Recommendations
@@ -307,6 +327,7 @@ function EnvironmentInsights({
               environmentId={environmentId}
               snapshot={snapshot}
               history={tab === "history"}
+              initialId={selectedRecommendationId}
               disabled={!canOperate || !connected}
             />
           )}
@@ -471,11 +492,15 @@ function DailyReview({
   snapshot,
   selectedReportId,
   onSelectReport,
+  onOpenRecommendation,
+  onOpenHistory,
 }: {
   environmentId: EnvironmentId;
   snapshot: InsightsSnapshot;
   selectedReportId: string | null;
   onSelectReport: (id: string) => void;
+  onOpenRecommendation: (id: string) => void;
+  onOpenHistory: () => void;
 }) {
   const summary =
     snapshot.reports.find((report) => report.id === selectedReportId) ?? snapshot.reports[0];
@@ -483,129 +508,63 @@ function DailyReview({
     summary ? serverEnvironment.insightReport({ environmentId, input: { id: summary.id } }) : null,
   );
   const loaded = detail.data;
-  const report = loaded && summary && loaded.status === summary.status ? loaded : summary;
+  const report =
+    loaded && summary && loaded.id === summary.id && loaded.status === summary.status
+      ? loaded
+      : summary;
   if (!report)
     return (
       <Empty
         title="Your first review starts here"
-        text="Enable daily insights and choose Refresh insights. The review will surface useful practices, recurring impediments, and concrete changes supported by your thread history."
+        text="Choose Refresh insights to analyze your agent workflows."
       />
     );
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Picker
-          label="Review date"
-          value={report.id}
-          choices={snapshot.reports.map((r) => ({
-            value: r.id,
-            label: `${new Date(r.createdAt).toLocaleString()} · ${r.status}`,
-          }))}
-          onChange={onSelectReport}
-        />
-        <Link
-          to="/$environmentId/$threadId"
-          params={{ environmentId, threadId: report.threadId }}
-          className="text-sm text-primary underline underline-offset-4"
-        >
-          Open analysis thread
-        </Link>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          { label: "Runs reviewed", value: report.metrics.runs },
-          { label: "Tool failures", value: report.metrics.toolFailures },
-          { label: "Questions & approvals", value: report.metrics.humanRequests },
-          {
-            label: "Recorded tokens",
-            value: report.metrics.runsWithTokenUsage
-              ? report.metrics.tokens.toLocaleString()
-              : "Unavailable",
-          },
-        ].map((metric) => (
-          <div key={metric.label} className="rounded-xl border border-border bg-card p-4">
-            <div className="text-2xl font-semibold tabular-nums">{metric.value}</div>
-            <div className="mt-1 text-xs text-muted-foreground">{metric.label}</div>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Sampled activity, including child runs. Token coverage: {report.metrics.runsWithTokenUsage}/
-        {report.metrics.runs} runs. Failures and requests are signals to investigate, not quality
-        scores.
-      </p>
-      <article className="space-y-5 rounded-xl border border-border bg-card p-6">
-        <Badge variant="secondary">{report.status}</Badge>
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">{report.summary}</p>
-        {report.wins.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="font-semibold">What worked well</h3>
-            {report.wins.map((win) => (
-              <div key={win.text}>
-                <p className="text-sm">{win.text}</p>
-                <Evidence
-                  environmentId={environmentId}
-                  evidence={report.evidence.filter((e) => win.evidenceIds.includes(e.id))}
-                />
-              </div>
-            ))}
-          </section>
-        )}
-        {report.recommendationIds.length > 0 && (
-          <section className="space-y-2">
-            <h3 className="font-semibold">Recommended improvements</h3>
-            {report.recommendationIds.map((id) => {
-              const recommendation = snapshot.recommendations.find((r) => r.id === id);
-              return recommendation ? (
-                <p key={id} className="text-sm">
-                  {recommendation.title} · {recommendation.priority} priority
-                </p>
-              ) : null;
-            })}
-          </section>
-        )}
-        <details>
-          <summary className="cursor-pointer text-sm text-muted-foreground">
-            Coverage and limitations
-          </summary>
-          <ul className="mt-3 list-disc space-y-2 pl-5 text-xs text-muted-foreground">
-            {report.limitations.map((limitation) => (
-              <li key={limitation}>{limitation}</li>
-            ))}
-          </ul>
-        </details>
-      </article>
-      {snapshot.reports.length > 1 && (
-        <div className="rounded-xl border border-border p-5">
-          <h3 className="mb-4 text-sm font-medium">Runs reviewed per analysis</h3>
-          <div
-            className="flex h-24 items-end gap-2"
-            role="img"
-            aria-label="Bar chart of runs reviewed in recent analyses"
-          >
-            {snapshot.reports
-              .slice(0, 14)
-              .toReversed()
-              .map((r) => (
-                <div
-                  key={r.id}
-                  className="flex h-full min-w-0 flex-1 items-end"
-                  aria-label={`${new Date(r.createdAt).toLocaleDateString()}: ${r.metrics.runs} runs`}
-                >
-                  <div
-                    className="w-full rounded-t bg-primary/70"
-                    style={{
-                      height: `${Math.max(3, (r.metrics.runs / Math.max(1, ...snapshot.reports.map((entry) => entry.metrics.runs))) * 100)}%`,
-                    }}
-                  />
-                </div>
-              ))}
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Oldest to newest · a run can appear again when it changes.
-          </p>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">Review</span>
+          <Picker
+            label="Review date"
+            value={report.id}
+            choices={snapshot.reports.map((r) => ({
+              value: r.id,
+              label: new Date(r.createdAt).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              }),
+            }))}
+            onChange={onSelectReport}
+          />
         </div>
+        <div className="flex items-center gap-2">
+          {report.hasMore && <Badge variant="warning">More activity to review</Badge>}
+          <Badge variant={report.status === "failed" ? "error" : "secondary"}>
+            {report.status === "completed"
+              ? "Review complete"
+              : report.status === "analyzing"
+                ? "Analyzing"
+                : report.status === "empty"
+                  ? "No new activity"
+                  : "Analysis failed"}
+          </Badge>
+        </div>
+      </div>
+      {detail.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {detail.error}
+        </p>
       )}
+      <InsightsDashboard
+        environmentId={environmentId}
+        report={report}
+        snapshot={snapshot}
+        onOpenRecommendation={onOpenRecommendation}
+        onOpenHistory={onOpenHistory}
+        onSelectReport={onSelectReport}
+      />
     </>
   );
 }
@@ -614,23 +573,29 @@ function Recommendations({
   environmentId,
   snapshot,
   history,
+  initialId,
   disabled,
 }: {
   environmentId: EnvironmentId;
   snapshot: InsightsSnapshot;
   history: boolean;
+  initialId: string | null;
   disabled: boolean;
 }) {
   const now = Date.parse(`${useNowMinute()}Z`);
-  const [filter, setFilter] = useState(history ? "implemented" : "active");
+  const [filter, setFilter] = useState(initialId ? "all" : history ? "implemented" : "active");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const recommendations = snapshot.recommendations.filter(
-    (r) =>
-      (filter === "all" ||
-        (filter === "active" ? actionableInsight(r, now) : r.status === filter)) &&
-      `${r.title} ${r.targetFile ?? ""} ${r.category}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const [selected, setSelected] = useState<string | null>(initialId);
+  const recommendations = snapshot.recommendations
+    .filter(
+      (r) =>
+        (filter === "all" ||
+          (filter === "active" ? actionableInsight(r, now) : r.status === filter)) &&
+        `${r.title} ${r.targetFile ?? ""} ${r.category}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+    )
+    .toSorted((a, b) => Number(b.id === initialId) - Number(a.id === initialId));
   return (
     <>
       <div className="flex flex-wrap gap-3">
@@ -686,7 +651,6 @@ function Recommendations({
                   </span>
                 </div>
                 <h3 className="font-semibold">{r.title}</h3>
-                <p className="line-clamp-2 text-sm text-muted-foreground">{r.observation}</p>
                 {r.targetFile && (
                   <p className="truncate font-mono text-xs text-muted-foreground">{r.targetFile}</p>
                 )}
@@ -761,6 +725,7 @@ function RecommendationDetail({
     <div className="space-y-5 border-t border-border p-5">
       {query.error && <p role="alert">{query.error}</p>}
       {[
+        { title: "Observation", text: recommendation.observation },
         { title: "Recommendation", text: recommendation.recommendation },
         { title: "Suggested change", text: recommendation.suggestedChange },
         { title: "Expected impact", text: recommendation.expectedImpact },
@@ -773,12 +738,12 @@ function RecommendationDetail({
           </p>
         </section>
       ))}
-      <Evidence environmentId={environmentId} evidence={recommendation.evidence} />
+      <InsightsEvidence environmentId={environmentId} evidence={recommendation.evidence} />
       {recommendation.assessments.map((assessment) => (
         <div key={assessment.reportId} className="space-y-2 rounded-lg bg-muted p-4">
           <Badge variant="secondary">{assessment.outcome.replaceAll("_", " ")}</Badge>
           <p className="text-sm">{assessment.explanation}</p>
-          <Evidence environmentId={environmentId} evidence={assessment.evidence} />
+          <InsightsEvidence environmentId={environmentId} evidence={assessment.evidence} />
         </div>
       ))}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -856,39 +821,5 @@ function RecommendationDetail({
         </details>
       )}
     </div>
-  );
-}
-
-function Evidence({
-  environmentId,
-  evidence,
-}: {
-  environmentId: EnvironmentId;
-  evidence: readonly InsightEvidence[];
-}) {
-  if (!evidence.length) return null;
-  return (
-    <details>
-      <summary className="cursor-pointer text-sm font-medium">Evidence ({evidence.length})</summary>
-      <div className="mt-3 space-y-3">
-        {evidence.map((item) => (
-          <div key={item.id} className="rounded-lg border border-border p-3">
-            <Link
-              to="/$environmentId/$threadId"
-              params={{ environmentId, threadId: item.threadId }}
-              className="text-sm text-primary underline underline-offset-4"
-            >
-              {item.title}
-            </Link>
-            <p className="mt-1 break-all font-mono text-3xs text-muted-foreground">
-              {item.kind} · {item.itemId ?? item.runId}
-            </p>
-            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-              {item.text}
-            </pre>
-          </div>
-        ))}
-      </div>
-    </details>
   );
 }

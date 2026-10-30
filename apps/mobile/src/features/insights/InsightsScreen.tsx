@@ -1,3 +1,5 @@
+import { InsightsDashboard } from "./InsightsDashboard";
+import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinuteMs } from "../../lib/clock";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useAtomValue } from "@effect/atom-react";
@@ -5,10 +7,9 @@ import { useNavigation } from "@react-navigation/native";
 import {
   EnvironmentId,
   ProjectId,
-  type InsightEvidence,
   type InsightRecommendation,
   type InsightStatus,
-  type InsightsReport,
+  type InsightsSnapshot,
   type InsightsSettings,
 } from "@t3tools/contracts";
 import {
@@ -139,6 +140,7 @@ function EnvironmentInsights({
   const [search, setSearch] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [focusedRecommendationId, setFocusedRecommendationId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
@@ -156,17 +158,23 @@ function EnvironmentInsights({
   const recommendations =
     tab === "review"
       ? []
-      : (snapshot?.recommendations ?? []).filter(
-          (rec) =>
-            (filter === "all" ||
-              (filter === "active" ? actionableInsight(rec, now) : rec.status === filter)) &&
-            `${rec.title} ${rec.targetFile ?? ""}`.toLowerCase().includes(search.toLowerCase()),
-        );
+      : (snapshot?.recommendations ?? [])
+          .filter(
+            (rec) =>
+              (filter === "all" ||
+                (filter === "active" ? actionableInsight(rec, now) : rec.status === filter)) &&
+              `${rec.title} ${rec.targetFile ?? ""}`.toLowerCase().includes(search.toLowerCase()),
+          )
+          .sort(
+            (a, b) =>
+              Number(b.id === focusedRecommendationId) - Number(a.id === focusedRecommendationId),
+          );
   const runNow = async () => {
     setBusy(true);
     const result = await run({ environmentId, input: {} });
     if (result._tag === "Success") {
       setSelectedReportId(null);
+      setFocusedRecommendationId(null);
       setTab("review");
     }
     query.refresh();
@@ -188,12 +196,7 @@ function EnvironmentInsights({
       }
       ListHeaderComponent={
         <View className="gap-4">
-          <Text className="font-t3-semibold text-2xl text-foreground">
-            Make the next run better.
-          </Text>
-          <Text className="text-sm text-foreground-muted">
-            Evidence, impediments, and improvements from your workflows.
-          </Text>
+          <Text className="font-t3-semibold text-2xl text-foreground">Workflow overview</Text>
           {!connected && (
             <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
               This environment is offline. Reconnect to load insights.
@@ -207,6 +210,7 @@ function EnvironmentInsights({
           <View className="flex-row flex-wrap gap-2">
             <Button
               label={busy || active ? "Refreshing insights…" : "Refresh insights"}
+              tone="primary"
               icon="arrow.clockwise"
               accessibilityHint="Run a fresh Astra max review and show the latest insights."
               disabled={!snapshot?.settings || !canOperate || !connected || busy || active}
@@ -264,7 +268,7 @@ function EnvironmentInsights({
               }}
             />
           )}
-          {snapshot?.latestAnalysis && (
+          {snapshot?.latestAnalysis && (active || snapshot.latestAnalysis.status === "failed") && (
             <Button
               label={`Latest analyst thread · ${snapshot.latestAnalysis.status}`}
               tone="text"
@@ -282,11 +286,12 @@ function EnvironmentInsights({
             label="Insights view"
             value={tab}
             choices={[
-              { value: "review", label: "Daily review" },
+              { value: "review", label: "Dashboard" },
               { value: "recommendations", label: "Recommendations" },
               { value: "history", label: "Improvement history" },
             ]}
             onChange={(value) => {
+              setFocusedRecommendationId(null);
               setTab(value);
               setFilter(value === "history" ? "implemented" : "active");
             }}
@@ -295,9 +300,21 @@ function EnvironmentInsights({
             snapshot?.reports.length ? (
               <DailyReview
                 environmentId={environmentId}
-                reports={snapshot.reports}
+                snapshot={snapshot}
                 selectedReportId={selectedReportId}
                 onSelectReport={setSelectedReportId}
+                onOpenRecommendation={(id) => {
+                  setFilter("all");
+                  setSearch("");
+                  setExpanded(id);
+                  setFocusedRecommendationId(id);
+                  setTab("recommendations");
+                }}
+                onOpenHistory={() => {
+                  setFocusedRecommendationId(null);
+                  setFilter("implemented");
+                  setTab("history");
+                }}
               />
             ) : (
               <EmptyState
@@ -362,9 +379,6 @@ function EnvironmentInsights({
               {item.priority.toUpperCase()} · {item.category} · {INSIGHT_STATUS_LABELS[item.status]}
             </Text>
             <Text className="font-t3-semibold text-base text-foreground">{item.title}</Text>
-            <Text numberOfLines={2} className="text-sm text-foreground-muted">
-              {item.observation}
-            </Text>
             <Text className="text-xs text-foreground-muted">
               {item.confidence} confidence · {item.occurrences} reports
             </Text>
@@ -508,116 +522,57 @@ function SettingsForm({
 
 function DailyReview({
   environmentId,
-  reports,
+  snapshot,
   selectedReportId,
   onSelectReport,
+  onOpenRecommendation,
+  onOpenHistory,
 }: {
   environmentId: EnvironmentId;
-  reports: readonly InsightsReport[];
+  snapshot: InsightsSnapshot;
   selectedReportId: string | null;
   onSelectReport: (id: string) => void;
+  onOpenRecommendation: (id: string) => void;
+  onOpenHistory: () => void;
 }) {
-  const summary = reports.find((report) => report.id === selectedReportId) ?? reports[0];
+  const summary =
+    snapshot.reports.find((report) => report.id === selectedReportId) ?? snapshot.reports[0];
   const detail = useEnvironmentQuery(
     summary ? serverEnvironment.insightReport({ environmentId, input: { id: summary.id } }) : null,
   );
-  const selectDetail = useSelectWorkspaceDetail();
   const loaded = detail.data;
-  const report = loaded && summary && loaded.status === summary.status ? loaded : summary;
+  const report =
+    loaded && summary && loaded.id === summary.id && loaded.status === summary.status
+      ? loaded
+      : summary;
   if (!report) return null;
   return (
     <View className="gap-4">
       <Picker
         label="Review date"
         value={report.id}
-        choices={reports.map((r) => ({
+        choices={snapshot.reports.map((r) => ({
           value: r.id,
           label: `${new Date(r.createdAt).toLocaleDateString()} · ${r.status}`,
         }))}
         onChange={onSelectReport}
       />
-      <View className="flex-row flex-wrap gap-3">
-        {[
-          { label: "Runs reviewed", value: report.metrics.runs },
-          { label: "Tool failures", value: report.metrics.toolFailures },
-          { label: "Questions & approvals", value: report.metrics.humanRequests },
-          {
-            label: "Recorded tokens",
-            value: report.metrics.runsWithTokenUsage
-              ? report.metrics.tokens.toLocaleString()
-              : "Unavailable",
-          },
-        ].map((metric) => (
-          <View
-            key={metric.label}
-            className="min-w-36 flex-1 rounded-xl border border-border-subtle p-4"
-          >
-            <Text className="font-t3-semibold text-2xl text-foreground">{metric.value}</Text>
-            <Text className="text-xs text-foreground-muted">{metric.label}</Text>
-          </View>
-        ))}
-      </View>
-      <Text className="text-xs text-foreground-muted">
-        Sampled activity. Token coverage: {report.metrics.runsWithTokenUsage}/{report.metrics.runs}{" "}
-        runs. Completion is not verified task success.
-      </Text>
-      <Text className="text-base text-foreground">{report.summary}</Text>
-      <Button
-        label="Open analysis thread"
-        tone="text"
-        onPress={() =>
-          selectDetail({ name: "Thread", params: { environmentId, threadId: report.threadId } })
-        }
-      />
-      {report.wins.length > 0 && (
-        <Text className="font-t3-semibold text-foreground">What worked well</Text>
-      )}
-      {report.wins.map((win) => (
-        <View key={win.text} className="gap-2">
-          <Text className="text-sm text-foreground">{win.text}</Text>
-          <Evidence
-            environmentId={environmentId}
-            evidence={report.evidence.filter((e) => win.evidenceIds.includes(e.id))}
-          />
-        </View>
-      ))}
-      <Text className="font-t3-semibold text-foreground">Coverage and limitations</Text>
-      {report.limitations.map((limitation) => (
-        <Text key={limitation} className="text-xs text-foreground-muted">
-          • {limitation}
+      {detail.error && (
+        <Text accessibilityRole="alert" className="text-sm text-danger">
+          {detail.error}
         </Text>
-      ))}
-      {reports.length > 1 && (
-        <View className="gap-2">
-          <Text className="text-sm text-foreground">Runs reviewed per analysis</Text>
-          <View
-            className="h-20 flex-row items-end gap-2"
-            accessible
-            accessibilityLabel="Runs reviewed in recent analyses, oldest to newest"
-          >
-            {reports
-              .slice(0, 14)
-              .reverse()
-              .map((r) => (
-                <View
-                  key={r.id}
-                  className="flex-1 rounded-t bg-primary"
-                  style={{
-                    height: Math.max(
-                      3,
-                      (r.metrics.runs /
-                        Math.max(1, ...reports.map((entry) => entry.metrics.runs))) *
-                        80,
-                    ),
-                  }}
-                />
-              ))}
-          </View>
-          <Text className="text-xs text-foreground-muted">
-            A run can appear again when it changes.
-          </Text>
-        </View>
       )}
+      {report.hasMore && (
+        <Text className="text-xs text-warning-foreground">More activity to review</Text>
+      )}
+      <InsightsDashboard
+        environmentId={environmentId}
+        report={report}
+        snapshot={snapshot}
+        onOpenRecommendation={onOpenRecommendation}
+        onOpenHistory={onOpenHistory}
+        onSelectReport={onSelectReport}
+      />
     </View>
   );
 }
@@ -677,6 +632,7 @@ function RecommendationDetail({
         </Text>
       )}
       {[
+        { title: "Observation", text: rec.observation },
         { title: "Recommendation", text: rec.recommendation },
         { title: "Suggested change", text: rec.suggestedChange },
         { title: "Expected impact", text: rec.expectedImpact },
@@ -689,14 +645,14 @@ function RecommendationDetail({
           </Text>
         </View>
       ))}
-      <Evidence environmentId={environmentId} evidence={rec.evidence} />
+      <InsightsEvidence environmentId={environmentId} evidence={rec.evidence} />
       {rec.assessments.map((assessment) => (
         <View key={assessment.reportId} className="gap-2">
           <Text className="font-t3-semibold text-sm text-foreground">
             {assessment.outcome.replaceAll("_", " ")}
           </Text>
           <Text className="text-sm text-foreground-muted">{assessment.explanation}</Text>
-          <Evidence environmentId={environmentId} evidence={assessment.evidence} />
+          <InsightsEvidence environmentId={environmentId} evidence={assessment.evidence} />
         </View>
       ))}
       <TextInput
@@ -762,45 +718,6 @@ function RecommendationDetail({
           {event.note}
         </Text>
       ))}
-    </View>
-  );
-}
-
-function Evidence({
-  environmentId,
-  evidence,
-}: {
-  environmentId: EnvironmentId;
-  evidence: readonly InsightEvidence[];
-}) {
-  const [open, setOpen] = useState(false);
-  const selectDetail = useSelectWorkspaceDetail();
-  if (!evidence.length) return null;
-  return (
-    <View className="gap-3">
-      <Button
-        label={`${open ? "Hide" : "Show"} evidence (${evidence.length})`}
-        tone="text"
-        onPress={() => setOpen(!open)}
-      />
-      {open &&
-        evidence.map((item) => (
-          <View key={item.id} className="gap-2 rounded-xl border border-border-subtle p-3">
-            <Button
-              label={item.title}
-              tone="text"
-              onPress={() =>
-                selectDetail({ name: "Thread", params: { environmentId, threadId: item.threadId } })
-              }
-            />
-            <Text selectable className="text-xs text-foreground-muted">
-              {item.kind} · {item.itemId ?? item.runId}
-            </Text>
-            <Text selectable className="text-xs text-foreground">
-              {item.text}
-            </Text>
-          </View>
-        ))}
     </View>
   );
 }
