@@ -19,6 +19,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
@@ -452,7 +453,13 @@ const make = Effect.gen(function* () {
             : []),
         ],
         metrics,
-        evidence,
+        evidence: yield* Effect.forEach(evidence, (entry) =>
+          entry.id.length <= 300
+            ? Effect.succeed(entry)
+            : crypto
+                .digest("SHA-256", new TextEncoder().encode(entry.id))
+                .pipe(Effect.map((digest) => ({ ...entry, id: `sha256:${Hex.encode(digest)}` }))),
+        ),
         recommendationIds: [],
         scopeKey,
         fromSequence,
