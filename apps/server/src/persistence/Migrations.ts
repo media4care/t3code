@@ -1,3 +1,4 @@
+import InsightsMigration from "./Migrations/073_Insights.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -158,6 +159,7 @@ const migrationEntries = [
   [74, "ExcludeAttachmentPlaceholdersFromSearch", Migration0074],
   [75, "SubagentDeliveryState", Migration0075],
   [76, "ProjectionProjectsPinArchive", Migration0076],
+  [77, "Insights", InsightsMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

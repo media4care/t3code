@@ -1,0 +1,11 @@
+# Workflow insights
+
+Open **Insights** in the sidebar or command palette to review how your agents work. On mobile, use the Insights tab; it may be under More if you have customized your tabs. Choose the environment whose threads you want to analyze.
+
+In Insights settings, choose a project for the analyst to work from, an available Codex Astra model, the projects to review, and a daily time. The review runs at max reasoning effort. Times use the server's local timezone, and the server must be running. Pause or resume the schedule anytime, or use **Refresh insights** to run a review immediately and display its results, including while the daily schedule is paused. Analyses consume your provider's normal usage allowance. **Reload reports** on web and desktop, or pull to refresh on mobile, reloads saved reports without starting an analysis.
+
+The first analysis reviews recent activity within your chosen lookback window. Later analyses review new or changed work. Large backlogs carry over to subsequent analyses. Reports show their coverage, missing data, and links to source threads. A completed run does not prove a task succeeded, and missing token usage is not treated as zero usage.
+
+Recommendations identify impediments, propose changes to skills or orchestration, and describe how to validate them. You can accept, defer, dismiss, or reopen each recommendation, with a decision note. **Start implementation** opens an agent thread to make the proposed change. Record its commit or other reference and mark it implemented when the work is complete. Later reviews assess whether new evidence supports an improvement, regression, or no conclusion yet.
+
+The daily analyst reads thread excerpts and relevant workspace files through your selected provider. It proposes changes without applying them. Reports stay in that environment, so connect to the same server from another client to see the same recommendations and decisions.

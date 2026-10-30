@@ -757,6 +757,10 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly usageLimitsCommand?: boolean;
   },
 ) {
+  const insightsLive = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:insights:live",
+    tag: WS_METHODS.insightsSubscribe,
+  });
   const configScheduler = createAtomCommandScheduler();
   const updateScheduler = createAtomCommandScheduler();
   const configConcurrency = {
@@ -1294,6 +1298,33 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-task:webhook-delivery",
       tag: WS_METHODS.scheduledTasksGetWebhookDelivery,
     }),
+    insightsLive,
+    insightReport: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:insights:report",
+      tag: WS_METHODS.insightsReport,
+      staleTimeMs: 0,
+      refreshTrigger: ({ environmentId, input }) =>
+        Atom.make(
+          (get) =>
+            AsyncResult.getOrElse(
+              get(insightsLive({ environmentId, input: {} })),
+              () => null,
+            )?.reports.find((report) => report.id === input.id)?.status,
+        ),
+    }),
+    insightRecommendation: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:insights:recommendation",
+      tag: WS_METHODS.insightsRecommendation,
+      staleTimeMs: 0,
+      refreshTrigger: ({ environmentId, input }) =>
+        Atom.make(
+          (get) =>
+            AsyncResult.getOrElse(
+              get(insightsLive({ environmentId, input: {} })),
+              () => null,
+            )?.recommendations.find((rec) => rec.id === input.id)?.updatedAt,
+        ),
+    }),
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
@@ -1511,6 +1542,24 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
+    }),
+    configureInsights: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:insights:configure",
+      tag: WS_METHODS.insightsConfigure,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    runInsights: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:insights:run",
+      tag: WS_METHODS.insightsRunNow,
+    }),
+    updateInsight: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:insights:update",
+      tag: WS_METHODS.insightsUpdate,
+    }),
+    implementInsight: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:insights:implement",
+      tag: WS_METHODS.insightsImplement,
     }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",

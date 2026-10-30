@@ -1573,6 +1573,17 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:insights",
+    searchTerms: ["insights", "workflow", "skills", "recommendations", "agents"],
+    title: "Open Insights",
+    icon: <ChartNoAxesColumnIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "insights.open",
+    run: async () => {
+      await navigate({ to: "/insights" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
     value: "action:usage",
     searchTerms: ["usage", "use", "tokens", "cost", "spend", "limits", "stats", "analytics"],
     title: "Open usage",

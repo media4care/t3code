@@ -1,3 +1,12 @@
+import { ThreadId } from "./baseSchemas.ts";
+import {
+  InsightsSettings,
+  InsightsSnapshot,
+  InsightsReport,
+  InsightRecommendation,
+  InsightUpdateInput,
+  InsightsError,
+} from "./insights.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -560,6 +569,13 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
+  insightsSubscribe: "insights.subscribe",
+  insightsConfigure: "insights.configure",
+  insightsRunNow: "insights.runNow",
+  insightsReport: "insights.report",
+  insightsRecommendation: "insights.recommendation",
+  insightsUpdate: "insights.update",
+  insightsImplement: "insights.implement",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
@@ -1946,6 +1962,43 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsInsightsSubscribeRpc = Rpc.make(WS_METHODS.insightsSubscribe, {
+  payload: Schema.Struct({}),
+  success: InsightsSnapshot,
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsInsightsConfigureRpc = Rpc.make(WS_METHODS.insightsConfigure, {
+  payload: InsightsSettings,
+  success: InsightsSnapshot,
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+const WsInsightsRunNowRpc = Rpc.make(WS_METHODS.insightsRunNow, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ threadId: Schema.NullOr(ThreadId) }),
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+const WsInsightsReportRpc = Rpc.make(WS_METHODS.insightsReport, {
+  payload: Schema.Struct({ id: TrimmedNonEmptyString }),
+  success: InsightsReport,
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+const WsInsightsRecommendationRpc = Rpc.make(WS_METHODS.insightsRecommendation, {
+  payload: Schema.Struct({ id: TrimmedNonEmptyString }),
+  success: InsightRecommendation,
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+const WsInsightsUpdateRpc = Rpc.make(WS_METHODS.insightsUpdate, {
+  payload: InsightUpdateInput,
+  success: InsightRecommendation,
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+const WsInsightsImplementRpc = Rpc.make(WS_METHODS.insightsImplement, {
+  payload: Schema.Struct({ id: TrimmedNonEmptyString }),
+  success: Schema.Struct({ threadId: ThreadId }),
+  error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2091,6 +2144,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsInsightsSubscribeRpc,
+  WsInsightsConfigureRpc,
+  WsInsightsRunNowRpc,
+  WsInsightsReportRpc,
+  WsInsightsRecommendationRpc,
+  WsInsightsUpdateRpc,
+  WsInsightsImplementRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,

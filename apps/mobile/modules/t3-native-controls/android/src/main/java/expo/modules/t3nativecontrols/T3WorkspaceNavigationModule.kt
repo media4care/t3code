@@ -126,7 +126,7 @@ class T3WorkspaceNavigationView(
   private val onTabSelected by EventDispatcher()
   private val onNewThread by EventDispatcher()
   private val onOverlayChange by EventDispatcher()
-  var tabs by mutableStateOf(listOf("threads", "pullRequests", "gitExplorer", "usage", "settings"))
+  var tabs by mutableStateOf(listOf("threads", "pullRequests", "gitExplorer", "insights", "usage", "settings"))
   var selectedTab by mutableStateOf("threads")
   var rail by mutableStateOf(false)
   var floating by mutableStateOf(false)
@@ -416,6 +416,7 @@ class T3WorkspaceNavigationView(
     "threads" -> "Chats"
     "pullRequests" -> "Pulls"
     "gitExplorer" -> "Git Explorer"
+    "insights" -> "Insights"
     "usage" -> "Usage"
     else -> "Settings"
   }
@@ -429,6 +430,7 @@ class T3WorkspaceNavigationView(
       "threads" -> R.drawable.t3_chats
       "pullRequests" -> R.drawable.t3_pull_requests
       "gitExplorer" -> R.drawable.t3_git_explorer
+      "insights" -> R.drawable.t3_insights
       "usage" -> R.drawable.t3_usage
       else -> R.drawable.t3_settings
     }

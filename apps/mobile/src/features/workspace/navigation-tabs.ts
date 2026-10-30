@@ -23,6 +23,7 @@ export const NAVIGATION_TAB_ICONS = {
   pullRequests: PullRequestGlyph.pullRequest,
   gitExplorer: "point.topleft.down.curvedto.point.bottomright.up",
   usage: "chart.bar.xaxis",
+  insights: "lightbulb",
 } as const satisfies Readonly<Record<NavigationTab, AppSymbolName>>;
 
 export function useNavigationTabOrder() {

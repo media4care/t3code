@@ -60,19 +60,24 @@ describe("workspace root navigation", () => {
     expect(workspaceUsesColumns("pullRequests")).toBe(true);
   });
 
-  it("exposes Git Explorer in the footer for new and existing navigation preferences", () => {
+  it("includes Insights and preserves existing navigation preferences", () => {
     expect(resolveWorkspaceTabOrder(undefined)).toEqual([
       "threads",
       "pullRequests",
       "gitExplorer",
+      "insights",
       "usage",
     ]);
-    expect(resolveWorkspaceTabOrder(["home", "usage", "issues", "threads"])).toEqual(
-      resolveWorkspaceTabOrder(undefined),
-    );
+    expect(resolveWorkspaceTabOrder(["home", "usage", "issues", "threads"])).toEqual([
+      "usage",
+      "threads",
+      "pullRequests",
+      "gitExplorer",
+      "insights",
+    ]);
     const order = resolveWorkspaceTabOrder(["threads", "pullRequests", "usage"]);
-    expect(workspaceTabForNativeSlot(order, "third")).toBe("gitExplorer");
-    expect(workspaceTabForNativeSlot(order, "fourth")).toBe("usage");
+    expect(workspaceTabForNativeSlot(order, "third")).toBe("usage");
+    expect(workspaceTabForNativeSlot(order, "fourth")).toBe("gitExplorer");
     expect(workspaceTabForNativeSlot(order, "settings")).toBe("settings");
   });
 
@@ -158,7 +163,7 @@ describe("workspace root navigation", () => {
       query: "retained",
       tab: "threads",
     });
-    for (const tab of ["gitExplorer", "usage"] as const) {
+    for (const tab of ["gitExplorer", "insights", "usage"] as const) {
       state = workspaceTabsReducer(state, { type: "select", tab });
       expect(state.selectedTab).toBe(tab);
       expect(workspaceTabsReducer(state, { type: "search" })).toBe(state);

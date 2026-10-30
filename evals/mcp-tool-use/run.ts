@@ -5,6 +5,8 @@
  * harness capture supplies the prompt and native tools; a cheap model plays the shell. See
  * README.md for how to run it and add cases.
  */
+import { INSIGHTS_ANALYSIS_PROMPT } from "../../apps/server/src/insights/insightsPrompt.ts";
+import { InsightsToolkit } from "../../apps/server/src/mcp/toolkits/insights/tools.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodeVM from "node:vm";
@@ -225,6 +227,7 @@ export const McpToolUseCase = Schema.Struct({
   privacy: Schema.optional(Schema.Literals(["commit-safe", "private"])),
   setup: Schema.Struct({
     role: Schema.Literals(["top", "delegated-child", "native-subagent"]),
+    insightsAnalysis: Schema.optional(Schema.Boolean),
     /** Runs only on this harness, for cases whose right answer depends on it. */
     harness: Schema.optional(Schema.Literals(["claude", "codex"])),
     /** The Linked environments beta is on, so T3 lists its link tools. */
@@ -361,6 +364,7 @@ export const normalizeToolInput = (name: string, input: unknown) =>
 const t3SourceTools: ReadonlyArray<Tool.Any> = [
   OrchestratorToolkit,
   ThreadToolkit,
+  InsightsToolkit,
   AttachmentToolkit,
   ProjectToolkit,
   EnvironmentToolkit,
@@ -878,7 +882,9 @@ export const buildMessages = (sample: Sample) => {
   }
   const userText =
     testCase.promptContext === undefined
-      ? testCase.prompt
+      ? testCase.setup.insightsAnalysis
+        ? INSIGHTS_ANALYSIS_PROMPT
+        : testCase.prompt
       : projectComposerContextForProvider({ text: testCase.prompt, ...testCase.promptContext });
   const sideChat = testCase.setup.sideChat;
   const prompt =

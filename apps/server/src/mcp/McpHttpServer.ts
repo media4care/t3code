@@ -1,3 +1,5 @@
+import { InsightsToolkit } from "./toolkits/insights/tools.ts";
+import * as InsightsHandlers from "./toolkits/insights/handlers.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -931,6 +933,7 @@ export const layerTools = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
+  toolkitRegistration(InsightsToolkit, InsightsHandlers.layer),
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,

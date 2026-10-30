@@ -1,3 +1,4 @@
+import * as Insights from "./insights/InsightsService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1168,6 +1169,7 @@ export const layerWsRpc = (
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const insights = yield* Insights.InsightsService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2017,6 +2019,13 @@ export const layerWsRpc = (
               Effect.as(commandOutputHub.subscribe(input)),
             ),
           ),
+        [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
+        [WS_METHODS.insightsConfigure]: (input) => insights.configure(input),
+        [WS_METHODS.insightsRunNow]: () => insights.runNow(),
+        [WS_METHODS.insightsReport]: (input) => insights.report(input.id),
+        [WS_METHODS.insightsRecommendation]: (input) => insights.recommendation(input.id),
+        [WS_METHODS.insightsUpdate]: (input) => insights.update(input),
+        [WS_METHODS.insightsImplement]: (input) => insights.implement(input.id),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
           scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) => scheduledTasks.upsert(input),

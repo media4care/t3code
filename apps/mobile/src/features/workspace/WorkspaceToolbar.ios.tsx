@@ -53,7 +53,9 @@ export function WorkspaceToolbar(props: {
   const tab = workspace.state.tabs[selectedTab];
   const searchLabel =
     SEARCH_LABELS[
-      selectedTab === "usage" || selectedTab === "gitExplorer" ? "threads" : selectedTab
+      selectedTab === "usage" || selectedTab === "gitExplorer" || selectedTab === "insights"
+        ? "threads"
+        : selectedTab
     ];
   const { isTabActive: isListTabActive } = workspace;
   // A retained tab slot stays mounted while another is shown.

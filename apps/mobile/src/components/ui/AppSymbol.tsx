@@ -1,3 +1,4 @@
+import IconBulb from "@tabler/icons-react-native/IconBulb";
 import type { Icon } from "@tabler/icons-react-native/types";
 /* Package-root imports eagerly register the entire Tabler icon set in Metro. */
 import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
@@ -273,6 +274,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "bubble.left.and.bubble.right": IconMessage,
   "bubble.left": IconMessage,
   sparkles: IconSparkles,
+  lightbulb: IconBulb,
   "plus.bubble": IconMessagePlus,
   "text.word.spacing": IconLetterSpacing,
   "textformat.size": IconTypography,

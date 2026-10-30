@@ -530,6 +530,10 @@
     "./state/git-explorer": {
       "types": "./src/state/gitExplorer.ts",
       "default": "./src/state/gitExplorer.ts"
+    },
+    "./insights": {
+      "types": "./src/insights.ts",
+      "default": "./src/insights.ts"
     }
   },
   "scripts": {
