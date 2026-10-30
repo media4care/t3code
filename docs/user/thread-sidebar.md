@@ -257,8 +257,12 @@ the snooze. Enable **Snooze until limits reset** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
-On mobile, open a subagent from its conversation card or **Agents**. On iOS
+Open **Agents** in a thread to see its subagents, their parent-child relationships,
+models, status, and reported results. Select an agent to inspect its assignment
+and output, or choose **Conversation** to open its full thread. Completed agents
+remain available across turns. Model and output details depend on what the provider
+reports; agents on another environment need a connection there to open their conversations.
+On mobile, you can also open a subagent from its conversation card. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to
 fill the screen; close the full-screen view to return to the parent and inspector.
 Stop on a thread also stops the subagents it delegated to.
