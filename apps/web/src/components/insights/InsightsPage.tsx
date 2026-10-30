@@ -1,3 +1,4 @@
+import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { InsightsDashboard } from "./InsightsDashboard";
 import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -15,6 +16,9 @@ import {
 } from "@t3tools/contracts";
 import {
   actionableInsight,
+  INSIGHT_IMPLEMENTATION_FILTERS,
+  matchesInsightFilter,
+  insightImplementationUrl,
   defaultInsightsSettings,
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
@@ -151,6 +155,7 @@ function EnvironmentInsights({
   const now = Date.parse(`${useNowMinute()}Z`);
   const [tab, setTab] = useState("review");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [recommendationFilter, setRecommendationFilter] = useState("active");
   const [selectedRecommendationId, setSelectedRecommendationId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -290,7 +295,7 @@ function EnvironmentInsights({
                 value: "recommendations",
                 label: `Recommendations (${snapshot.recommendations.filter((r) => actionableInsight(r, now)).length})`,
               },
-              { value: "history", label: "Improvement history" },
+              { value: "history", label: "Implementation" },
             ].map((entry) => (
               <Button
                 role="tab"
@@ -299,6 +304,7 @@ function EnvironmentInsights({
                 key={entry.value}
                 onClick={() => {
                   setSelectedRecommendationId(null);
+                  setRecommendationFilter(entry.value === "history" ? "all" : "active");
                   setTab(entry.value);
                 }}
               >
@@ -316,8 +322,9 @@ function EnvironmentInsights({
                 setSelectedRecommendationId(id);
                 setTab("recommendations");
               }}
-              onOpenHistory={() => {
+              onOpenHistory={(filter = "all") => {
                 setSelectedRecommendationId(null);
+                setRecommendationFilter(filter);
                 setTab("history");
               }}
             />
@@ -328,6 +335,7 @@ function EnvironmentInsights({
               snapshot={snapshot}
               history={tab === "history"}
               initialId={selectedRecommendationId}
+              initialFilter={recommendationFilter}
               disabled={!canOperate || !connected}
             />
           )}
@@ -500,7 +508,7 @@ function DailyReview({
   selectedReportId: string | null;
   onSelectReport: (id: string) => void;
   onOpenRecommendation: (id: string) => void;
-  onOpenHistory: () => void;
+  onOpenHistory: (filter?: string) => void;
 }) {
   const summary =
     snapshot.reports.find((report) => report.id === selectedReportId) ?? snapshot.reports[0];
@@ -574,23 +582,24 @@ function Recommendations({
   snapshot,
   history,
   initialId,
+  initialFilter,
   disabled,
 }: {
   environmentId: EnvironmentId;
   snapshot: InsightsSnapshot;
   history: boolean;
   initialId: string | null;
+  initialFilter: string;
   disabled: boolean;
 }) {
   const now = Date.parse(`${useNowMinute()}Z`);
-  const [filter, setFilter] = useState(initialId ? "all" : history ? "implemented" : "active");
+  const [filter, setFilter] = useState(initialId ? "all" : initialFilter);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(initialId);
   const recommendations = snapshot.recommendations
     .filter(
       (r) =>
-        (filter === "all" ||
-          (filter === "active" ? actionableInsight(r, now) : r.status === filter)) &&
+        matchesInsightFilter(r, filter, now) &&
         `${r.title} ${r.targetFile ?? ""} ${r.category}`
           .toLowerCase()
           .includes(search.toLowerCase()),
@@ -613,7 +622,10 @@ function Recommendations({
           choices={[
             { value: "active", label: "Actionable" },
             { value: "all", label: "All statuses" },
-            ...Object.entries(INSIGHT_STATUS_LABELS).map(([value, label]) => ({ value, label })),
+            ...INSIGHT_IMPLEMENTATION_FILTERS,
+            ...Object.entries(INSIGHT_STATUS_LABELS)
+              .filter(([value]) => value !== "implemented")
+              .map(([value, label]) => ({ value, label })),
           ]}
           onChange={setFilter}
         />
@@ -643,6 +655,7 @@ function Recommendations({
                 aria-expanded={selected === r.id}
               >
                 <div className="flex flex-wrap gap-2">
+                  <InsightImplementationBadge recommendation={r} />
                   <Badge variant="secondary">{r.priority}</Badge>
                   <Badge variant="outline">{r.category}</Badge>
                   <span className="text-xs text-muted-foreground">
@@ -651,6 +664,11 @@ function Recommendations({
                   </span>
                 </div>
                 <h3 className="font-semibold">{r.title}</h3>
+                {r.implementationRef && (
+                  <p className="truncate text-xs text-muted-foreground">
+                    Change: {r.implementationRef}
+                  </p>
+                )}
                 {r.targetFile && (
                   <p className="truncate font-mono text-xs text-muted-foreground">{r.targetFile}</p>
                 )}
@@ -690,6 +708,7 @@ function RecommendationDetail({
   const navigate = useNavigate();
   const [note, setNote] = useState(recommendation.note);
   const [reference, setReference] = useState(recommendation.implementationRef ?? "");
+  const implementationUrl = insightImplementationUrl(recommendation.implementationRef);
   const [busy, setBusy] = useState(false);
   const act = async (status: InsightStatus) => {
     setBusy(true);
@@ -724,6 +743,66 @@ function RecommendationDetail({
   return (
     <div className="space-y-5 border-t border-border p-5">
       {query.error && <p role="alert">{query.error}</p>}
+      <section className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-semibold">Implementation</h4>
+            <InsightImplementationBadge recommendation={recommendation} />
+          </div>
+          <Button
+            size="sm"
+            variant={recommendation.status === "implemented" ? "outline" : "default"}
+            disabled={disabled || busy}
+            onClick={() => {
+              void act(recommendation.status === "implemented" ? "open" : "implemented");
+            }}
+          >
+            {recommendation.status === "implemented" ? "Reopen" : "Mark implemented"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {recommendation.status === "implemented"
+            ? "Completion recorded. Later reviews assess whether the change helped."
+            : "Completion has not been recorded. Confirm it after checking the change."}
+        </p>
+        {recommendation.implementationRef ? (
+          implementationUrl ? (
+            <a
+              href={implementationUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="block break-all text-sm text-primary underline underline-offset-4"
+            >
+              {recommendation.implementationRef}
+            </a>
+          ) : (
+            <p className="break-all font-mono text-xs">{recommendation.implementationRef}</p>
+          )
+        ) : (
+          <p className="text-xs text-muted-foreground">No change reference recorded.</p>
+        )}
+        {recommendation.implementationThreadId ? (
+          <Link
+            to="/$environmentId/$threadId"
+            params={{ environmentId, threadId: recommendation.implementationThreadId }}
+            className="inline-block text-sm text-primary underline underline-offset-4"
+          >
+            Open implementation thread
+          </Link>
+        ) : (
+          recommendation.status !== "implemented" && (
+            <Button
+              variant="outline"
+              disabled={disabled || busy}
+              onClick={() => {
+                void start();
+              }}
+            >
+              Start implementation
+            </Button>
+          )
+        )}
+      </section>
       {[
         { title: "Observation", text: recommendation.observation },
         { title: "Recommendation", text: recommendation.recommendation },
@@ -774,16 +853,12 @@ function RecommendationDetail({
         >
           Save note
         </Button>
-        <Button
-          disabled={disabled || busy}
-          onClick={() => {
-            void start();
-          }}
-        >
-          {recommendation.implementationThreadId ? "Open implementation" : "Start implementation"}
-        </Button>
-        {(["accepted", "deferred", "dismissed", "implemented", "open"] as const)
-          .filter((status) => status !== recommendation.status)
+        {(["accepted", "deferred", "dismissed", "open"] as const)
+          .filter(
+            (status) =>
+              status !== recommendation.status &&
+              !(status === "open" && recommendation.status === "implemented"),
+          )
           .map((status) => (
             <Button
               key={status}
@@ -797,11 +872,9 @@ function RecommendationDetail({
                 ? "Reopen"
                 : status === "deferred"
                   ? "Defer 7 days"
-                  : status === "implemented"
-                    ? "Mark implemented"
-                    : status === "dismissed"
-                      ? "Dismiss"
-                      : "Accept"}
+                  : status === "dismissed"
+                    ? "Dismiss"
+                    : "Accept"}
             </Button>
           ))}
       </div>
