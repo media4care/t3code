@@ -1,5 +1,6 @@
 import {
   agentMapMetadata,
+  agentMapEmptyDetail,
   agentMapStatus,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
@@ -52,10 +53,79 @@ export function AgentMapStatus({ node }: { node: ThreadAgentMapNode }) {
   );
 }
 
+export function AgentMapCard({
+  node,
+  provider,
+  selected,
+  onSelect,
+}: {
+  node: ThreadAgentMapNode;
+  provider: ServerProvider | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const metadata = agentMapMetadata(node, provider);
+  const preview = subagentDetailPreview(node.agent);
+  return (
+    <button
+      type="button"
+      data-agent-node={node.id}
+      aria-pressed={selected}
+      aria-label={`${node.agent.title}, ${agentMapStatus(node).label}`}
+      onClick={onSelect}
+      className={cn(
+        "relative block w-full cursor-pointer rounded-2xl border border-border bg-linear-to-br from-foreground/3 to-card bg-card p-4 text-left outline-none transition-[border-color,box-shadow] duration-150 hover:border-foreground/25 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none",
+        selected &&
+          "border-info/70 from-info/8 shadow-lg shadow-info/10 ring-2 ring-inset ring-info/10",
+      )}
+    >
+      <span className="mb-3 flex min-w-0 items-center gap-2">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-foreground/5 bg-foreground/5">
+          {provider || node.source ? (
+            <ProviderInstanceIcon
+              driverKind={provider?.driver ?? node.source!.driver}
+              displayName={metadata.provider}
+              acpRegistryIconUrl={provider?.iconUrl}
+              iconClassName="size-4"
+            />
+          ) : (
+            <BotIcon className="size-4 text-muted-foreground" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium">{metadata.model}</span>
+          <span className="block truncate text-2xs text-muted-foreground">{metadata.provider}</span>
+        </span>
+        <span className="shrink-0 text-2xs text-muted-foreground">
+          <AgentElapsed agent={node.agent} compact />
+        </span>
+      </span>
+      <span className="line-clamp-2 break-words text-sm font-medium">{node.agent.title}</span>
+      <span className="mt-1 block min-h-8 text-2xs leading-relaxed text-muted-foreground">
+        <span className="line-clamp-2 break-words">{preview ?? agentMapEmptyDetail(node)}</span>
+      </span>
+      <span className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <AgentMapStatus node={node} />
+        <span className="text-2xs text-muted-foreground">{node.kind}</span>
+      </span>
+      {node.source?.remoteChild ? (
+        <span className="mt-2 block truncate text-2xs text-muted-foreground">
+          on {node.source.remoteChild.label}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function ThreadAgentMap(props: {
   readonly title: string;
   readonly nodes: ReadonlyArray<ThreadAgentMapNode>;
   readonly providerFor: (node: ThreadAgentMapNode) => ServerProvider | undefined;
+  readonly renderCard?: (
+    node: ThreadAgentMapNode,
+    selected: boolean,
+    onSelect: () => void,
+  ) => ReactNode;
   readonly renderInspector: (node: ThreadAgentMapNode) => ReactNode;
 }) {
   const [selection, setSelection] = useState<string | null>(null);
@@ -139,64 +209,19 @@ export function ThreadAgentMap(props: {
       <>
         {siblings.slice(0, limit).map((node) => {
           const provider = props.providerFor(node);
-          const metadata = agentMapMetadata(node, provider);
-          const preview = subagentDetailPreview(node.agent);
           const descendants = children.get(node.id)?.length ?? 0;
           return (
             <div key={node.id} className="min-w-0">
-              <button
-                type="button"
-                data-agent-node={node.id}
-                aria-pressed={selected?.id === node.id}
-                aria-label={`${node.agent.title}, ${agentMapStatus(node).label}`}
-                onClick={() => setSelection(node.id)}
-                className={cn(
-                  "relative block w-full cursor-pointer rounded-2xl border border-border bg-linear-to-br from-foreground/3 to-card bg-card p-4 text-left outline-none transition-[border-color,box-shadow] duration-150 hover:border-foreground/25 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none",
-                  selected?.id === node.id &&
-                    "border-info/70 from-info/8 shadow-lg shadow-info/10 ring-2 ring-inset ring-info/10",
-                )}
-              >
-                <span className="mb-3 flex min-w-0 items-center gap-2">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-foreground/5 bg-foreground/5">
-                    {provider || node.source ? (
-                      <ProviderInstanceIcon
-                        driverKind={provider?.driver ?? node.source!.driver}
-                        displayName={metadata.provider}
-                        acpRegistryIconUrl={provider?.iconUrl}
-                        iconClassName="size-4"
-                      />
-                    ) : (
-                      <BotIcon className="size-4 text-muted-foreground" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium">{metadata.model}</span>
-                    <span className="block truncate text-2xs text-muted-foreground">
-                      {metadata.provider}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-2xs text-muted-foreground">
-                    <AgentElapsed agent={node.agent} compact />
-                  </span>
-                </span>
-                <span className="line-clamp-2 break-words text-sm font-medium">
-                  {node.agent.title}
-                </span>
-                <span className="mt-1 block min-h-8 text-2xs leading-relaxed text-muted-foreground">
-                  <span className="line-clamp-2 break-words">
-                    {preview ?? "No update reported yet."}
-                  </span>
-                </span>
-                <span className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                  <AgentMapStatus node={node} />
-                  <span className="text-2xs text-muted-foreground">{node.kind}</span>
-                </span>
-                {node.source?.remoteChild ? (
-                  <span className="mt-2 block truncate text-2xs text-muted-foreground">
-                    on {node.source.remoteChild.label}
-                  </span>
-                ) : null}
-              </button>
+              {props.renderCard ? (
+                props.renderCard(node, selected?.id === node.id, () => setSelection(node.id))
+              ) : (
+                <AgentMapCard
+                  node={node}
+                  provider={provider}
+                  selected={selected?.id === node.id}
+                  onSelect={() => setSelection(node.id)}
+                />
+              )}
               {descendants > 0 ? (
                 <div className="mt-2 flex justify-center">
                   <Button
@@ -241,28 +266,10 @@ export function ThreadAgentMap(props: {
       </>
     );
   };
-  const counts = props.nodes.reduce(
-    (total, node) => {
-      const tone = agentMapStatus(node).tone;
-      total[tone] = (total[tone] ?? 0) + 1;
-      return total;
-    },
-    {} as Partial<Record<ReturnType<typeof agentMapStatus>["tone"], number>>,
-  );
   return (
     <div className="@container/agent-map">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>{props.nodes.length} agents</span>
-        {counts.working ? (
-          <span className="text-info-foreground">{counts.working} working</span>
-        ) : null}
-        {counts.waiting ? (
-          <span className="text-warning-foreground">{counts.waiting} waiting</span>
-        ) : null}
-        {counts.done ? <span>{counts.done} done</span> : null}
-        {counts.failed ? (
-          <span className="text-destructive-foreground">{counts.failed} failed</span>
-        ) : null}
       </div>
       <div ref={canvas} className="relative isolate py-6">
         <svg

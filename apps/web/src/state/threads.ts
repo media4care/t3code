@@ -2,6 +2,7 @@ import { createChildThreadApprovalsAtom } from "@t3tools/client-runtime/state/th
 import { useAtomValue } from "@effect/atom-react";
 import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
+import { createThreadAgentMapAtoms } from "@t3tools/client-runtime/state/thread-agent-map";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -15,9 +16,11 @@ import {
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useEffect } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 
@@ -46,6 +49,25 @@ export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
   pendingRequestsAtom: environmentThreadDetails.pendingRequestsAtom,
 });
+export const threadAgentMaps = createThreadAgentMapAtoms({
+  details: environmentThreadDetails,
+  threadsAtom: environmentThreadShells.environmentThreadsAtom,
+  environmentIdsAtom: Atom.make((get) => [
+    ...enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom)),
+  ]),
+});
+
+/** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */
+export function useThreadFamily(
+  environmentId: EnvironmentId | null,
+  rootThreadId: ThreadId | null,
+): void {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mounts the subagent tree into the thread family registry while the caller shows it
+  useEffect(() => {
+    if (environmentId === null || rootThreadId === null) return;
+    return threadFamilies.mount(appAtomRegistry, environmentId, rootThreadId);
+  }, [environmentId, rootThreadId]);
+}
 
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(
   Atom.withLabel("web-environment-thread:empty"),

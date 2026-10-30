@@ -1,25 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   agentMapMetadata,
-  deriveThreadAgentMap,
+  agentMapEmptyDetail,
+  agentMapOutput,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
 import type { ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ExternalLinkIcon, NetworkIcon } from "lucide-react";
 import { useState } from "react";
-import {
-  environmentThreadDetails,
-  environmentThreadShells,
-  useThreadFamily,
-} from "../../state/threads";
+import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useQuietThreadProjection } from "../../state/entities";
 import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { Button } from "../ui/button";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
-import { AgentMapStatus, ThreadAgentMap } from "./ThreadAgentMap";
+import { AgentMapCard, AgentMapStatus, ThreadAgentMap } from "./ThreadAgentMap";
 import { AgentElapsed } from "./AgentElapsed";
 
 export function ThreadAgentMapControl({ threadRef }: { threadRef: ScopedThreadRef }) {
@@ -58,15 +54,8 @@ function AgentMapContent({
 }) {
   useThreadFamily(threadRef.environmentId, threadRef.threadId);
   const projection = useQuietThreadProjection(threadRef)?.projection;
-  const threads = useAtomValue(
-    environmentThreadShells.environmentThreadsAtom(threadRef.environmentId),
-  );
+  const nodes = useAtomValue(threadAgentMaps.nodesAtom(threadRef));
   const providers = useEnvironmentProviders();
-  const nodes = deriveThreadAgentMap({
-    ...threadRef,
-    subagents: projection?.subagents ?? [],
-    threads,
-  });
   const providerFor = (node: ThreadAgentMapNode) =>
     providers
       .get(
@@ -84,12 +73,21 @@ function AgentMapContent({
       title={projection?.thread.title ?? "Thread"}
       nodes={nodes}
       providerFor={providerFor}
+      renderCard={(node, selected, onSelect) => (
+        <ResolvedAgentMapCard
+          node={node}
+          threadRef={threadRef}
+          providerFor={providerFor}
+          selected={selected}
+          onSelect={onSelect}
+        />
+      )}
       renderInspector={(node) => (
         <AgentMapInspector
           key={node.id}
           node={node}
           threadRef={threadRef}
-          provider={providerFor(node)}
+          providerFor={providerFor}
           onClose={onClose}
         />
       )}
@@ -97,39 +95,37 @@ function AgentMapContent({
   );
 }
 
+function ResolvedAgentMapCard(props: {
+  node: ThreadAgentMapNode;
+  threadRef: ScopedThreadRef;
+  providerFor: (node: ThreadAgentMapNode) => ServerProvider | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const node = useAtomValue(threadAgentMaps.nodeAtom(props.threadRef, props.node.id)) ?? props.node;
+  return (
+    <AgentMapCard
+      node={node}
+      provider={props.providerFor(node)}
+      selected={props.selected}
+      onSelect={props.onSelect}
+    />
+  );
+}
+
 function AgentMapInspector(props: {
   node: ThreadAgentMapNode;
   threadRef: ScopedThreadRef;
-  provider: ServerProvider | undefined;
+  providerFor: (node: ThreadAgentMapNode) => ServerProvider | undefined;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"output" | "prompt" | "details">("output");
-  const owner = useQuietThreadProjection(
-    props.node.source === null
-      ? scopeThreadRef(props.threadRef.environmentId, props.node.ownerThreadId)
-      : null,
-  )?.projection;
-  const environment = useEnvironment(props.node.target?.environmentId ?? null);
+  const node = useAtomValue(threadAgentMaps.nodeAtom(props.threadRef, props.node.id)) ?? props.node;
+  const environment = useEnvironment(node.target?.environmentId ?? null);
   const navigate = useNavigate();
-  const node = owner
-    ? (deriveThreadAgentMap({
-        environmentId: props.threadRef.environmentId,
-        threadId: owner.thread.id,
-        subagents: owner.subagents,
-        threads: props.node.thread ? [props.node.thread] : [],
-      }).find(
-        (candidate) =>
-          candidate.target !== null &&
-          props.node.target !== null &&
-          candidate.target.threadId === props.node.target.threadId &&
-          candidate.target.environmentId === props.node.target.environmentId,
-      ) ?? props.node)
-    : props.node;
-  const metadata = agentMapMetadata(node, props.provider);
-  const output =
-    node.agent.status === "failed"
-      ? (node.agent.error ?? node.agent.result)
-      : (node.agent.result ?? node.agent.progress);
+  const metadata = agentMapMetadata(node, props.providerFor(node));
+  const output = agentMapOutput(node);
+  const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && environment !== null;
   return (
     <section
@@ -208,18 +204,14 @@ function AgentMapInspector(props: {
             <dt className="text-muted-foreground">Model</dt>
             <dd className="break-words">{metadata.model}</dd>
             <dt className="text-muted-foreground">Effort</dt>
-            <dd>{metadata.effort ?? "Not reported"}</dd>
+            <dd>{metadata.effort ?? missing}</dd>
             <dt className="text-muted-foreground">Started</dt>
             <dd>
-              {node.agent.startedAt
-                ? new Date(node.agent.startedAt).toLocaleString()
-                : "Not reported"}
+              {node.agent.startedAt ? new Date(node.agent.startedAt).toLocaleString() : missing}
             </dd>
             <dt className="text-muted-foreground">Completed</dt>
             <dd>
-              {node.agent.completedAt
-                ? new Date(node.agent.completedAt).toLocaleString()
-                : "Not completed"}
+              {node.agent.completedAt ? new Date(node.agent.completedAt).toLocaleString() : missing}
             </dd>
             {node.agent.phaseTitle ? (
               <>
@@ -241,8 +233,8 @@ function AgentMapInspector(props: {
         ) : (
           <div className="max-h-96 overflow-auto whitespace-pre-wrap wrap-anywhere leading-relaxed select-text">
             {tab === "prompt"
-              ? node.prompt || "Assignment not reported."
-              : output || "No output reported yet."}
+              ? node.prompt || agentMapEmptyDetail(node, "prompt")
+              : output || agentMapEmptyDetail(node)}
           </div>
         )}
       </div>

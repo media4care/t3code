@@ -2,7 +2,8 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   agentMapMetadata,
   agentMapStatus,
-  deriveThreadAgentMap,
+  agentMapEmptyDetail,
+  agentMapOutput,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
 import { subagentDetailPreview } from "@t3tools/client-runtime/state/subagent-display";
@@ -18,11 +19,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
-import {
-  environmentThreadDetails,
-  environmentThreadShells,
-  useThreadFamily,
-} from "../../state/threads";
+import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useServerConfigs } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { SubagentStopButton } from "./SubagentStopButton";
@@ -44,18 +41,10 @@ export function ThreadAgentMap(props: {
   const projection = useAtomValue(
     environmentThreadDetails.quietThreadAtom(props.target),
   )?.projection;
-  const threads = useAtomValue(
-    environmentThreadShells.environmentThreadsAtom(props.target.environmentId),
-  );
-  const configs = useServerConfigs();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [limit, setLimit] = useState(24);
-  const nodes = deriveThreadAgentMap({
-    ...props.target,
-    subagents: projection?.subagents ?? [],
-    threads,
-  });
+  const nodes = useAtomValue(threadAgentMaps.nodesAtom(props.target));
   const children = new Map<string | null, ThreadAgentMapNode[]>();
   for (const node of nodes) {
     const siblings = children.get(node.parentId) ?? [];
@@ -83,96 +72,117 @@ export function ThreadAgentMap(props: {
           No subagents launched in this thread.
         </Text>
       ) : null}
-      {rows.slice(0, limit).map(({ node, depth }) => {
-        const selected = selectedId === node.id;
-        const provider = configs
-          .get(
-            node.source?.remoteChild?.environmentId ??
-              node.target?.environmentId ??
-              props.target.environmentId,
-          )
-          ?.providers.find(
-            (candidate) =>
-              candidate.instanceId ===
-              (node.source?.providerInstanceId ?? node.thread?.providerInstanceId),
-          );
-        const metadata = agentMapMetadata(node, provider);
-        const status = agentMapStatus(node);
-        const childCount = children.get(node.id)?.length ?? 0;
-        const driver = provider?.driver ?? node.source?.driver;
-        return (
-          <View
-            key={node.id}
-            className="border-l border-border pl-4"
-            style={{ marginLeft: Math.min(depth, 3) * 16 }}
-          >
-            <View className="absolute left-0 top-8 h-px w-4 bg-border" />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${node.agent.title}, ${status.label}`}
-              accessibilityState={{ expanded: selected }}
-              onPress={() => setSelectedId(selected ? null : node.id)}
-              className={cn(
-                "gap-3 rounded-2xl border border-border bg-card p-4 active:bg-subtle",
-                selected && "border-primary bg-primary/5",
-              )}
-            >
-              <View className="flex-row items-center gap-2">
-                {driver ? (
-                  <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={18} />
-                ) : null}
-                <View className="min-w-0 flex-1">
-                  <Text className="font-t3-medium text-xs">{metadata.model}</Text>
-                  <Text className="text-xs text-foreground-muted">{metadata.provider}</Text>
-                </View>
-                <Text className="text-xs text-foreground-muted">{node.kind}</Text>
-              </View>
-              <View className="gap-1">
-                <Text className="font-t3-medium text-base">{node.agent.title}</Text>
-                <Text className="text-xs text-foreground-muted" numberOfLines={2}>
-                  {subagentDetailPreview(node.agent) ?? "No update reported yet."}
-                </Text>
-              </View>
-              <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
-                {status.label}
-              </Text>
-              {node.source?.remoteChild ? (
-                <Text className="text-xs text-foreground-muted">
-                  on {node.source.remoteChild.label}
-                </Text>
-              ) : null}
-            </Pressable>
-            {selected ? (
-              <AgentInspector
-                key={node.id}
-                node={node}
-                target={props.target}
-                provider={provider}
-                onOpen={props.onOpen}
-              />
-            ) : null}
-            {childCount > 0 ? (
-              <Button
-                tone="text"
-                label={`${collapsed.has(node.id) ? "Show" : "Hide"} ${childCount} ${childCount === 1 ? "child" : "children"}`}
-                onPress={() =>
-                  setCollapsed((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(node.id)) next.delete(node.id);
-                    else next.add(node.id);
-                    return next;
-                  })
-                }
-              />
-            ) : null}
-          </View>
-        );
-      })}
+      {rows.slice(0, limit).map(({ node, depth }) => (
+        <AgentMapRow
+          key={node.id}
+          node={node}
+          depth={depth}
+          target={props.target}
+          selected={selectedId === node.id}
+          collapsed={collapsed.has(node.id)}
+          childCount={children.get(node.id)?.length ?? 0}
+          onOpen={props.onOpen}
+          onSelect={() => setSelectedId(selectedId === node.id ? null : node.id)}
+          onCollapse={() =>
+            setCollapsed((previous) => {
+              const next = new Set(previous);
+              if (next.has(node.id)) next.delete(node.id);
+              else next.add(node.id);
+              return next;
+            })
+          }
+        />
+      ))}
       {rows.length > limit ? (
         <Button
           tone="text"
           label={`Show ${Math.min(24, rows.length - limit)} more agents`}
           onPress={() => setLimit(limit + 24)}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function AgentMapRow(props: {
+  node: ThreadAgentMapNode;
+  depth: number;
+  target: ScopedThreadRef;
+  selected: boolean;
+  collapsed: boolean;
+  childCount: number;
+  onSelect: () => void;
+  onCollapse: () => void;
+  onOpen: (target: ScopedThreadRef) => void;
+}) {
+  const node = useAtomValue(threadAgentMaps.nodeAtom(props.target, props.node.id)) ?? props.node;
+  const configs = useServerConfigs();
+  const provider = configs
+    .get(
+      node.source?.remoteChild?.environmentId ??
+        node.target?.environmentId ??
+        props.target.environmentId,
+    )
+    ?.providers.find(
+      (candidate) =>
+        candidate.instanceId ===
+        (node.source?.providerInstanceId ?? node.thread?.providerInstanceId),
+    );
+  const metadata = agentMapMetadata(node, provider);
+  const status = agentMapStatus(node);
+
+  const driver = provider?.driver ?? node.source?.driver;
+  return (
+    <View
+      className="border-l border-border pl-4"
+      style={{ marginLeft: Math.min(props.depth, 3) * 16 }}
+    >
+      <View className="absolute left-0 top-8 h-px w-4 bg-border" />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${node.agent.title}, ${status.label}`}
+        accessibilityState={{ expanded: props.selected }}
+        onPress={props.onSelect}
+        className={cn(
+          "gap-3 rounded-2xl border border-border bg-card p-4 active:bg-subtle",
+          props.selected && "border-primary bg-primary/5",
+        )}
+      >
+        <View className="flex-row items-center gap-2">
+          {driver ? <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={18} /> : null}
+          <View className="min-w-0 flex-1">
+            <Text className="font-t3-medium text-xs">{metadata.model}</Text>
+            <Text className="text-xs text-foreground-muted">{metadata.provider}</Text>
+          </View>
+          <Text className="text-xs text-foreground-muted">{node.kind}</Text>
+        </View>
+        <View className="gap-1">
+          <Text className="font-t3-medium text-base">{node.agent.title}</Text>
+          <Text className="text-xs text-foreground-muted" numberOfLines={2}>
+            {subagentDetailPreview(node.agent) ?? agentMapEmptyDetail(node)}
+          </Text>
+        </View>
+        <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
+          {status.label}
+        </Text>
+        {node.source?.remoteChild ? (
+          <Text className="text-xs text-foreground-muted">on {node.source.remoteChild.label}</Text>
+        ) : null}
+      </Pressable>
+      {props.selected ? (
+        <AgentInspector
+          key={node.id}
+          node={node}
+          target={props.target}
+          provider={provider}
+          onOpen={props.onOpen}
+        />
+      ) : null}
+      {props.childCount > 0 ? (
+        <Button
+          tone="text"
+          label={`${props.collapsed ? "Show" : "Hide"} ${props.childCount} ${props.childCount === 1 ? "child" : "children"}`}
+          onPress={props.onCollapse}
         />
       ) : null}
     </View>
@@ -186,33 +196,11 @@ function AgentInspector(props: {
   onOpen: (target: ScopedThreadRef) => void;
 }) {
   const [tab, setTab] = useState<"output" | "prompt" | "details">("output");
-  const owner = useAtomValue(
-    environmentThreadDetails.quietThreadAtom({
-      environmentId: props.target.environmentId,
-      threadId: props.node.ownerThreadId,
-    }),
-  )?.projection;
+  const node = props.node;
   const { presentationById } = useEnvironments();
-  const node =
-    props.node.source === null && owner
-      ? (deriveThreadAgentMap({
-          environmentId: props.target.environmentId,
-          threadId: owner.thread.id,
-          subagents: owner.subagents,
-          threads: props.node.thread ? [props.node.thread] : [],
-        }).find(
-          (candidate) =>
-            candidate.target !== null &&
-            props.node.target !== null &&
-            candidate.target.threadId === props.node.target.threadId &&
-            candidate.target.environmentId === props.node.target.environmentId,
-        ) ?? props.node)
-      : props.node;
   const metadata = agentMapMetadata(node, props.provider);
-  const output =
-    node.agent.status === "failed"
-      ? (node.agent.error ?? node.agent.result)
-      : (node.agent.result ?? node.agent.progress);
+  const output = agentMapOutput(node);
+  const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && presentationById.has(node.target.environmentId);
   const workflow =
     node.kind === "Workflow" && node.source && !node.source.remoteChild
@@ -247,19 +235,15 @@ function AgentInspector(props: {
         <View className="gap-2">
           <Text className="text-xs text-foreground-muted">Model: {metadata.model}</Text>
           <Text className="text-xs text-foreground-muted">
-            Effort: {metadata.effort ?? "Not reported"}
+            Effort: {metadata.effort ?? missing}
           </Text>
           <Text className="text-xs text-foreground-muted">
             Started:{" "}
-            {node.agent.startedAt
-              ? new Date(node.agent.startedAt).toLocaleString()
-              : "Not reported"}
+            {node.agent.startedAt ? new Date(node.agent.startedAt).toLocaleString() : missing}
           </Text>
           <Text className="text-xs text-foreground-muted">
             Completed:{" "}
-            {node.agent.completedAt
-              ? new Date(node.agent.completedAt).toLocaleString()
-              : "Not completed"}
+            {node.agent.completedAt ? new Date(node.agent.completedAt).toLocaleString() : missing}
           </Text>
           {node.agent.phaseTitle ? (
             <Text className="text-xs text-foreground-muted">Phase: {node.agent.phaseTitle}</Text>
@@ -273,8 +257,8 @@ function AgentInspector(props: {
       ) : (
         <Text selectable className="text-sm leading-6">
           {tab === "prompt"
-            ? node.prompt || "Assignment not reported."
-            : output || "No output reported yet."}
+            ? node.prompt || agentMapEmptyDetail(node, "prompt")
+            : output || agentMapEmptyDetail(node)}
         </Text>
       )}
       {tab === "details" && workflow && node.source ? (
