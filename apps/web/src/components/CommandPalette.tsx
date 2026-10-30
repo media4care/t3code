@@ -1573,6 +1573,17 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:qa",
+    searchTerms: ["qa", "tests", "quality", "suites", "reports"],
+    title: "Open QA",
+    icon: <ChartNoAxesColumnIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "qa.open",
+    run: async () => {
+      await navigate({ to: "/qa" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
     value: "action:insights",
     searchTerms: ["insights", "workflow", "skills", "recommendations", "agents"],
     title: "Open Insights",

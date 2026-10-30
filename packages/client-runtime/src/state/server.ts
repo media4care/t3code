@@ -757,6 +757,10 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly usageLimitsCommand?: boolean;
   },
 ) {
+  const qaLive = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:qa:live",
+    tag: WS_METHODS.qaSubscribe,
+  });
   const insightsLive = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
     label: "environment-data:insights:live",
     tag: WS_METHODS.insightsSubscribe,
@@ -1297,6 +1301,28 @@ export function createServerEnvironmentAtoms<R, E>(
     scheduledTaskWebhookDelivery: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-delivery",
       tag: WS_METHODS.scheduledTasksGetWebhookDelivery,
+    }),
+    qaLive,
+    qaDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:qa:details",
+      tag: WS_METHODS.qaDetails,
+      staleTimeMs: 0,
+      refreshTrigger: ({ environmentId, input }) =>
+        Atom.make(
+          (get) =>
+            AsyncResult.getOrElse(
+              get(qaLive({ environmentId, input: { projectId: input.projectId } })),
+              () => null,
+            )?.recentRuns.find((run) => run.id === input.runId)?.status,
+        ),
+    }),
+    startQa: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:start",
+      tag: WS_METHODS.qaStart,
+    }),
+    cancelQa: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:cancel",
+      tag: WS_METHODS.qaCancel,
     }),
     insightsLive,
     insightReport: createEnvironmentRpcQueryAtomFamily(runtime, {

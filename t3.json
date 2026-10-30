@@ -8,5 +8,57 @@
       "icon": "configure",
       "runOnWorktreeCreate": true
     }
-  ]
+  ],
+  "qa": {
+    "suites": [
+      {
+        "id": "qa",
+        "name": "QA execution and report tests",
+        "command": "vp test run apps/server/src/qa --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "contracts",
+        "name": "Shared contracts",
+        "cwd": "packages/contracts",
+        "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "client-runtime",
+        "name": "Client runtime",
+        "cwd": "packages/client-runtime",
+        "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "web-unit",
+        "name": "Web unit tests",
+        "cwd": "apps/web",
+        "command": "vp test run --project unit --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "web-browser",
+        "name": "Web browser tests",
+        "cwd": "apps/web",
+        "command": "vp test run --project browser --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "server",
+        "name": "Server tests",
+        "cwd": "apps/server",
+        "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      },
+      {
+        "id": "mobile",
+        "name": "Mobile tests",
+        "cwd": "apps/mobile",
+        "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
+        "report": "junit"
+      }
+    ]
+  }
 }

@@ -534,6 +534,10 @@
     "./insights": {
       "types": "./src/insights.ts",
       "default": "./src/insights.ts"
+    },
+    "./qa": {
+      "types": "./src/qa.ts",
+      "default": "./src/qa.ts"
     }
   },
   "scripts": {
