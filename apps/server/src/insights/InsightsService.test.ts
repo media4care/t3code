@@ -145,17 +145,33 @@ it.effect(
   () =>
     Effect.gen(function* () {
       yield* seed(12);
+      const sql = yield* SqlClient.SqlClient;
+      const longItemIds = [1, 2].map(
+        (index) => `turn-item:runtime-request:${"nested%3A".repeat(40)}:${index}`,
+      );
+      for (const [index, id] of longItemIds.entries()) {
+        yield* sql`UPDATE orchestration_v2_projection_turn_items SET turn_item_id = ${id} WHERE turn_item_id = ${`item-${index + 1}`}`;
+      }
       const service = yield* Insights.InsightsService;
       const first = yield* service.collect(analyst);
       assert.equal(first.report.metrics.runs, 10);
       assert.isTrue(first.report.hasMore);
       assert.equal(first.report.throughSequence, 10);
       assert.isFalse(first.report.evidence.some((e) => e.threadId === analyst));
+      const longEvidence = first.report.evidence.filter((e) =>
+        longItemIds.includes(e.itemId ?? ""),
+      );
+      assert.equal(longEvidence.length, 2);
+      assert.notEqual(longEvidence[0]!.id, longEvidence[1]!.id);
+      assert.isTrue(first.report.evidence.every((e) => e.id.length <= 300));
       assert.equal((yield* service.collect(analyst)).report.id, first.report.id);
-      yield* service.submit(analyst, {
-        ...submission(first.report.id, first.report.evidence[0]!.id),
-        recommendations: [],
-      });
+      assert.deepEqual((yield* service.report(first.report.id)).evidence, first.report.evidence);
+      const completed = yield* service.submit(
+        analyst,
+        submission(first.report.id, longEvidence[0]!.id),
+      );
+      const recommendation = yield* service.recommendation(completed.recommendationIds[0]!);
+      assert.deepEqual(recommendation.evidence, [longEvidence[0]!]);
       const next = yield* service.collect(analyst);
       assert.equal(next.report.metrics.runs, 2);
       assert.equal(next.report.fromSequence, 10);
