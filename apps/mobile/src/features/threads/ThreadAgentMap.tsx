@@ -1,0 +1,311 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  agentMapMetadata,
+  agentMapStatus,
+  deriveThreadAgentMap,
+  type ThreadAgentMapNode,
+} from "@t3tools/client-runtime/state/thread-agent-map";
+import { subagentDetailPreview } from "@t3tools/client-runtime/state/subagent-display";
+import {
+  deriveWorkflowGroups,
+  projectedSubagentsToRuntime,
+} from "@t3tools/client-runtime/state/subagentRuntime";
+import type { ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
+import { useState } from "react";
+import { Pressable, View } from "react-native";
+
+import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
+import { ProviderIcon } from "../../components/ProviderIcon";
+import { cn } from "../../lib/cn";
+import {
+  environmentThreadDetails,
+  environmentThreadShells,
+  useThreadFamily,
+} from "../../state/threads";
+import { useServerConfigs } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
+import { SubagentStopButton } from "./SubagentStopButton";
+import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
+
+const STATUS_CLASSES = {
+  working: "text-primary-text",
+  waiting: "text-adaptive-amber-600-400",
+  done: "text-adaptive-emerald-600-400",
+  failed: "text-danger",
+  stopped: "text-foreground-muted",
+};
+
+export function ThreadAgentMap(props: {
+  target: ScopedThreadRef;
+  onOpen: (target: ScopedThreadRef) => void;
+}) {
+  useThreadFamily(props.target.environmentId, props.target.threadId);
+  const projection = useAtomValue(
+    environmentThreadDetails.quietThreadAtom(props.target),
+  )?.projection;
+  const threads = useAtomValue(
+    environmentThreadShells.environmentThreadsAtom(props.target.environmentId),
+  );
+  const configs = useServerConfigs();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [limit, setLimit] = useState(24);
+  const nodes = deriveThreadAgentMap({
+    ...props.target,
+    subagents: projection?.subagents ?? [],
+    threads,
+  });
+  const children = new Map<string | null, ThreadAgentMapNode[]>();
+  for (const node of nodes) {
+    const siblings = children.get(node.parentId) ?? [];
+    siblings.push(node);
+    children.set(node.parentId, siblings);
+  }
+  const rows: Array<{ node: ThreadAgentMapNode; depth: number }> = [];
+  const walk = (parentId: string | null, depth: number) => {
+    for (const node of children.get(parentId) ?? []) {
+      rows.push({ node, depth });
+      if (!collapsed.has(node.id)) walk(node.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return (
+    <View className="gap-4 pt-4">
+      <View className="rounded-2xl border border-border bg-card p-4">
+        <Text className="font-t3-medium text-sm">{projection?.thread.title ?? "Thread"}</Text>
+        <Text className="mt-1 text-xs text-foreground-muted">
+          {nodes.length} agents across this thread
+        </Text>
+      </View>
+      {rows.length === 0 ? (
+        <Text className="py-4 text-center text-sm text-foreground-muted">
+          No subagents launched in this thread.
+        </Text>
+      ) : null}
+      {rows.slice(0, limit).map(({ node, depth }) => {
+        const selected = selectedId === node.id;
+        const provider = configs
+          .get(
+            node.source?.remoteChild?.environmentId ??
+              node.target?.environmentId ??
+              props.target.environmentId,
+          )
+          ?.providers.find(
+            (candidate) =>
+              candidate.instanceId ===
+              (node.source?.providerInstanceId ?? node.thread?.providerInstanceId),
+          );
+        const metadata = agentMapMetadata(node, provider);
+        const status = agentMapStatus(node);
+        const childCount = children.get(node.id)?.length ?? 0;
+        const driver = provider?.driver ?? node.source?.driver;
+        return (
+          <View
+            key={node.id}
+            className="border-l border-border pl-4"
+            style={{ marginLeft: Math.min(depth, 3) * 16 }}
+          >
+            <View className="absolute left-0 top-8 h-px w-4 bg-border" />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${node.agent.title}, ${status.label}`}
+              accessibilityState={{ expanded: selected }}
+              onPress={() => setSelectedId(selected ? null : node.id)}
+              className={cn(
+                "gap-3 rounded-2xl border border-border bg-card p-4 active:bg-subtle",
+                selected && "border-primary bg-primary/5",
+              )}
+            >
+              <View className="flex-row items-center gap-2">
+                {driver ? (
+                  <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={18} />
+                ) : null}
+                <View className="min-w-0 flex-1">
+                  <Text className="font-t3-medium text-xs">{metadata.model}</Text>
+                  <Text className="text-xs text-foreground-muted">{metadata.provider}</Text>
+                </View>
+                <Text className="text-xs text-foreground-muted">{node.kind}</Text>
+              </View>
+              <View className="gap-1">
+                <Text className="font-t3-medium text-base">{node.agent.title}</Text>
+                <Text className="text-xs text-foreground-muted" numberOfLines={2}>
+                  {subagentDetailPreview(node.agent) ?? "No update reported yet."}
+                </Text>
+              </View>
+              <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
+                {status.label}
+              </Text>
+              {node.source?.remoteChild ? (
+                <Text className="text-xs text-foreground-muted">
+                  on {node.source.remoteChild.label}
+                </Text>
+              ) : null}
+            </Pressable>
+            {selected ? (
+              <AgentInspector
+                key={node.id}
+                node={node}
+                target={props.target}
+                provider={provider}
+                onOpen={props.onOpen}
+              />
+            ) : null}
+            {childCount > 0 ? (
+              <Button
+                tone="text"
+                label={`${collapsed.has(node.id) ? "Show" : "Hide"} ${childCount} ${childCount === 1 ? "child" : "children"}`}
+                onPress={() =>
+                  setCollapsed((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(node.id)) next.delete(node.id);
+                    else next.add(node.id);
+                    return next;
+                  })
+                }
+              />
+            ) : null}
+          </View>
+        );
+      })}
+      {rows.length > limit ? (
+        <Button
+          tone="text"
+          label={`Show ${Math.min(24, rows.length - limit)} more agents`}
+          onPress={() => setLimit(limit + 24)}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function AgentInspector(props: {
+  node: ThreadAgentMapNode;
+  target: ScopedThreadRef;
+  provider: ServerProvider | undefined;
+  onOpen: (target: ScopedThreadRef) => void;
+}) {
+  const [tab, setTab] = useState<"output" | "prompt" | "details">("output");
+  const owner = useAtomValue(
+    environmentThreadDetails.quietThreadAtom({
+      environmentId: props.target.environmentId,
+      threadId: props.node.ownerThreadId,
+    }),
+  )?.projection;
+  const { presentationById } = useEnvironments();
+  const node =
+    props.node.source === null && owner
+      ? (deriveThreadAgentMap({
+          environmentId: props.target.environmentId,
+          threadId: owner.thread.id,
+          subagents: owner.subagents,
+          threads: props.node.thread ? [props.node.thread] : [],
+        }).find(
+          (candidate) =>
+            candidate.target !== null &&
+            props.node.target !== null &&
+            candidate.target.threadId === props.node.target.threadId &&
+            candidate.target.environmentId === props.node.target.environmentId,
+        ) ?? props.node)
+      : props.node;
+  const metadata = agentMapMetadata(node, props.provider);
+  const output =
+    node.agent.status === "failed"
+      ? (node.agent.error ?? node.agent.result)
+      : (node.agent.result ?? node.agent.progress);
+  const canOpen = node.target !== null && presentationById.has(node.target.environmentId);
+  const workflow =
+    node.kind === "Workflow" && node.source && !node.source.remoteChild
+      ? deriveWorkflowGroups(projectedSubagentsToRuntime([node.source]))[0]
+      : undefined;
+  return (
+    <View className="mt-2 gap-4 rounded-2xl border border-border bg-card p-4">
+      <View className="flex-row gap-4">
+        {(["output", "prompt", "details"] as const).map((id) => (
+          <Pressable
+            key={id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === id }}
+            onPress={() => setTab(id)}
+            className={cn(
+              "min-h-11 justify-center border-b-2 border-transparent",
+              tab === id && "border-primary",
+            )}
+          >
+            <Text
+              className={cn(
+                "text-sm capitalize text-foreground-muted",
+                tab === id && "font-t3-medium text-foreground",
+              )}
+            >
+              {id}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {tab === "details" ? (
+        <View className="gap-2">
+          <Text className="text-xs text-foreground-muted">Model: {metadata.model}</Text>
+          <Text className="text-xs text-foreground-muted">
+            Effort: {metadata.effort ?? "Not reported"}
+          </Text>
+          <Text className="text-xs text-foreground-muted">
+            Started:{" "}
+            {node.agent.startedAt
+              ? new Date(node.agent.startedAt).toLocaleString()
+              : "Not reported"}
+          </Text>
+          <Text className="text-xs text-foreground-muted">
+            Completed:{" "}
+            {node.agent.completedAt
+              ? new Date(node.agent.completedAt).toLocaleString()
+              : "Not completed"}
+          </Text>
+          {node.agent.phaseTitle ? (
+            <Text className="text-xs text-foreground-muted">Phase: {node.agent.phaseTitle}</Text>
+          ) : null}
+          {node.agent.usage ? (
+            <Text className="text-xs text-foreground-muted">
+              Tokens: {node.agent.usage.totalTokens.toLocaleString()}
+            </Text>
+          ) : null}
+        </View>
+      ) : (
+        <Text selectable className="text-sm leading-6">
+          {tab === "prompt"
+            ? node.prompt || "Assignment not reported."
+            : output || "No output reported yet."}
+        </Text>
+      )}
+      {tab === "details" && workflow && node.source ? (
+        <ThreadWorkflowGroup
+          environmentId={props.target.environmentId}
+          subagent={node.source}
+          group={workflow}
+          onOpen={(threadId) =>
+            props.onOpen({ environmentId: props.target.environmentId, threadId })
+          }
+        />
+      ) : null}
+      {!canOpen ? (
+        <Text className="text-xs text-foreground-muted">
+          {node.target === null
+            ? "This provider has not exposed a separate conversation."
+            : `Connect to ${node.source?.remoteChild?.label ?? "the environment"} to open the conversation.`}
+        </Text>
+      ) : null}
+      <View className="flex-row items-center justify-between gap-2">
+        <Button
+          label="Conversation"
+          disabled={!canOpen}
+          onPress={() => {
+            if (canOpen && node.target) props.onOpen(node.target);
+          }}
+        />
+        {node.source && node.kind !== "Workflow agent" && !(tab === "details" && workflow) ? (
+          <SubagentStopButton environmentId={props.target.environmentId} subagent={node.source} />
+        ) : null}
+      </View>
+    </View>
+  );
+}

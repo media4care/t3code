@@ -1,40 +1,22 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  deriveWorkflowGroups,
-  projectedSubagentsToRuntime,
-} from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ThreadTurnSubagents } from "@t3tools/client-runtime/state/thread-subagents";
-import {
-  isOrchestrationV2WorkActive,
-  type EnvironmentId,
-  type OrchestrationV2Subagent,
-  type ThreadId,
-} from "@t3tools/contracts";
-import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import * as Haptics from "expo-haptics";
-import { useMemo } from "react";
-import { Platform, Pressable, ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 import { ScreenStack } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AndroidSheetHeader } from "../../components/ui/AndroidScreenHeader";
-import { AppText as Text } from "../../components/ui/AppText";
 import { environmentThreadDetails } from "../../state/threads";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
-import { useEnvironments } from "../../state/environments";
-import { SubagentRow } from "./SubagentRow";
-import { useVisibleSecondClock } from "./use-visible-second-clock";
-import { SubagentStopButton } from "./SubagentStopButton";
-import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { subagentThreadTarget } from "./threadAgentsPresentation";
 
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
+import { ThreadAgentMap } from "./ThreadAgentMap";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -43,6 +25,14 @@ type AgentsTarget = { readonly environmentId: EnvironmentId; readonly threadId: 
 const EMPTY_TURN_SUBAGENTS_ATOM = Atom.make<ThreadTurnSubagents | null>(null).pipe(
   Atom.withLabel("mobile-thread-turn-subagents:empty"),
 );
+const EMPTY_THREAD_ATOM = Atom.make(null);
+
+export function useThreadAgentCount(target: AgentsTarget | null): number {
+  return useAtomValue(
+    target === null ? EMPTY_THREAD_ATOM : environmentThreadDetails.threadAtom(target),
+    (thread) => thread?.projection.subagents.length ?? 0,
+  );
+}
 
 export function useThreadTurnSubagents(target: AgentsTarget | null): ThreadTurnSubagents | null {
   return useAtomValue(
@@ -58,20 +48,6 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
   const navigation = useNavigation();
   const openInspector = useOpenThreadInspector();
   const insets = useSafeAreaInsets();
-  const turn = useThreadTurnSubagents(target);
-  const subagents = turn?.subagents ?? [];
-  const hasLiveAgent = (turn?.liveCount ?? 0) > 0;
-  const workflowGroups = useMemo(
-    () =>
-      new Map(
-        deriveWorkflowGroups(projectedSubagentsToRuntime(subagents)).map((group) => [
-          group.workflow.id,
-          group,
-        ]),
-      ),
-    [subagents],
-  );
-
   const openChildThread = (child: { environmentId: EnvironmentId; threadId: ThreadId }) => {
     void Haptics.selectionAsync();
     if (
@@ -100,35 +76,7 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
       contentContainerClassName="px-5 pb-6"
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
-      {subagents.length === 0 ? (
-        <Text className="pt-6 text-center text-sm text-foreground-muted">
-          No agents in this turn.
-        </Text>
-      ) : (
-        subagents.map((subagent) => {
-          const group = workflowGroups.get(subagent.id);
-          return group === undefined ? (
-            <View key={subagent.id} className="border-b border-border">
-              <AgentRow
-                subagent={subagent}
-                environmentId={target.environmentId}
-                tickSeconds={hasLiveAgent}
-                onOpen={openChildThread}
-              />
-            </View>
-          ) : (
-            <ThreadWorkflowGroup
-              key={subagent.id}
-              environmentId={target.environmentId}
-              subagent={subagent}
-              group={group}
-              onOpen={(threadId) =>
-                openChildThread({ environmentId: target.environmentId, threadId })
-              }
-            />
-          );
-        })
-      )}
+      <ThreadAgentMap target={target} onOpen={openChildThread} />
     </ScrollView>
   );
 
@@ -170,86 +118,4 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
       <ScreenContent insetHorizontal={layout.usesSplitView}>{content}</ScreenContent>
     </View>
   );
-}
-
-function AgentRow(props: {
-  readonly environmentId: EnvironmentId;
-  readonly subagent: OrchestrationV2Subagent;
-  readonly tickSeconds: boolean;
-  readonly onOpen: (child: { environmentId: EnvironmentId; threadId: ThreadId }) => void;
-}) {
-  const { subagent } = props;
-  const { presentationById } = useEnvironments();
-  const target = subagentThreadTarget(subagent, props.environmentId, (id) =>
-    presentationById.has(id),
-  );
-
-  const row = (
-    <View className="py-3.5">
-      <SubagentRow
-        environmentId={props.environmentId}
-        subagent={subagent}
-        canOpenRemote={target !== null}
-        elapsed={<AgentElapsed subagent={subagent} tickSeconds={props.tickSeconds} />}
-      />
-    </View>
-  );
-
-  const content =
-    target === null ? (
-      <View
-        accessible
-        className="min-w-0 flex-1"
-        accessibilityHint={
-          subagent.remoteChild === undefined
-            ? "Provider-managed agent. Its work appears in the transcript."
-            : `Runs on ${subagent.remoteChild.label}. Connect to it to open its thread.`
-        }
-      >
-        {row}
-      </View>
-    ) : (
-      <Pressable
-        accessibilityRole="link"
-        accessibilityHint="Opens this agent's thread"
-        onPress={() => props.onOpen(target)}
-        className="min-w-0 flex-1 active:opacity-70"
-      >
-        {row}
-      </Pressable>
-    );
-
-  return (
-    <View className="flex-row items-center">
-      {content}
-      <SubagentStopButton environmentId={props.environmentId} subagent={subagent} />
-    </View>
-  );
-}
-
-function AgentElapsed(props: {
-  readonly subagent: OrchestrationV2Subagent;
-  readonly tickSeconds: boolean;
-}) {
-  const elapsed = useSubagentElapsed(props.subagent, props.tickSeconds);
-  return elapsed === null ? null : (
-    <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">{elapsed}</Text>
-  );
-}
-
-function useSubagentElapsed(
-  subagent: Pick<OrchestrationV2Subagent, "status" | "startedAt" | "completedAt">,
-  tickSeconds: boolean,
-): string | null {
-  const running = isOrchestrationV2WorkActive(subagent.status);
-  const nowMs = useVisibleSecondClock(tickSeconds && running);
-  const elapsedMs = deriveSubagentElapsedMs(
-    {
-      status: subagent.status,
-      startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
-      completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
-    },
-    nowMs,
-  );
-  return elapsedMs === null || elapsedMs === 0 ? null : formatDuration(elapsedMs);
 }

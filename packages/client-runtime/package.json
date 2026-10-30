@@ -315,6 +315,10 @@
       "types": "./src/state/subagentDisplay.ts",
       "default": "./src/state/subagentDisplay.ts"
     },
+    "./state/thread-agent-map": {
+      "types": "./src/state/threadAgentMap.ts",
+      "default": "./src/state/threadAgentMap.ts"
+    },
     "./state/subagentRuntime": {
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
