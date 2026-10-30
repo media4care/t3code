@@ -20,6 +20,7 @@
 // run's summary.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
+import { CHECK_INPUT_PATHS, INSTALL_INPUTS } from "@t3tools/shared/workspaceChanges";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -256,11 +257,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
       "--ignored",
       "--exclude-standard",
       "--",
-      ":(glob)**/.generated/**",
-      ":(glob)**/.astro/**",
-      ":(glob)**/*.d.ts",
-      ":(glob)**/.env*",
-      ":(exclude,glob)**/node_modules/**",
+      ...CHECK_INPUT_PATHS,
     );
     for (const file of [
       // Raw bytes of changed files too: .gitattributes normalizes line endings in
@@ -268,8 +265,7 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
       ...(yield* changedFiles),
       ...(yield* untrackedFiles),
       ...ignored,
-      "node_modules/.modules.yaml",
-      "node_modules/.pnpm/lock.yaml",
+      ...INSTALL_INPUTS,
     ]) {
       hash.update(`\0${file}\0`);
       // Untracked nested repositories are listed as directories.

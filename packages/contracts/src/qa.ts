@@ -3,13 +3,39 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+const InputPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(512),
+  Schema.isPattern(/^(?!\/|[A-Za-z]:)(?!.*(?:^|\/)\.\.(?:\/|$))[^\\*?[\]{}\x00]+$/),
+);
+
+export const QaTestKind = Schema.Literals([
+  "unit",
+  "integration",
+  "playwright",
+  "maestro",
+  "e2e",
+  "tooling",
+  "other",
+]);
+export type QaTestKind = typeof QaTestKind.Type;
 
 export const QaSuite = Schema.Struct({
   id: ShortText.check(Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)),
   name: ShortText,
+  component: Schema.optionalKey(ShortText),
+  kind: Schema.optionalKey(QaTestKind),
   command: TrimmedNonEmptyString.check(Schema.isMaxLength(8000)),
   cwd: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
   report: Schema.optionalKey(Schema.Literal("junit")),
+  inputs: Schema.optionalKey(
+    Schema.Array(InputPath).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  ),
+  workspacePackage: Schema.optionalKey(ShortText),
+  maxAgeHours: Schema.optionalKey(
+    Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(8760)),
+  ),
+  environment: Schema.optionalKey(Schema.Literals(["workspace", "external"])),
+  environmentFile: Schema.optionalKey(InputPath),
 });
 export type QaSuite = typeof QaSuite.Type;
 
@@ -68,12 +94,27 @@ export const QaStartInput = Schema.Struct({ projectId: ProjectId, suiteId: Short
 export type QaStartInput = typeof QaStartInput.Type;
 export const QaRunInput = Schema.Struct({ projectId: ProjectId, runId: ShortText });
 export type QaRunInput = typeof QaRunInput.Type;
+export const QaFreshness = Schema.Struct({
+  suiteId: ShortText,
+  state: Schema.Literals(["current", "stale", "unknown", "never"]),
+  reason: Schema.String,
+  changedPaths: Schema.Array(Schema.String),
+  changedFileCount: NonNegativeInt,
+  needsRun: Schema.Boolean,
+  lastPassedAt: Schema.NullOr(IsoDateTime),
+});
+export type QaFreshness = typeof QaFreshness.Type;
 export const QaSnapshot = Schema.Struct({
   workspaceRoot: Schema.String,
   configurationError: Schema.NullOr(Schema.String),
   suites: Schema.Array(QaSuite),
   latestRuns: Schema.Array(QaRun),
   recentRuns: Schema.Array(QaRun),
+  freshness: Schema.optionalKey(Schema.Array(QaFreshness)),
+  checkedAt: Schema.optionalKey(IsoDateTime),
+  queuedSuiteIds: Schema.optionalKey(Schema.Array(ShortText)),
+  batchError: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  batchRunning: Schema.optionalKey(Schema.Boolean),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 

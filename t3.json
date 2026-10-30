@@ -14,50 +14,71 @@
       {
         "id": "qa",
         "name": "QA execution and report tests",
+        "component": "Backend",
+        "kind": "integration",
         "command": "vp test run apps/server/src/qa --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "t3"
       },
       {
         "id": "contracts",
         "name": "Shared contracts",
+        "component": "Shared",
+        "kind": "unit",
         "cwd": "packages/contracts",
         "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "@t3tools/contracts"
       },
       {
         "id": "client-runtime",
         "name": "Client runtime",
+        "component": "Shared",
+        "kind": "unit",
         "cwd": "packages/client-runtime",
         "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "@t3tools/client-runtime"
       },
       {
         "id": "web-unit",
         "name": "Web unit tests",
+        "component": "Web",
+        "kind": "unit",
         "cwd": "apps/web",
         "command": "vp test run --project unit --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "@t3tools/web"
       },
       {
         "id": "web-browser",
         "name": "Web browser tests",
+        "component": "Web",
+        "kind": "playwright",
         "cwd": "apps/web",
         "command": "vp test run --project browser --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "@t3tools/web"
       },
       {
         "id": "server",
         "name": "Server tests",
+        "component": "Backend",
+        "kind": "unit",
         "cwd": "apps/server",
         "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "t3"
       },
       {
         "id": "mobile",
         "name": "Mobile tests",
+        "component": "Mobile",
+        "kind": "unit",
         "cwd": "apps/mobile",
         "command": "vp test run --reporter=junit --outputFile=\"$T3_QA_REPORT_PATH\"",
-        "report": "junit"
+        "report": "junit",
+        "workspacePackage": "@t3tools/mobile"
       }
     ]
   }

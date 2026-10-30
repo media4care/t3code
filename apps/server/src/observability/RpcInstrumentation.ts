@@ -89,6 +89,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverReportClientActivity]: "server",
   [WS_METHODS.qaSubscribe]: "qa",
   [WS_METHODS.qaStart]: "qa",
+  [WS_METHODS.qaStartAffected]: "qa",
+  [WS_METHODS.qaCancelAffected]: "qa",
   [WS_METHODS.qaCancel]: "qa",
   [WS_METHODS.qaDetails]: "qa",
   [WS_METHODS.insightsSubscribe]: "insights",

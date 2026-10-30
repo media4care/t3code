@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workspaceChanges": {
+      "types": "./src/workspaceChanges.d.cts",
+      "import": "./src/workspaceChanges.cjs"
+    },
     "./agentNotification": {
       "types": "./src/agentNotification.ts",
       "import": "./src/agentNotification.ts"

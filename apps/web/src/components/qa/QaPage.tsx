@@ -1,12 +1,24 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
-import { ArrowLeftIcon, FlaskConicalIcon, PlayIcon, RefreshCwIcon, SquareIcon } from "lucide-react";
-import type { EnvironmentId, ProjectId, QaRun } from "@t3tools/contracts";
+import {
+  ActivityIcon,
+  ArrowLeftIcon,
+  FlaskConicalIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  SearchIcon,
+} from "lucide-react";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
-  qaStatusLabel,
+  QA_FILTER_OPTIONS,
+  QA_GROUP_OPTIONS,
+  groupQaSuites,
+  qaDashboard,
   qaRunDuration,
   qaRunSummary,
+  type QaGrouping,
+  type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
@@ -16,9 +28,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
+import { Input } from "../ui/input";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
 
 export function QaPage() {
   const projects = useProjects();
@@ -87,24 +100,6 @@ export function QaPage() {
   );
 }
 
-function RunBadge({ run }: { run: QaRun | undefined }) {
-  return (
-    <Badge
-      variant={
-        run?.status === "passed"
-          ? "success"
-          : run?.status === "failed"
-            ? "error"
-            : run?.status === "running"
-              ? "info"
-              : "secondary"
-      }
-    >
-      {qaStatusLabel(run)}
-    </Badge>
-  );
-}
-
 function ProjectQa({
   environmentId,
   projectId,
@@ -120,13 +115,31 @@ function ProjectQa({
     serverEnvironment.qaLive({ environmentId, input: { projectId } }),
   );
   const start = useAtomCommand(serverEnvironment.startQa);
+  const startAffected = useAtomCommand(serverEnvironment.startAffectedQa);
+  const cancelAffected = useAtomCommand(serverEnvironment.cancelAffectedQa);
   const cancel = useAtomCommand(serverEnvironment.cancelQa);
   const canRun = useAtomValue(serverEnvironment.startQa.permissionAtom(environmentId));
+  const canRunAffected = useAtomValue(
+    serverEnvironment.startAffectedQa.permissionAtom(environmentId),
+  );
+  const canStopAffected = useAtomValue(
+    serverEnvironment.cancelAffectedQa.permissionAtom(environmentId),
+  );
   const [busy, setBusy] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const [grouping, setGrouping] = useState<QaGrouping>("component");
+  const [filter, setFilter] = useState<QaResultFilter>("all");
+  const [search, setSearch] = useState("");
   const snapshot = query.data;
   const running = snapshot?.latestRuns.find((run) => run.status === "running");
-  const latest = new Map(snapshot?.latestRuns.map((run) => [run.suite.id, run]));
+  const { entries, counts } = qaDashboard(
+    snapshot?.suites ?? [],
+    snapshot?.latestRuns ?? [],
+    snapshot?.freshness,
+  );
+  const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
+  const groups = groupQaSuites(entries, grouping, search, filter);
+  const visibleCount = groups.reduce((total, group) => total + group.entries.length, 0);
   const runSuite = async (suiteId: string) => {
     setBusy(true);
     const result = await start({ environmentId, input: { projectId, suiteId } });
@@ -141,7 +154,7 @@ function ProjectQa({
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <h2 className="text-2xl font-semibold">Test suites</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {environmentLabel}
@@ -151,8 +164,13 @@ function ProjectQa({
             {snapshot?.workspaceRoot}
           </p>
         </div>
-        <Button variant="outline" disabled={!connected} onClick={query.refresh}>
-          <RefreshCwIcon /> Refresh catalog
+        <Button
+          variant="outline"
+          aria-label="Refresh QA"
+          disabled={!connected}
+          onClick={query.refresh}
+        >
+          <RefreshCwIcon /> <span className="hidden sm:inline">Refresh QA</span>
         </Button>
       </div>
       {query.error ? (
@@ -163,6 +181,11 @@ function ProjectQa({
       {snapshot?.configurationError ? (
         <p role="alert" className="text-sm text-destructive-foreground">
           {snapshot.configurationError}
+        </p>
+      ) : null}
+      {snapshot?.batchError ? (
+        <p role="alert" className="text-sm text-destructive-foreground">
+          Affected run stopped: {snapshot.batchError}
         </p>
       ) : null}
       {!snapshot && query.isPending ? (
@@ -186,70 +209,79 @@ function ProjectQa({
           </p>
         </div>
       ) : null}
-      <div className="grid gap-3">
-        {snapshot?.suites.map((suite) => {
-          const run = latest.get(suite.id);
-          return (
-            <section
-              key={suite.id}
-              aria-label={suite.name}
-              className="rounded-xl border border-border bg-card p-5"
+      {counts.total > 0 ? <QaSummary counts={counts} filter={filter} onFilter={setFilter} /> : null}
+      {snapshot?.freshness && counts.total > 0 ? (
+        <section
+          aria-label="Input freshness"
+          className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-4"
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold">
+              {affectedCount} {affectedCount === 1 ? "suite needs" : "suites need"} a rerun
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Includes changed, expired, unknown, untested, and unsuccessful suites.
+              {snapshot.checkedAt
+                ? ` Checked ${new Date(snapshot.checkedAt).toLocaleTimeString()}. Refresh after editing files.`
+                : ""}
+            </p>
+            {snapshot.batchRunning ? (
+              <p className="mt-2 text-sm">
+                {snapshot.queuedSuiteIds?.length ?? 0} queued · Runs continue when you leave QA.
+              </p>
+            ) : null}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFilter(filter === "affected" ? "all" : "affected")}
+          >
+            {filter === "affected" ? "Show all suites" : "Show affected"}
+          </Button>
+          {snapshot.batchRunning ? (
+            <Button
+              variant="outline"
+              disabled={!connected || !canStopAffected || busy}
+              onClick={() => {
+                setBusy(true);
+                void cancelAffected({ environmentId, input: { projectId } }).finally(() =>
+                  setBusy(false),
+                );
+              }}
             >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <h3 className="font-semibold">{suite.name}</h3>
-                  <RunBadge run={run} />
-                </div>
-                <div className="flex items-center gap-2">
-                  {run ? (
-                    <Button variant="ghost" size="sm" onClick={() => setSelectedRun(run.id)}>
-                      View run
-                    </Button>
-                  ) : null}
-                  {run?.status === "running" ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!connected || !canRun || busy}
-                      onClick={() => {
-                        void cancelRun(run.id);
-                      }}
-                    >
-                      <SquareIcon /> Cancel
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!connected || !canRun || busy || !!running}
-                      onClick={() => {
-                        void runSuite(suite.id);
-                      }}
-                    >
-                      <PlayIcon /> Run
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
-                {suite.cwd ? `${suite.cwd} › ` : ""}
-                {suite.command}
-              </p>
-              <p className="mt-3 text-sm text-muted-foreground">
-                {run
-                  ? `Last run ${new Date(run.startedAt).toLocaleString()} · ${qaRunDuration(run)} · ${qaRunSummary(run)}`
-                  : "This suite has not been run through QA yet."}
-              </p>
-              {run?.note ? <p className="mt-2 text-sm text-muted-foreground">{run.note}</p> : null}
-            </section>
-          );
-        })}
-      </div>
+              Stop affected run
+            </Button>
+          ) : (
+            <Button
+              disabled={!connected || !canRunAffected || busy || !!running || !affectedCount}
+              onClick={() => {
+                setBusy(true);
+                void startAffected({ environmentId, input: { projectId } }).finally(() =>
+                  setBusy(false),
+                );
+              }}
+            >
+              <PlayIcon /> Run affected suites ({affectedCount})
+            </Button>
+          )}
+        </section>
+      ) : null}
       {running ? (
-        <p className="text-sm text-muted-foreground">
-          One suite runs at a time in this project to avoid sharing a test database or device
-          concurrently.
-        </p>
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-info/20 bg-info/5 p-4"
+        >
+          <ActivityIcon className="size-5 text-info-foreground" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Running {running.suite.name}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              One suite runs at a time in this project.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setSelectedRun(running.id)}>
+            View run
+          </Button>
+        </div>
       ) : null}
       {selectedRun ? (
         <RunDetails
@@ -260,12 +292,109 @@ function ProjectQa({
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
+      {counts.total > 0 ? (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-48 flex-1 items-center gap-2">
+              <SearchIcon className="size-4 shrink-0 text-muted-foreground" />
+              <Input
+                type="search"
+                aria-label="Search suites"
+                placeholder="Search suites, components, or test types…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <div className="w-40">
+              <Select
+                value={grouping}
+                onValueChange={(value) => {
+                  if (value) setGrouping(value);
+                }}
+              >
+                <SelectTrigger aria-label="Group suites by">
+                  <SelectValue>
+                    {QA_GROUP_OPTIONS.find((option) => option.value === grouping)?.label}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {QA_GROUP_OPTIONS.map(({ value, label }) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <div className="w-44">
+              <Select
+                value={filter}
+                onValueChange={(value) => {
+                  if (value) setFilter(value);
+                }}
+              >
+                <SelectTrigger aria-label="Filter suite results">
+                  <SelectValue>
+                    {QA_FILTER_OPTIONS.find((option) => option.value === filter)?.label}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {QA_FILTER_OPTIONS.map(({ value, label }) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <span className="text-xs tabular-nums text-muted-foreground" role="status">
+              {visibleCount} of {counts.total} suites
+            </span>
+          </div>
+          <div className="grid gap-6">
+            {groups.map((group) => (
+              <QaSuiteGroup
+                key={`${grouping}:${group.label}`}
+                label={group.label}
+                entries={group.entries}
+                showComponent={grouping !== "component"}
+                canRun={connected && canRun && !busy && !running && !snapshot?.batchRunning}
+                canCancel={connected && canRun && !busy}
+                onRun={(suiteId) => {
+                  void runSuite(suiteId);
+                }}
+                onCancel={(runId) => {
+                  void cancelRun(runId);
+                }}
+                onView={setSelectedRun}
+              />
+            ))}
+          </div>
+          {groups.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-8 text-center">
+              <p className="font-medium">No suites match these filters</p>
+              <div className="mt-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSearch("");
+                    setFilter("all");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : null}
       {snapshot && snapshot.recentRuns.length > 0 ? (
-        <section>
-          <h2 className="mb-3 text-lg font-semibold">
+        <details>
+          <summary className="mb-3 cursor-pointer text-sm font-semibold">
             Recent runs{" "}
             <span className="text-sm font-normal text-muted-foreground">· Latest 50</span>
-          </h2>
+          </summary>
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
               <thead className="bg-muted/40 text-muted-foreground">
@@ -285,7 +414,7 @@ function ProjectQa({
                   <tr key={run.id} className="border-t border-border">
                     <td className="p-3">{run.suite.name}</td>
                     <td className="p-3">
-                      <RunBadge run={run} />
+                      <QaRunBadge run={run} />
                     </td>
                     <td className="whitespace-nowrap p-3">
                       {new Date(run.startedAt).toLocaleString()}
@@ -310,7 +439,7 @@ function ProjectQa({
               </tbody>
             </table>
           </div>
-        </section>
+        </details>
       ) : null}
     </>
   );
@@ -348,7 +477,7 @@ function RunDetails({
       {data ? (
         <>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <RunBadge run={data.run} />
+            <QaRunBadge run={data.run} />
             <span className="text-sm text-muted-foreground">
               {qaRunDuration(data.run)} · {qaRunSummary(data.run)}
             </span>

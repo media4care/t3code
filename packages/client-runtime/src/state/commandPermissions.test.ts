@@ -72,6 +72,8 @@ describe("command permissions", () => {
     [WS_METHODS.gitExplorerDeleteBranch, AuthSourceControlWriteScope],
     [WS_METHODS.gitExplorerRunAction, AuthSourceControlWriteScope],
     [WS_METHODS.qaStart, AuthTerminalOperateScope],
+    [WS_METHODS.qaStartAffected, AuthTerminalOperateScope],
+    [WS_METHODS.qaCancelAffected, AuthTerminalOperateScope],
     [WS_METHODS.qaCancel, AuthTerminalOperateScope],
   ] as const)("requires the destination grant for %s", ([method, required]) =>
     Effect.scoped(

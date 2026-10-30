@@ -1316,6 +1316,14 @@ export function createServerEnvironmentAtoms<R, E>(
             )?.recentRuns.find((run) => run.id === input.runId)?.status,
         ),
     }),
+    startAffectedQa: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:start-affected",
+      tag: WS_METHODS.qaStartAffected,
+    }),
+    cancelAffectedQa: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:cancel-affected",
+      tag: WS_METHODS.qaCancelAffected,
+    }),
     startQa: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:start",
       tag: WS_METHODS.qaStart,

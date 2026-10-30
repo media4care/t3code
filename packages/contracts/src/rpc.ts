@@ -580,6 +580,8 @@ export const WS_METHODS = {
 
   qaSubscribe: "qa.subscribe",
   qaStart: "qa.start",
+  qaStartAffected: "qa.startAffected",
+  qaCancelAffected: "qa.cancelAffected",
   qaCancel: "qa.cancel",
   qaDetails: "qa.details",
   insightsSubscribe: "insights.subscribe",
@@ -1986,6 +1988,16 @@ const WsQaStartRpc = Rpc.make(WS_METHODS.qaStart, {
   success: QaRun,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
+const WsQaStartAffectedRpc = Rpc.make(WS_METHODS.qaStartAffected, {
+  payload: QaProjectInput,
+  success: Schema.Array(Schema.String),
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+const WsQaCancelAffectedRpc = Rpc.make(WS_METHODS.qaCancelAffected, {
+  payload: QaProjectInput,
+  success: Schema.Void,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
 const WsQaCancelRpc = Rpc.make(WS_METHODS.qaCancel, {
   payload: QaRunInput,
   success: Schema.Void,
@@ -2181,6 +2193,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSignalProcessRpc,
   WsQaSubscribeRpc,
   WsQaStartRpc,
+  WsQaStartAffectedRpc,
+  WsQaCancelAffectedRpc,
   WsQaCancelRpc,
   WsQaDetailsRpc,
   WsInsightsSubscribeRpc,

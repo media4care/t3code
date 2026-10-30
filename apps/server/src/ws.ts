@@ -2023,6 +2023,8 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.qaSubscribe]: (input) => qa.subscribe(input),
         [WS_METHODS.qaStart]: (input) => qa.start(input),
+        [WS_METHODS.qaStartAffected]: (input) => qa.startAffected(input),
+        [WS_METHODS.qaCancelAffected]: (input) => qa.cancelAffected(input),
         [WS_METHODS.qaCancel]: (input) => qa.cancel(input),
         [WS_METHODS.qaDetails]: (input) => qa.details(input),
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
