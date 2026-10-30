@@ -6,6 +6,8 @@ import {
   type QaSuite,
   type QaScheduleConfiguration,
   type QaCiReport,
+  type QaTestCase,
+  type QaTestStatus,
 } from "@t3tools/contracts";
 import { QA_CI_REPORT_EXAMPLE } from "@t3tools/client-runtime/qa";
 import { expect, it, vi } from "vite-plus/test";
@@ -18,6 +20,7 @@ import { QaPage } from "./QaPage";
 const state = vi.hoisted(() => ({
   snapshots: {} as Record<string, QaSnapshot>,
   runs: {} as Record<string, QaRun>,
+  tests: {} as Record<string, QaTestCase[]>,
   allowed: true,
 }));
 
@@ -41,6 +44,7 @@ vi.mock("../../state/server", async () => {
     serverEnvironment: {
       qaLive: (input: unknown) => ({ kind: "snapshot", target: input }),
       qaDetails: (input: unknown) => ({ kind: "details", target: input }),
+      qaTests: (input: unknown) => ({ kind: "tests", target: input }),
       setQaSchedule: { kind: "setSchedule", permissionAtom: () => Atom.make(state.allowed) },
       importQaReport: { kind: "import", permissionAtom: () => Atom.make(state.allowed) },
       startQa: { kind: "start", permissionAtom: () => Atom.make(state.allowed) },
@@ -53,21 +57,51 @@ vi.mock("../../state/server", async () => {
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: {
     kind: string;
-    target: { input: { projectId: string; runId?: string } };
+    target: {
+      input: {
+        projectId: string;
+        runId?: string;
+        search?: string;
+        offset?: number;
+        status?: QaTestStatus;
+      };
+    };
   }) => {
     const run = state.runs[query.target.input.runId ?? ""];
+    const allTests = state.tests[query.target.input.runId ?? ""];
+    const terms = (query.target.input.search ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = (allTests ?? []).filter(
+      (test) =>
+        (!query.target.input.status || query.target.input.status === test.status) &&
+        terms.every((term) =>
+          `${test.name} ${test.group ?? ""} ${test.file ?? ""}`.toLowerCase().includes(term),
+        ),
+    );
+    const offset = query.target.input.offset ?? 0;
     return {
       data:
         query.kind === "snapshot"
           ? state.snapshots[query.target.input.projectId]
-          : run
+          : query.kind === "tests"
             ? {
                 run,
-                output: `${run.id}: ${run.suite.name}: captured output`,
-                outputTruncated: false,
-                reportXml: null,
+                tests: matches.slice(offset, offset + 50),
+                total: allTests?.length ?? 0,
+                matched: matches.length,
+                offset,
+                nextOffset: offset + 50 < matches.length ? offset + 50 : null,
+                unavailableReason: allTests
+                  ? null
+                  : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
               }
-            : null,
+            : run
+              ? {
+                  run,
+                  output: `${run.id}: ${run.suite.name}: captured output`,
+                  outputTruncated: false,
+                  reportXml: null,
+                }
+              : null,
       error: null,
       isPending: false,
       refresh: () => {},
@@ -155,6 +189,7 @@ vi.mock("../../state/use-atom-command", () => ({
 function setup() {
   state.allowed = true;
   state.runs = {};
+  state.tests = {};
   state.snapshots = Object.fromEntries(
     ["alpha", "beta"].map((id) => [
       id,
@@ -167,6 +202,7 @@ function setup() {
         branch: "main",
         schedule: null,
         latestCiRuns: [],
+        testResultsAvailable: true,
       },
     ]),
   );
@@ -181,6 +217,7 @@ it("keeps runs scoped to the selected project and environment when switching the
     { router: "/qa" },
   );
   await screen.getByRole("button", { name: "Run", exact: true }).click();
+  await screen.getByText("Run output", { exact: true }).click();
   await expect
     .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .toBeVisible();
@@ -191,6 +228,7 @@ it("keeps runs scoped to the selected project and environment when switching the
     .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .not.toBeInTheDocument();
   await screen.getByRole("button", { name: "Run", exact: true }).click();
+  await screen.getByText("Run output", { exact: true }).click();
   await expect
     .element(screen.getByText("remote:beta: beta tests: captured output", { exact: true }))
     .toBeVisible();
@@ -249,6 +287,7 @@ it("manages recurring runs and imports CI results in the selected environment", 
     .toBeVisible();
   await screen.getByRole("textbox", { name: "CI report JSON" }).fill(QA_CI_REPORT_EXAMPLE);
   await screen.getByRole("button", { name: "Import result", exact: true }).click();
+  await screen.getByText("Run output", { exact: true }).click();
   await expect
     .element(screen.getByText("remote:beta:ci: beta tests: captured output", { exact: true }))
     .toBeVisible();
@@ -346,6 +385,7 @@ function dashboardFixture() {
     recentRuns: latestRuns,
     schedule: null,
     latestCiRuns: [],
+    testResultsAvailable: true,
     checkedAt: "2026-10-30T11:00:00.000Z",
     freshness: suites.map((suite, index) => ({
       suiteId: suite.id,
@@ -449,4 +489,106 @@ it("shows freshness separately from results, filters affected suites and control
   await expect
     .element(screen.getByRole("button", { name: "Run affected suites (5)" }))
     .toBeDisabled();
+});
+
+it("lists individual results with paging, search, result filters, and failure details", async () => {
+  dashboardFixture();
+  const tests: QaTestCase[] = Array.from({ length: 123 }, (_, index) => ({
+    id: index,
+    name:
+      [
+        "signs in with valid credentials",
+        "refreshes an expiring access token",
+        "rejects an expired session",
+        "keeps the session after relaunch",
+      ][index] ?? `validates user record ${index}`,
+    group: "Authentication › Sessions",
+    file: "apps/server/src/auth/session.test.ts",
+    durationMs: 12 + index * 2,
+    status: index === 2 ? "failed" : index === 3 ? "skipped" : "passed",
+    details:
+      index === 2
+        ? "Expected 401 (Unauthorized)\nReceived 200 (OK)\n  at session.test.ts:42"
+        : index === 3
+          ? "Requires a physical device"
+          : null,
+    truncated: false,
+  }));
+  state.tests.api = tests;
+  const run: QaRun = {
+    ...state.runs.api!,
+    status: "failed",
+    exitCode: 1,
+    summary: { tests: 123, failures: 1, skipped: 1 },
+  };
+  state.runs.api = run;
+  state.snapshots.alpha = { ...state.snapshots.alpha!, latestRuns: [run], recentRuns: [run] };
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
+  const results = screen.getByRole("region", { name: "Individual tests", exact: true });
+  await expect.element(results.getByText("1–50 of 123 tests", { exact: true })).toBeVisible();
+  await expect
+    .element(results.getByText("signs in with valid credentials", { exact: true }))
+    .toBeVisible();
+  await results.getByRole("button", { name: "Next tests", exact: true }).click();
+  await expect.element(results.getByText("51–100 of 123 tests", { exact: true })).toBeVisible();
+  await expect
+    .element(results.getByText("signs in with valid credentials", { exact: true }))
+    .not.toBeInTheDocument();
+  await results.getByRole("searchbox", { name: "Search tests" }).fill("RECORD 122");
+  await expect
+    .element(results.getByText("1–1 of 1 tests · 123 in report", { exact: true }))
+    .toBeVisible();
+  await expect
+    .element(results.getByText("validates user record 122", { exact: true }))
+    .toBeVisible();
+  await results.getByRole("button", { name: "Clear test filters", exact: true }).click();
+  await results.getByRole("combobox", { name: "Filter tests" }).click();
+  await page.getByRole("option", { name: "Failed", exact: true }).click();
+  await expect
+    .element(results.getByText("rejects an expired session", { exact: true }))
+    .toBeVisible();
+  await results.getByText("Failure details", { exact: true }).click();
+  await expect.element(results.getByText("Received 200 (OK)", { exact: false })).toBeVisible();
+  await results.getByRole("combobox", { name: "Filter tests" }).click();
+  await page.getByRole("option", { name: "Skipped", exact: true }).click();
+  await results.getByText("Skip reason", { exact: true }).click();
+  await expect
+    .element(results.getByText("Requires a physical device", { exact: true }))
+    .toBeVisible();
+  await results.getByRole("searchbox", { name: "Search tests" }).fill("nothing matches");
+  await expect
+    .element(results.getByText("No tests match these filters.", { exact: true }))
+    .toBeVisible();
+  state.allowed = false;
+  await screen.rerender(
+    <SidebarProvider key="read-only">
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
+    .toBeEnabled();
+  await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
+  await expect.element(screen.getByRole("table", { name: "Test results" })).toBeVisible();
+  state.snapshots.alpha = { ...state.snapshots.alpha!, testResultsAvailable: false };
+  await screen.rerender(
+    <SidebarProvider key="old-server">
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
+  await expect
+    .element(
+      screen.getByText("Update this environment’s server to view individual test results.", {
+        exact: true,
+      }),
+    )
+    .toBeVisible();
+  await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
 });

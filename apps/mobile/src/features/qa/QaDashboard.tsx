@@ -327,7 +327,13 @@ function SuiteCard({
           tone="text"
           onPress={() => setShowCommand(!showCommand)}
         />
-        {run ? <Button label="View run" tone="text" onPress={() => onView(run.id)} /> : null}
+        {run ? (
+          <Button
+            label={run.summary ? `View tests (${run.summary.tests})` : "View run"}
+            tone="text"
+            onPress={() => onView(run.id)}
+          />
+        ) : null}
         {run?.status === "running" ? (
           <Button label="Cancel" disabled={!canCancel} onPress={() => onCancel(run.id)} />
         ) : (

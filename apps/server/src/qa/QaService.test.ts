@@ -661,6 +661,16 @@ describe("QA runs", () => {
         assert.deepEqual(yield* restarted.details({ projectId, runId: run.id }), result);
         assert.equal((yield* restarted.snapshot({ projectId })).latestRuns[0]?.id, run.id);
         assert.equal((yield* sql`SELECT id FROM qa_runs`).length, 1);
+        const tests = yield* restarted.tests({ projectId, runId: run.id });
+        assert.deepEqual(
+          tests.tests.map((test) => [test.name, test.status]),
+          [
+            ["works", "passed"],
+            ["later", "skipped"],
+          ],
+        );
+        assert.equal(tests.total, 2);
+        assert.isNull(tests.unavailableReason);
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -682,9 +692,86 @@ describe("QA runs", () => {
         const run = yield* service.start({ projectId, suiteId: "unit" });
         const result = yield* completed(service, run.id);
         assert.equal(result.run.status, expected);
+        if (!result.reportXml) {
+          const tests = yield* service.tests({ projectId, runId: run.id });
+          assert.isEmpty(tests.tests);
+          assert.isNotNull(tests.unavailableReason);
+        }
       }
       assert.equal((yield* service.snapshot({ projectId })).recentRuns.length, 6);
     }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live(
+    "pages and filters stored test cases without losing duplicate names or crossing projects",
+    () =>
+      Effect.gen(function* () {
+        const { service, sql } = yield* fixture("");
+        const reportXml = `<testsuite name="Backend" file="auth.test.ts">${Array.from(
+          { length: 127 },
+          (_, index) =>
+            `<testcase name="${index < 2 ? "same name" : `checks user ${index}`}" time="0.01">${index === 7 ? '<failure message="expected 401">token was accepted</failure>' : index === 3 ? '<skipped message="requires device"/>' : ""}</testcase>`,
+        ).join("")}</testsuite>`;
+        const run = yield* service.importReport({
+          projectId,
+          report: {
+            suiteId: "unit",
+            source: { type: "ci", provider: "CI", runId: "individual-tests", environment: "linux" },
+            commit: "a".repeat(40),
+            branch: "main",
+            startedAt: "2026-01-01T09:00:00.000Z",
+            finishedAt: "2026-01-01T09:01:00.000Z",
+            exitCode: 1,
+            reportXml,
+          },
+        });
+        const first = yield* service.tests({ projectId, runId: run.id });
+        assert.equal(first.total, 127);
+        assert.equal(first.matched, 127);
+        assert.lengthOf(first.tests, 50);
+        assert.equal(first.nextOffset, 50);
+        assert.deepEqual(
+          first.tests.slice(0, 2).map((test) => [test.id, test.name]),
+          [
+            [0, "same name"],
+            [1, "same name"],
+          ],
+        );
+        const middle = yield* service.tests({ projectId, runId: run.id, offset: 50 });
+        assert.lengthOf(middle.tests, 50);
+        assert.equal(middle.tests[0]?.id, 50);
+        const last = yield* service.tests({ projectId, runId: run.id, offset: 100 });
+        assert.lengthOf(last.tests, 27);
+        assert.isNull(last.nextOffset);
+        const failed = yield* service.tests({
+          projectId,
+          runId: run.id,
+          status: "failed",
+          search: "BACKEND auth.test.ts",
+        });
+        assert.equal(failed.matched, 1);
+        assert.equal(failed.tests[0]?.name, "checks user 7");
+        assert.include(failed.tests[0]?.details ?? "", "token was accepted");
+        assert.isNull(failed.nextOffset);
+        assert.equal(
+          (yield* service.tests({ projectId, runId: run.id, status: "skipped" })).matched,
+          1,
+        );
+        assert.equal(
+          (yield* service.tests({ projectId, runId: run.id, search: "not in report" })).matched,
+          0,
+        );
+        assert.equal(
+          (yield* service
+            .tests({ projectId: ProjectId.make("another"), runId: run.id })
+            .pipe(Effect.flip)).reason,
+          "run-not-found",
+        );
+        yield* sql`UPDATE qa_runs SET report_xml = '<testsuite><testcase/></testsuite>broken' WHERE id = ${run.id}`;
+        const corrupt = yield* service.tests({ projectId, runId: run.id });
+        assert.isEmpty(corrupt.tests);
+        assert.isNotNull(corrupt.unavailableReason);
+      }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
   it.live("bounds noisy command output and supports commands without reports", () =>

@@ -109,6 +109,39 @@ export type QaStartInput = typeof QaStartInput.Type;
 export const QaRunInput = Schema.Struct({ projectId: ProjectId, runId: ShortText });
 export type QaRunInput = typeof QaRunInput.Type;
 
+export const QaTestStatus = Schema.Literals(["passed", "failed", "skipped"]);
+export type QaTestStatus = typeof QaTestStatus.Type;
+export const QaTestCase = Schema.Struct({
+  id: NonNegativeInt,
+  name: Schema.String,
+  group: Schema.NullOr(Schema.String),
+  file: Schema.NullOr(Schema.String),
+  status: QaTestStatus,
+  durationMs: Schema.NullOr(Schema.Number),
+  details: Schema.NullOr(Schema.String),
+  truncated: Schema.Boolean,
+});
+export type QaTestCase = typeof QaTestCase.Type;
+export const QA_TEST_PAGE_SIZE = 50;
+export const QaTestsInput = Schema.Struct({
+  projectId: ProjectId,
+  runId: ShortText,
+  search: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
+  status: Schema.optionalKey(QaTestStatus),
+  offset: Schema.optionalKey(NonNegativeInt),
+});
+export type QaTestsInput = typeof QaTestsInput.Type;
+export const QaTestResults = Schema.Struct({
+  run: QaRun,
+  tests: Schema.Array(QaTestCase).check(Schema.isMaxLength(QA_TEST_PAGE_SIZE)),
+  total: NonNegativeInt,
+  matched: NonNegativeInt,
+  offset: NonNegativeInt,
+  nextOffset: Schema.NullOr(NonNegativeInt),
+  unavailableReason: Schema.NullOr(Schema.String),
+});
+export type QaTestResults = typeof QaTestResults.Type;
+
 export const QaScheduleConfiguration = Schema.Struct({
   enabled: Schema.Boolean,
   timing: RecurringSchedule,
@@ -183,6 +216,7 @@ export const QaSnapshot = Schema.Struct({
   schedule: Schema.optionalKey(Schema.NullOr(QaSchedule)),
   latestCiRuns: Schema.optionalKey(Schema.Array(QaRun)),
   branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  testResultsAvailable: Schema.optionalKey(Schema.Boolean),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 

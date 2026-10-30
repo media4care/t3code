@@ -365,7 +365,7 @@ function SuiteCard({
       <div className="mt-auto flex justify-end gap-2 pt-4">
         {run ? (
           <Button variant="ghost" size="sm" onClick={() => onView(run.id)}>
-            View run
+            {run.summary ? `View tests (${run.summary.tests})` : "View run"}
           </Button>
         ) : null}
         {run?.status === "running" ? (
