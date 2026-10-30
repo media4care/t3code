@@ -1,3 +1,4 @@
+import * as Qa from "./qa/QaService.ts";
 import * as Insights from "./insights/InsightsService.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -1398,6 +1399,7 @@ export const layerWsRpc = (
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const qa = yield* Qa.QaService;
       const insights = yield* Insights.InsightsService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
@@ -2277,6 +2279,10 @@ export const layerWsRpc = (
               Effect.as(commandOutputHub.subscribe(input)),
             ),
           ),
+        [WS_METHODS.qaSubscribe]: (input) => qa.subscribe(input),
+        [WS_METHODS.qaStart]: (input) => qa.start(input),
+        [WS_METHODS.qaCancel]: (input) => qa.cancel(input),
+        [WS_METHODS.qaDetails]: (input) => qa.details(input),
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
         [WS_METHODS.insightsConfigure]: (input) => insights.configure(input),
         [WS_METHODS.insightsRunNow]: () => insights.runNow(),
@@ -3435,6 +3441,7 @@ export const WS_RPC_SERVER_OPTIONS = {
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
+    const qa = yield* Qa.QaService;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const npmRelease = yield* NpmRelease.NpmRelease;
@@ -3512,6 +3519,7 @@ export const layer = Layer.unwrap(
               reportProfiles,
               readSettingsClient(url.value),
             ).pipe(
+              Layer.provide(Layer.succeed(Qa.QaService, qa)),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),

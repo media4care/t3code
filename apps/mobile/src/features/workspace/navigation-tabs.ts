@@ -24,6 +24,7 @@ export const NAVIGATION_TAB_ICONS = {
   gitExplorer: "point.topleft.down.curvedto.point.bottomright.up",
   usage: "chart.bar.xaxis",
   insights: "lightbulb",
+  qa: "checkmark.circle",
 } as const satisfies Readonly<Record<NavigationTab, AppSymbolName>>;
 
 export function useNavigationTabOrder() {

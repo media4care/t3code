@@ -1,5 +1,6 @@
 import {
   LightbulbIcon,
+  FlaskConicalIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
@@ -296,6 +297,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<GitForkIcon />}
             label="Git Explorer"
             onClick={handleGitExplorerClick}
+          />
+          <SidebarUtilityItem
+            icon={<FlaskConicalIcon />}
+            label="QA"
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/qa" });
+            }}
           />
           <SidebarUtilityItem
             icon={<LightbulbIcon />}

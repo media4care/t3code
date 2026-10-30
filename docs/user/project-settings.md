@@ -62,6 +62,59 @@ back. On mobile, both are in **Settings → Projects → Organize**.
 
 A project on several machines must have every machine connected to pin or archive it.
 
+## QA test suites
+
+Open **QA** and choose a project to run its test suites and inspect previous runs.
+On mobile, QA is available in the navigation overflow; use **Settings → Navigation**
+to move it into the tab bar. Web and desktop also offer **Open QA** in the command
+palette and the configurable `qa.open` keyboard command.
+
+Add suites to the project's checked-in `t3.json`, preserving its other settings:
+
+```json
+{
+  "qa": {
+    "suites": [
+      {
+        "id": "backend-unit",
+        "name": "Backend unit tests",
+        "cwd": "backend",
+        "command": "npm test -- --run"
+      }
+    ]
+  }
+}
+```
+
+Use your existing non-interactive test command. On macOS and Linux, commands use
+the environment's login shell; on Windows they use the system command shell.
+`cwd` is optional and relative to
+the project root. Each suite needs a unique, stable `id`; changing its name keeps
+its history. Refresh the catalog after editing the configuration.
+
+Runs execute on the selected project's environment, in its current checkout,
+including uncommitted changes. Prepare the test database, browser, or installed
+app as your command requires. One suite runs at a time per project; closing QA
+or disconnecting the client does not stop it. Cancel stops the command and its
+child processes. A server interruption is recorded separately from test failure.
+
+For test counts and a saved report, add `"report": "junit"` and configure the
+command to write JUnit XML to the `T3_QA_REPORT_PATH` environment variable. For
+example, a Vitest command can end with
+`--reporter=junit --outputFile="$T3_QA_REPORT_PATH"`; Playwright can use
+`PLAYWRIGHT_JUNIT_OUTPUT_FILE="$T3_QA_REPORT_PATH" playwright test --reporter=junit`.
+Use your shell's environment-variable syntax on Windows. The path is unique to
+each run. A missing, invalid, empty, or entirely skipped report cannot produce
+a passing result. Reports are limited to 2 MiB.
+
+Without a report, a zero exit code is labelled **Command passed**, with no inferred
+test count. Run details retain the command, working directory, starting Git revision,
+uncommitted-change indicator, timestamps, exit status, and up to 131,072 characters of recent output.
+History and reports stay on the execution environment, outside the repository.
+QA shows each suite's latest run and the project's 50 most recent runs. These
+results describe what ran then; they do not yet determine whether later changes
+require rerunning the suite.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,

@@ -1,4 +1,5 @@
 import InsightsMigration from "./Migrations/073_Insights.ts";
+import QaRunsMigration from "./Migrations/074_QaRuns.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -167,6 +168,7 @@ const migrationEntries = [
   [78, "DropOrchestrationEventCorrelationIndex", Migration0078],
   [79, "DelegatedRecoveryIndexes", Migration0079],
   [80, "Insights", InsightsMigration],
+  [81, "QaRuns", QaRunsMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

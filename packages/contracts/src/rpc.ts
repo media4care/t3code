@@ -1,3 +1,12 @@
+import {
+  QaError,
+  QaProjectInput,
+  QaStartInput,
+  QaRunInput,
+  QaRun,
+  QaRunDetails,
+  QaSnapshot,
+} from "./qa.ts";
 import { ThreadId } from "./baseSchemas.ts";
 import {
   InsightsSettings,
@@ -570,6 +579,10 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
+  qaSubscribe: "qa.subscribe",
+  qaStart: "qa.start",
+  qaCancel: "qa.cancel",
+  qaDetails: "qa.details",
   insightsSubscribe: "insights.subscribe",
   insightsConfigure: "insights.configure",
   insightsRunNow: "insights.runNow",
@@ -1980,6 +1993,28 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsQaSubscribeRpc = Rpc.make(WS_METHODS.qaSubscribe, {
+  payload: QaProjectInput,
+  success: QaSnapshot,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsQaStartRpc = Rpc.make(WS_METHODS.qaStart, {
+  payload: QaStartInput,
+  success: QaRun,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+const WsQaCancelRpc = Rpc.make(WS_METHODS.qaCancel, {
+  payload: QaRunInput,
+  success: Schema.Void,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+const WsQaDetailsRpc = Rpc.make(WS_METHODS.qaDetails, {
+  payload: QaRunInput,
+  success: QaRunDetails,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+
 const WsInsightsSubscribeRpc = Rpc.make(WS_METHODS.insightsSubscribe, {
   payload: Schema.Struct({}),
   success: InsightsSnapshot,
@@ -2162,6 +2197,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsQaSubscribeRpc,
+  WsQaStartRpc,
+  WsQaCancelRpc,
+  WsQaDetailsRpc,
   WsInsightsSubscribeRpc,
   WsInsightsConfigureRpc,
   WsInsightsRunNowRpc,

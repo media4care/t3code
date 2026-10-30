@@ -1,3 +1,4 @@
+import { QaScreen } from "../qa/QaScreen";
 import { InsightsScreen } from "../insights/InsightsScreen";
 import { type NavigationTab } from "./navigation-tab-order";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
@@ -12,6 +13,8 @@ export function WorkspaceExtraTab(props: {
       <NativeStackScreenOptions options={{ headerSearchBarOptions: undefined }} />
       {props.tab === "gitExplorer" ? (
         <GitRepositoriesScreen workspace />
+      ) : props.tab === "qa" ? (
+        <QaScreen />
       ) : props.tab === "insights" ? (
         <InsightsScreen workspace />
       ) : (
