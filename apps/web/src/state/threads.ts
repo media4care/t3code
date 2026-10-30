@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
+import { createThreadAgentMapAtoms } from "@t3tools/client-runtime/state/thread-agent-map";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -40,6 +41,13 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
+});
+export const threadAgentMaps = createThreadAgentMapAtoms({
+  details: environmentThreadDetails,
+  threadsAtom: environmentThreadShells.environmentThreadsAtom,
+  environmentIdsAtom: Atom.make((get) => [
+    ...enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom)),
+  ]),
 });
 
 /** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */

@@ -2,12 +2,15 @@ import {
   isProviderNativeSubagentThread,
   ThreadId,
   type EnvironmentId,
+  type ModelSelection,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import { Atom } from "effect/reactivity";
 
 import { formatSubagentDisplayTitle, resolveSubagentMetadata } from "./subagentDisplay.ts";
 import { formatModelSelectionEffort } from "./threadExecution.ts";
@@ -16,6 +19,9 @@ import {
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "./subagentRuntime.ts";
+import { parseThreadKey, threadKey } from "./entities.ts";
+import type { EnvironmentThread } from "./models.ts";
+import type { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 
 export interface ThreadAgentMapNode {
   readonly id: string;
@@ -27,9 +33,14 @@ export interface ThreadAgentMapNode {
   readonly target: ScopedThreadRef | null;
   readonly kind: "Native" | "Delegated" | "Workflow" | "Workflow agent";
   readonly prompt: string | null;
+  readonly modelSelection?: ModelSelection;
+  readonly modelIsConfigured?: boolean;
+  readonly detailsState?: "loading" | "ready" | "unavailable";
 }
 
-function shellStatus(status: OrchestrationV2ThreadShell["status"]): RuntimeSubagent["status"] {
+function shellStatus(
+  status: OrchestrationV2ThreadShell["status"] | RuntimeSubagent["status"],
+): RuntimeSubagent["status"] {
   switch (status) {
     case "preparing":
     case "starting":
@@ -98,7 +109,14 @@ export function deriveThreadAgentMap(input: {
         target?.environmentId === input.environmentId
           ? (shells.get(target.threadId) ?? null)
           : null;
-      const agent = currentAgent(runtime, thread, source.origin === "provider_native");
+      const agent = currentAgent(
+        {
+          ...runtime,
+          model: runtime.model ?? (member ? null : (source.modelSelection?.model ?? null)),
+        },
+        thread,
+        source.origin === "provider_native",
+      );
       return {
         id: runtime.id,
         parentId: runtime.parentAgentId,
@@ -112,6 +130,8 @@ export function deriveThreadAgentMap(input: {
         source,
         thread,
         target,
+        modelIsConfigured:
+          source.origin === "provider_native" && runtime.model === null && agent.model !== null,
         kind: member
           ? "Workflow agent"
           : source.workflow
@@ -174,7 +194,7 @@ export function deriveThreadAgentMap(input: {
           id,
           title: thread.title,
           prompt: "",
-          model: isProviderNativeSubagentThread(thread) ? null : thread.modelSelection.model,
+          model: thread.modelSelection.model,
           status: shellStatus(thread.activityRunStatus ?? thread.status),
           result: null,
           childThreadId: thread.id,
@@ -193,6 +213,8 @@ export function deriveThreadAgentMap(input: {
         target: { environmentId: input.environmentId, threadId: thread.id },
         kind: isProviderNativeSubagentThread(thread) ? "Native" : "Delegated",
         prompt: null,
+        modelSelection: thread.modelSelection,
+        modelIsConfigured: isProviderNativeSubagentThread(thread),
       });
     }
   }
@@ -201,7 +223,8 @@ export function deriveThreadAgentMap(input: {
 
 export function agentMapMetadata(node: ThreadAgentMapNode, provider: ServerProvider | undefined) {
   const reportedSelection =
-    node.kind === "Workflow agent" ? undefined : node.source?.modelSelection;
+    node.modelSelection ??
+    (node.kind === "Workflow agent" ? undefined : node.source?.modelSelection);
   const selection =
     reportedSelection?.model === node.agent.model
       ? reportedSelection
@@ -209,7 +232,11 @@ export function agentMapMetadata(node: ThreadAgentMapNode, provider: ServerProvi
         ? node.thread.modelSelection
         : undefined;
   return {
-    model: resolveSubagentMetadata({ model: node.agent.model, provider }).modelLabel,
+    model: node.agent.model
+      ? `${resolveSubagentMetadata({ model: node.agent.model, provider }).modelLabel}${node.modelIsConfigured ? " (configured)" : ""}`
+      : node.detailsState === "loading"
+        ? "Loading model…"
+        : "Model unavailable",
     effort:
       node.agent.effort ??
       (selection ? formatModelSelectionEffort(selection, provider?.models) : null),
@@ -236,6 +263,253 @@ export function agentMapStatus(node: ThreadAgentMapNode) {
     case "interrupted":
       return { label: "Interrupted", tone: "stopped" } as const;
     case "idle":
+      if (node.source === null && node.kind === "Native") {
+        return {
+          label: node.detailsState === "loading" ? "Loading" : "Status unavailable",
+          tone: "stopped",
+        } as const;
+      }
       return { label: "Idle", tone: "stopped" } as const;
   }
+}
+
+export function agentMapOutput(node: ThreadAgentMapNode) {
+  return node.agent.status === "failed"
+    ? (node.agent.error ?? node.agent.result ?? node.agent.progress)
+    : (node.agent.result ?? node.agent.progress);
+}
+
+export function agentMapEmptyDetail(
+  node: ThreadAgentMapNode,
+  field: "output" | "prompt" = "output",
+) {
+  if (node.detailsState === "loading") return "Loading agent details…";
+  if (node.detailsState === "unavailable") return "Could not load agent details.";
+  if (field === "prompt") return "Assignment unavailable.";
+  return isActiveSubagentStatus(node.agent.status) ? "Waiting for output." : "Output unavailable.";
+}
+
+export function resolveAgentMapConversation(
+  node: ThreadAgentMapNode,
+  child: EnvironmentThread,
+): ThreadAgentMapNode {
+  if (
+    node.target?.environmentId !== child.environmentId ||
+    node.target.threadId !== child.projection.thread.id
+  )
+    return node;
+  const { projection } = child;
+  const expectedRunId = node.thread?.activeRunId ?? node.thread?.latestRunId;
+  if (expectedRunId && !projection.runs.some((entry) => entry.id === expectedRunId))
+    return { ...node, detailsState: "loading" };
+  const run = projection.runs
+    .filter(
+      (entry) =>
+        entry.threadId === projection.thread.id && (!expectedRunId || entry.id === expectedRunId),
+    )
+    .reduce<(typeof projection.runs)[number] | null>(
+      (latest, candidate) =>
+        latest === null ||
+        DateTime.toEpochMillis(candidate.requestedAt) > DateTime.toEpochMillis(latest.requestedAt)
+          ? candidate
+          : latest,
+      null,
+    );
+  const root = projection.nodes
+    .filter(
+      (entry) =>
+        entry.threadId === projection.thread.id &&
+        entry.runId === (run?.id ?? null) &&
+        entry.kind === "root_turn" &&
+        entry.parentNodeId === null,
+    )
+    .reduce<(typeof projection.nodes)[number] | null>(
+      (latest, candidate) =>
+        latest === null ||
+        DateTime.toEpochMillis(
+          candidate.startedAt ?? candidate.completedAt ?? projection.thread.createdAt,
+        ) >=
+          DateTime.toEpochMillis(
+            latest.startedAt ?? latest.completedAt ?? projection.thread.createdAt,
+          )
+          ? candidate
+          : latest,
+      null,
+    );
+  const resumed =
+    run !== null &&
+    node.source !== null &&
+    DateTime.toEpochMillis(run.requestedAt) >
+      DateTime.toEpochMillis(
+        node.source.completedAt ?? node.source.startedAt ?? node.source.updatedAt,
+      );
+  const execution = run ?? root;
+  const status =
+    execution && (node.source === null || node.agent.status === "idle" || resumed)
+      ? shellStatus(execution.status)
+      : node.agent.status;
+  const startedAt =
+    (resumed ? null : node.agent.startedAt) ??
+    (execution?.startedAt ? DateTime.formatIso(execution.startedAt) : null);
+  const since = run !== null || startedAt === null ? -Infinity : Date.parse(startedAt);
+  const belongsToRun = (entry: { threadId: ThreadId; runId: string | null }) =>
+    entry.threadId === projection.thread.id && entry.runId === (run?.id ?? null);
+  const messages = projection.messages.filter(
+    (message) => belongsToRun(message) && DateTime.toEpochMillis(message.createdAt) >= since,
+  );
+  const assistant = projection.turnItems
+    .filter(
+      (item) =>
+        item.type === "assistant_message" &&
+        belongsToRun(item) &&
+        DateTime.toEpochMillis(item.startedAt ?? item.updatedAt) >= since,
+    )
+    .sort((left, right) => right.ordinal - left.ordinal)
+    .find(
+      (item) =>
+        item.type === "assistant_message" &&
+        (item.text.trim() ||
+          messages.some((message) => message.id === item.messageId && message.text.trim())),
+    );
+  const assistantMessage = messages
+    .filter((message) => message.role === "assistant" && message.text.trim())
+    .sort(
+      (left, right) =>
+        DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
+    )[0];
+  const output =
+    assistant?.type === "assistant_message"
+      ? assistant.text.trim() ||
+        messages.find((message) => message.id === assistant.messageId)?.text
+      : assistantMessage?.text;
+  const prompt = messages
+    .filter(
+      (message) =>
+        message.role === "user" && message.notification === undefined && message.text.trim(),
+    )
+    .sort(
+      (left, right) =>
+        DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt),
+    )[0]?.text;
+  const selection =
+    !resumed && node.agent.model && !node.modelIsConfigured
+      ? node.modelSelection
+      : ((!resumed && node.kind !== "Workflow agent" ? node.source?.modelSelection : undefined) ??
+        run?.modelSelection ??
+        projection.thread.modelSelection);
+  return {
+    ...node,
+    prompt: (resumed ? prompt || node.prompt : node.prompt || prompt) || null,
+    ...(selection ? { modelSelection: selection } : {}),
+    modelIsConfigured:
+      selection !== undefined &&
+      run === null &&
+      (node.modelIsConfigured === true || node.agent.model === null),
+    agent: {
+      ...node.agent,
+      model: selection?.model ?? node.agent.model,
+      status,
+      startedAt,
+      completedAt: isActiveSubagentStatus(status)
+        ? null
+        : ((resumed ? null : node.agent.completedAt) ??
+          (execution?.completedAt ? DateTime.formatIso(execution.completedAt) : null)),
+      result:
+        (resumed ? null : node.agent.result) ??
+        (!isActiveSubagentStatus(status) && status !== "failed" ? (output ?? null) : null),
+      progress:
+        (resumed ? null : node.agent.progress) ??
+        (isActiveSubagentStatus(status) ? (output ?? null) : null),
+      error:
+        (resumed ? null : node.agent.error) ??
+        (status === "failed" ? (node.thread?.lastError ?? output ?? null) : null),
+    },
+  };
+}
+
+export function createThreadAgentMapAtoms(input: {
+  readonly details: Pick<
+    ReturnType<typeof createEnvironmentThreadDetailAtoms>,
+    "quietThreadAtom" | "stateAtom" | "statusAtom" | "errorAtom"
+  >;
+  readonly threadsAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<OrchestrationV2ThreadShell>>;
+  readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
+}) {
+  const nodes = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    return Atom.make((get) =>
+      deriveThreadAgentMap({
+        ...ref,
+        subagents: get(input.details.quietThreadAtom(ref))?.projection.subagents ?? [],
+        threads: get(input.threadsAtom(ref.environmentId)),
+      }),
+    ).pipe(Atom.setIdleTTL(0));
+  });
+  const resolved = Atom.family((key: string) => {
+    const [rootKey, id] = JSON.parse(key) as [string, string];
+    const ref = parseThreadKey(rootKey);
+    return Atom.make((get): ThreadAgentMapNode | null => {
+      let node = get(nodes(rootKey)).find((entry) => entry.id === id);
+      if (!node) return null;
+      if (node.source === null) {
+        const ownerRef = { environmentId: ref.environmentId, threadId: node.ownerThreadId };
+        const owner = get(input.details.quietThreadAtom(ownerRef));
+        if (
+          owner === null &&
+          !get(input.details.errorAtom(ownerRef)) &&
+          get(input.details.statusAtom(ownerRef)) !== "deleted"
+        )
+          return { ...node, detailsState: "loading" };
+        if (owner !== null) {
+          const target = node.target;
+          const source = deriveThreadAgentMap({
+            ...ownerRef,
+            subagents: owner.projection.subagents,
+            threads: node.thread ? [node.thread] : [],
+          }).find(
+            (entry) =>
+              entry.target !== null &&
+              target !== null &&
+              entry.target.environmentId === target.environmentId &&
+              entry.target.threadId === target.threadId &&
+              entry.source !== null,
+          );
+          if (source)
+            node = {
+              ...source,
+              id: node.id,
+              parentId: node.parentId,
+              ownerThreadId: node.ownerThreadId,
+            };
+        }
+      }
+      if (
+        node.target !== null &&
+        (node.source === null || !node.agent.model || !node.prompt || !agentMapOutput(node))
+      ) {
+        if (!get(input.environmentIdsAtom).includes(node.target.environmentId))
+          return { ...node, detailsState: "unavailable" };
+        const state = get(input.details.stateAtom(node.target));
+        const projection = Option.getOrNull(state.data);
+        if (projection !== null)
+          node = resolveAgentMapConversation(node, {
+            environmentId: node.target.environmentId,
+            projection,
+          });
+        else
+          return {
+            ...node,
+            detailsState:
+              Option.isSome(state.error) || state.status === "deleted" ? "unavailable" : "loading",
+          };
+      }
+      return { ...node, detailsState: node.detailsState ?? "ready" };
+    }).pipe(Atom.setIdleTTL(0));
+  });
+  return {
+    nodesAtom: (ref: ScopedThreadRef) => nodes(threadKey(ref)),
+    nodeAtom: (ref: ScopedThreadRef, id: string) => resolved(JSON.stringify([threadKey(ref), id])),
+  };
 }
