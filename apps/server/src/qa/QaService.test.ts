@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, QaRun, type QaSuite } from "@t3tools/contracts";
+import {
+  ProjectId,
+  QaRun,
+  type QaSuite,
+  type QaCiReport,
+  type QaScheduleConfiguration,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -16,9 +22,26 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Qa from "./QaService.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import {
+  AuthSessionId,
+  EnvironmentAuthenticatedAuth,
+  EnvironmentAuthenticatedPrincipal,
+  EnvironmentHttpApi,
+} from "@t3tools/contracts";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as Etag from "effect/http/Etag";
+import * as QaHttp from "./http.ts";
+import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
+
+class QaTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.qa) {}
 
 const projectId = ProjectId.make("qa-test");
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeRun = Schema.decodeUnknownEffect(QaRun);
 const layer = Layer.mergeAll(Sqlite.layerMemory, ProcessRunner.layer).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
@@ -39,6 +62,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM qa_runs`;
+  yield* sql`DELETE FROM qa_schedules`;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-test-" });
   const processes = yield* ProcessRunner.ProcessRunner;
   const git = (args: readonly string[]) => processes.run({ command: "git", args, cwd: root });
@@ -66,9 +90,34 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
           : Option.none(),
       ),
   });
-  const serviceLayer = Qa.layer.pipe(Layer.provide(projectLayer));
+  const registered = yield* Deferred.make<Effect.Effect<void>>();
+  const schedulerLayer = Layer.succeed(
+    Scheduler.Scheduler,
+    Scheduler.Scheduler.of({
+      register: Effect.fn("Qa.test.register")(function* <E, R>(
+        _name: string,
+        work: Effect.Effect<void, E, R>,
+      ) {
+        const context = yield* Effect.context<R>();
+        yield* Deferred.succeed(
+          registered,
+          work.pipe(Effect.provideContext(context), Effect.orDie),
+        );
+      }),
+    }),
+  );
+  const serviceLayer = Qa.layer.pipe(Layer.provide(projectLayer), Layer.provide(schedulerLayer));
   const context = yield* Layer.build(Layer.fresh(serviceLayer));
-  return { service: Context.get(context, Qa.QaService), serviceLayer, root, fs, path, sql, git };
+  return {
+    service: Context.get(context, Qa.QaService),
+    serviceLayer,
+    root,
+    fs,
+    path,
+    sql,
+    git,
+    tick: yield* Deferred.await(registered),
+  };
 });
 
 const completed = Effect.fn("Qa.test.completed")(function* (
@@ -87,6 +136,274 @@ const completed = Effect.fn("Qa.test.completed")(function* (
 });
 
 describe("QA runs", () => {
+  it.live(
+    "runs due schedules once, records actual results, and keeps interval state across restarts",
+    () =>
+      Effect.gen(function* () {
+        const { service, tick, sql, serviceLayer, git } = yield* fixture("process.exitCode = 1", [
+          { id: "unit", name: "Unit", command: "node run.cjs", inputs: ["run.cjs"] },
+        ]);
+        const branch = (yield* git(["branch", "--show-current"])).stdout.trim();
+        const configuration: QaScheduleConfiguration = {
+          enabled: true,
+          branch,
+          timeZone: "Europe/Berlin",
+          timing: { type: "interval", everyMs: 86_400_000 },
+          target: { type: "all" },
+        };
+        yield* service.setSchedule({ projectId, configuration });
+        yield* tick;
+        assert.isEmpty((yield* service.snapshot({ projectId })).recentRuns);
+        yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+        yield* tick;
+        yield* tick;
+        const finished = yield* service.subscribe({ projectId }).pipe(
+          Stream.filter((value) => value.schedule?.lastStatus === "failed"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(finished));
+        const state = yield* service.snapshot({ projectId });
+        assert.lengthOf(state.recentRuns, 1);
+        assert.equal(state.recentRuns[0]?.status, "failed");
+        assert.equal(state.recentRuns[0]?.source?.type, "schedule");
+        assert.deepEqual(state.schedule?.runIds, [state.recentRuns[0]!.id]);
+        assert.isNotNull(state.schedule?.nextRunAt);
+        const restarted = Context.get(yield* Layer.build(Layer.fresh(serviceLayer)), Qa.QaService);
+        assert.deepEqual((yield* restarted.snapshot({ projectId })).schedule, state.schedule);
+        yield* restarted.setSchedule({
+          projectId,
+          configuration: { ...configuration, enabled: false },
+        });
+        assert.isNull((yield* restarted.snapshot({ projectId })).schedule?.nextRunAt);
+        yield* restarted.setSchedule({ projectId, configuration });
+        assert.isNotNull((yield* restarted.snapshot({ projectId })).schedule?.nextRunAt);
+        yield* restarted.setSchedule({ projectId, configuration: null });
+        assert.isNull((yield* restarted.snapshot({ projectId })).schedule);
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("skips missed fixed times, rejects wrong branches, and validates the time zone", () =>
+    Effect.gen(function* () {
+      const { service, tick, sql, fs, path, root } = yield* fixture("");
+      const configuration: QaScheduleConfiguration = {
+        enabled: true,
+        branch: "wrong-branch",
+        timeZone: "Europe/Berlin",
+        timing: { type: "fixed_time", timeOfDay: "09:00" },
+        target: { type: "all" },
+      };
+      assert.equal(
+        (yield* service
+          .setSchedule({ projectId, configuration: { ...configuration, timeZone: "Invalid/Zone" } })
+          .pipe(Effect.flip)).reason,
+        "schedule",
+      );
+      yield* service.setSchedule({ projectId, configuration });
+      yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+      yield* tick;
+      assert.equal((yield* service.snapshot({ projectId })).schedule?.lastStatus, "missed");
+      yield* service.setSchedule({
+        projectId,
+        configuration: { ...configuration, timing: { type: "interval", everyMs: 60_000 } },
+      });
+      yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+      yield* tick;
+      const state = yield* service.snapshot({ projectId });
+      assert.equal(state.schedule?.lastStatus, "failed");
+      assert.include(state.schedule?.note ?? "", "different branch");
+      assert.isEmpty(state.recentRuns);
+      yield* fs.writeFileString(path.join(root, "t3.json"), "{ invalid catalog");
+      yield* service.setSchedule({
+        projectId,
+        configuration: { ...configuration, enabled: false },
+      });
+      assert.isFalse((yield* service.snapshot({ projectId })).schedule?.configuration.enabled);
+      yield* service.setSchedule({ projectId, configuration: null });
+      assert.isNull((yield* service.snapshot({ projectId })).schedule);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live(
+    "waits for manual work and does not resurrect an edited schedule when an active run finishes",
+    () =>
+      Effect.gen(function* () {
+        const { service, tick, sql, git } = yield* fixture(
+          "require('node:net').createServer().listen(0, '127.0.0.1')",
+          [{ id: "unit", name: "Unit", command: "node run.cjs" }],
+        );
+        const configuration: QaScheduleConfiguration = {
+          enabled: true,
+          branch: (yield* git(["branch", "--show-current"])).stdout.trim(),
+          timeZone: "UTC",
+          timing: { type: "interval", everyMs: 60_000 },
+          target: { type: "all" },
+        };
+        yield* service.setSchedule({ projectId, configuration });
+        yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+        const manual = yield* service.start({ projectId, suiteId: "unit" });
+        yield* tick;
+        assert.equal((yield* service.snapshot({ projectId })).schedule?.lastStatus, "never");
+        yield* service.cancel({ projectId, runId: manual.id });
+        yield* tick;
+        yield* service.subscribe({ projectId }).pipe(
+          Stream.filter((state) =>
+            state.latestRuns.some(
+              (run) => run.source?.type === "schedule" && run.status === "running",
+            ),
+          ),
+          Stream.runHead,
+        );
+        yield* service.setSchedule({
+          projectId,
+          configuration: { ...configuration, enabled: false },
+        });
+        yield* service.cancelAffected({ projectId });
+        yield* service.subscribe({ projectId }).pipe(
+          Stream.filter((state) => state.schedule?.lastStatus !== "running"),
+          Stream.runHead,
+        );
+        const state = yield* service.snapshot({ projectId });
+        assert.isFalse(state.schedule?.configuration.enabled);
+        assert.equal(state.schedule?.lastStatus, "interrupted");
+        assert.isNull(state.schedule?.nextRunAt);
+        assert.isFalse(state.batchRunning);
+        assert.isFalse(state.latestRuns.some((run) => run.status === "running"));
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live(
+    "imports CI reports idempotently without replacing local freshness or a newer CI run",
+    () =>
+      Effect.gen(function* () {
+        const { service, sql, fs, path, root, serviceLayer } = yield* fixture("", [
+          { id: "unit", name: "Unit", command: "node run.cjs", inputs: ["run.cjs"] },
+        ]);
+        const local = yield* service.start({ projectId, suiteId: "unit" });
+        yield* completed(service, local.id);
+        yield* fs.writeFileString(path.join(root, "run.cjs"), "changed");
+        const report: QaCiReport = {
+          suiteId: "unit",
+          source: {
+            type: "ci",
+            provider: "GitHub Actions",
+            runId: "100:1",
+            environment: "ubuntu-latest",
+          },
+          commit: "a".repeat(40),
+          branch: "main",
+          startedAt: "2026-01-02T00:00:00.000Z",
+          finishedAt: "2026-01-02T00:01:00.000Z",
+          exitCode: 0,
+          reportXml: "<testsuite><testcase/></testsuite>",
+        };
+        let allowed = false;
+        const routes = HttpApiBuilder.layer(QaTestApi).pipe(
+          Layer.provide(QaHttp.layer),
+          Layer.provide(Layer.succeed(Qa.QaService, service)),
+          Layer.provide(
+            Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
+              enqueueCommand: (effect) => effect,
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(EnvironmentAuthenticatedAuth, (effect) =>
+              Effect.suspend(() =>
+                effect.pipe(
+                  Effect.provideService(EnvironmentAuthenticatedPrincipal, {
+                    sessionId: AuthSessionId.make("qa-ci"),
+                    subject: "ci",
+                    method: "bearer-access-token",
+                    scopes: new Set(allowed ? ["terminal:operate" as const] : []),
+                  }),
+                ),
+              ),
+            ),
+          ),
+          Layer.provide(HttpPlatform.layer),
+          Layer.provide(Etag.layerWeak),
+          Layer.provide(NodeServices.layer),
+        );
+        const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
+        yield* Effect.addFinalizer(() => Effect.promise(dispose));
+        const request = () =>
+          new Request("http://localhost/api/qa/import", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: encodeJson({ projectId, report }),
+          });
+        assert.equal((yield* Effect.promise(() => handler(request()))).status, 403);
+        assert.equal((yield* sql`SELECT * FROM qa_ci_imports`).length, 0);
+        allowed = true;
+        const response = yield* Effect.promise(() => handler(request()));
+        assert.equal(response.status, 200);
+        const imported = yield* decodeRun(yield* Effect.promise(() => response.json()));
+        assert.equal(imported.status, "passed");
+        assert.isNull(imported.dirty);
+        assert.equal((yield* service.importReport({ projectId, report })).id, imported.id);
+        assert.equal(
+          (yield* service
+            .importReport({ projectId, report: { ...report, exitCode: 1 } })
+            .pipe(Effect.flip)).reason,
+          "duplicate",
+        );
+        yield* service.importReport({
+          projectId,
+          report: {
+            ...report,
+            source: { ...report.source, runId: "99:1" },
+            startedAt: "2026-01-01T00:00:00.000Z",
+          },
+        });
+        const state = yield* service.snapshot({ projectId });
+        assert.equal(state.latestRuns[0]?.id, local.id);
+        assert.equal(state.latestCiRuns?.[0]?.id, imported.id);
+        assert.equal(state.freshness?.[0]?.state, "stale");
+        assert.equal((yield* sql`SELECT * FROM qa_ci_imports`).length, 2);
+        const restarted = Context.get(yield* Layer.build(Layer.fresh(serviceLayer)), Qa.QaService);
+        assert.equal(
+          (yield* restarted.details({ projectId, runId: imported.id })).reportXml,
+          report.reportXml,
+        );
+        for (const [xml, exitCode, status] of [
+          ["<testsuite><testcase><failure/></testcase></testsuite>", 0, "failed"],
+          ["<testsuite><testcase/></testsuite>", 1, "failed"],
+          ["<testsuite/>", 0, "incomplete"],
+          ["<testsuite><testcase><skipped/></testcase></testsuite>", 0, "incomplete"],
+        ] as const) {
+          const result = yield* service.importReport({
+            projectId,
+            report: {
+              ...report,
+              source: { ...report.source, runId: xml + exitCode },
+              reportXml: xml,
+              exitCode,
+            },
+          });
+          assert.equal(result.status, status);
+        }
+        for (const invalid of [
+          { reportXml: "<testsuite>" },
+          { reportXml: "<!DOCTYPE x><testsuite/>" },
+          { reportXml: "x".repeat(2 * 1024 * 1024 + 1) },
+          { finishedAt: "2025-01-01T00:00:00.000Z" },
+          { finishedAt: "2099-01-01T00:00:00.000Z" },
+          { startedAt: "not a timestamp" },
+          { finishedAt: "not a timestamp" },
+        ])
+          assert.equal(
+            (yield* service
+              .importReport({ projectId, report: { ...report, ...invalid } })
+              .pipe(Effect.flip)).reason,
+            "report",
+          );
+        assert.equal(
+          (yield* service
+            .importReport({ projectId: ProjectId.make("missing"), report })
+            .pipe(Effect.flip)).reason,
+          "project-not-found",
+        );
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
   it.live(
     "uses CI package impact rules for workspace dependencies and keeps unrelated package edits current",
     () =>

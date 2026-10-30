@@ -170,7 +170,7 @@ export const ScheduledTaskSchedule = Schema.Union([
 ]);
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
-export const ScheduledTaskUpsertSchedule = Schema.Union([
+export const RecurringSchedule = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("interval"),
     everyMs: ScheduledTaskIntervalMs.check(
@@ -180,6 +180,10 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
     }),
   }),
   ScheduledTaskFixedTimeSchedule,
+]);
+
+export const ScheduledTaskUpsertSchedule = Schema.Union([
+  ...RecurringSchedule.members,
   ScheduledTaskUpsertWebhookSchedule,
 ]);
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;

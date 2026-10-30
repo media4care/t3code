@@ -156,10 +156,48 @@ not a guarantee about untracked external state or complete test coverage.
 
 **Run affected suites** rechecks freshness and runs changed, expired, unknown,
 untested, and unsuccessful suites sequentially on the selected environment.
-Closing the client leaves the queue running. **Stop affected run** cancels the active
+Closing the client leaves the queue running. **Stop queued run** cancels the active
 command and clears the queue; cancelling its active suite also stops the queue.
 A server restart interrupts the active run and discards pending suites, which stay
 eligible for a rerun. Recurring schedules are not configured by this action.
+
+To run tests regularly, use **Recurring runs → Add schedule** in QA. Choose all
+suites, affected suites, or one suite, then set an interval or a time and weekdays.
+Fixed times use the time zone you enter. The schedule belongs to the selected
+project on that environment and stays there across restarts; it is not copied
+with the repository. The environment's server must be running.
+
+Schedules use the current working files only when the checkout is on the branch
+you selected. They do not pull or switch branches. Manual work takes priority;
+scheduled work waits while a suite is active. Fixed-time runs missed by more than
+10 minutes are recorded as missed, and interval schedules resume once without
+replaying a backlog. Next and last execution are shown alongside the result.
+You can edit, pause, resume, or remove a schedule. Pause and remove affect future
+runs; use **Stop queued run** to cancel work already underway.
+
+Use **CI results → Import CI report** to import JSON containing JUnit XML and the
+runner's revision, branch, environment, completion times, and exit code. Web and
+desktop accept a JSON file or pasted JSON; mobile accepts pasted JSON. The import
+form includes an example. Use the suite ID from `qa.suites` and a unique run ID
+for each CI attempt. Importing the same report again is safe; a different report
+with the same provider, run ID, and suite is rejected.
+
+CI can send the same report to the environment's authenticated
+`POST /api/qa/import` endpoint. Wrap it as `{ "projectId": "…", "report": { … } }`
+and use an environment bearer token with `terminal:operate` permission. For
+example, with the request saved in `qa-result.json`:
+
+```sh
+curl --fail-with-body "$T3_URL/api/qa/import" \
+  -H "Authorization: Bearer $T3_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @qa-result.json
+```
+
+Store the token in your CI secret store. The environment must be reachable from
+the runner. Imported results appear under CI results and in run history. They
+do not mark the local checkout's inputs as current: CI and local execution may
+use different files, dependencies, and target environments.
 
 ## Worktree branch names
 

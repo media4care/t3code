@@ -1324,6 +1324,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:qa:cancel-affected",
       tag: WS_METHODS.qaCancelAffected,
     }),
+    setQaSchedule: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:schedule",
+      tag: WS_METHODS.qaSetSchedule,
+    }),
+    importQaReport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:import",
+      tag: WS_METHODS.qaImport,
+    }),
     startQa: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:start",
       tag: WS_METHODS.qaStart,

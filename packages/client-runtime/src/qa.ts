@@ -1,4 +1,51 @@
-import type { QaFreshness, QaRun, QaRunStatus, QaSuite, QaTestKind } from "@t3tools/contracts";
+import {
+  QaCiReport,
+  type QaFreshness,
+  type QaRun,
+  type QaRunStatus,
+  type QaSuite,
+  type QaTestKind,
+  type QaScheduleConfiguration,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+export const decodeQaCiReport = Schema.decodeUnknownSync(Schema.fromJsonString(QaCiReport));
+
+export function qaScheduleLabel(configuration: QaScheduleConfiguration) {
+  const timing = configuration.timing;
+  return timing.type === "interval"
+    ? `Every ${timing.everyMs / 60_000} minutes`
+    : `${timing.weekdays?.length ? timing.weekdays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ") : "Daily"} at ${timing.timeOfDay} · ${configuration.timeZone}`;
+}
+
+export function qaRunSource(run: QaRun) {
+  return run.source?.type === "ci"
+    ? `${run.source.provider} · ${run.source.environment}`
+    : run.source?.type === "schedule"
+      ? "Scheduled"
+      : "Manual";
+}
+
+export function qaDefaultSchedule(branch: string): QaScheduleConfiguration {
+  return {
+    enabled: true,
+    timing: { type: "fixed_time", timeOfDay: "09:00" },
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    branch,
+    target: { type: "all" },
+  };
+}
+
+export const QA_CI_REPORT_EXAMPLE = `{
+  "suiteId": "unit",
+  "source": { "type": "ci", "provider": "GitHub Actions", "runId": "123:1", "environment": "ubuntu-latest" },
+  "commit": "0123456789012345678901234567890123456789",
+  "branch": "main",
+  "startedAt": "2026-01-01T09:00:00.000Z",
+  "finishedAt": "2026-01-01T09:01:00.000Z",
+  "exitCode": 0,
+  "reportXml": "<testsuite><testcase name=\\"example\\"/></testsuite>"
+}`;
 
 export const QA_KIND_LABELS: Record<QaTestKind, string> = {
   unit: "Unit tests",

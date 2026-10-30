@@ -17,6 +17,7 @@ import {
   qaDashboard,
   qaRunDuration,
   qaRunSummary,
+  qaRunSource,
   type QaGrouping,
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
@@ -32,6 +33,7 @@ import { Input } from "../ui/input";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
+import { QaAutomation } from "./QaAutomation";
 
 export function QaPage() {
   const projects = useProjects();
@@ -185,7 +187,7 @@ function ProjectQa({
       ) : null}
       {snapshot?.batchError ? (
         <p role="alert" className="text-sm text-destructive-foreground">
-          Affected run stopped: {snapshot.batchError}
+          Queued run stopped: {snapshot.batchError}
         </p>
       ) : null}
       {!snapshot && query.isPending ? (
@@ -210,6 +212,17 @@ function ProjectQa({
         </div>
       ) : null}
       {counts.total > 0 ? <QaSummary counts={counts} filter={filter} onFilter={setFilter} /> : null}
+      {snapshot &&
+      snapshot.schedule !== undefined &&
+      (counts.total > 0 || snapshot.schedule || snapshot.latestCiRuns?.length) ? (
+        <QaAutomation
+          environmentId={environmentId}
+          projectId={projectId}
+          snapshot={snapshot}
+          connected={connected}
+          onView={setSelectedRun}
+        />
+      ) : null}
       {snapshot?.freshness && counts.total > 0 ? (
         <section
           aria-label="Input freshness"
@@ -249,7 +262,7 @@ function ProjectQa({
                 );
               }}
             >
-              Stop affected run
+              Stop queued run
             </Button>
           ) : (
             <Button
@@ -412,7 +425,10 @@ function ProjectQa({
               <tbody>
                 {snapshot.recentRuns.map((run) => (
                   <tr key={run.id} className="border-t border-border">
-                    <td className="p-3">{run.suite.name}</td>
+                    <td className="p-3">
+                      {run.suite.name}
+                      <p className="text-xs text-muted-foreground">{qaRunSource(run)}</p>
+                    </td>
                     <td className="p-3">
                       <QaRunBadge run={run} />
                     </td>
@@ -482,11 +498,23 @@ function RunDetails({
               {qaRunDuration(data.run)} · {qaRunSummary(data.run)}
             </span>
           </div>
-          <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
-            {data.run.cwd}
-            <br />
-            {data.run.suite.command}
-          </p>
+          <p className="mt-3 text-sm text-muted-foreground">{qaRunSource(data.run)}</p>
+          {data.run.source?.type !== "ci" ? (
+            <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
+              {data.run.cwd}
+              <br />
+              {data.run.suite.command}
+            </p>
+          ) : data.run.source.url ? (
+            <a
+              href={data.run.source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-primary underline"
+            >
+              Open CI run
+            </a>
+          ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
             {data.run.branch ?? "No branch recorded"} ·{" "}
             {data.run.commit ?? "No Git revision recorded"}

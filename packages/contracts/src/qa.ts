@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { RecurringSchedule } from "./scheduledTask.ts";
 
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
 const InputPath = TrimmedNonEmptyString.check(
@@ -63,6 +64,16 @@ export const QaReportSummary = Schema.Struct({
 });
 export type QaReportSummary = typeof QaReportSummary.Type;
 
+const QaCiSource = Schema.Struct({
+  type: Schema.Literal("ci"),
+  provider: ShortText,
+  runId: ShortText,
+  environment: ShortText,
+  url: Schema.optionalKey(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(2048), Schema.isPattern(/^https?:\/\//)),
+  ),
+});
+
 export const QaRun = Schema.Struct({
   id: ShortText,
   projectId: ProjectId,
@@ -77,6 +88,9 @@ export const QaRun = Schema.Struct({
   dirty: Schema.NullOr(Schema.Boolean),
   summary: Schema.NullOr(QaReportSummary),
   note: Schema.NullOr(Schema.String),
+  source: Schema.optionalKey(
+    Schema.Union([Schema.Struct({ type: Schema.Literal("schedule") }), QaCiSource]),
+  ),
 });
 export type QaRun = typeof QaRun.Type;
 
@@ -94,6 +108,57 @@ export const QaStartInput = Schema.Struct({ projectId: ProjectId, suiteId: Short
 export type QaStartInput = typeof QaStartInput.Type;
 export const QaRunInput = Schema.Struct({ projectId: ProjectId, runId: ShortText });
 export type QaRunInput = typeof QaRunInput.Type;
+
+export const QaScheduleConfiguration = Schema.Struct({
+  enabled: Schema.Boolean,
+  timing: RecurringSchedule,
+  timeZone: ShortText,
+  branch: ShortText,
+  target: Schema.Union([
+    Schema.Struct({ type: Schema.Literals(["all", "affected"]) }),
+    Schema.Struct({ type: Schema.Literal("suite"), suiteId: ShortText }),
+  ]),
+});
+export type QaScheduleConfiguration = typeof QaScheduleConfiguration.Type;
+
+export const QaSchedule = Schema.Struct({
+  configuration: QaScheduleConfiguration,
+  revision: ShortText,
+  nextRunAt: Schema.NullOr(IsoDateTime),
+  lastRunAt: Schema.NullOr(IsoDateTime),
+  lastStatus: Schema.Literals([
+    "never",
+    "running",
+    "passed",
+    "failed",
+    "skipped",
+    "missed",
+    "interrupted",
+  ]),
+  note: Schema.NullOr(Schema.String),
+  runIds: Schema.Array(ShortText),
+});
+export type QaSchedule = typeof QaSchedule.Type;
+
+export const QaSetScheduleInput = Schema.Struct({
+  projectId: ProjectId,
+  configuration: Schema.NullOr(QaScheduleConfiguration),
+});
+export type QaSetScheduleInput = typeof QaSetScheduleInput.Type;
+
+export const QaCiReport = Schema.Struct({
+  suiteId: ShortText,
+  source: QaCiSource,
+  commit: TrimmedNonEmptyString.check(Schema.isPattern(/^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$/)),
+  branch: ShortText,
+  startedAt: IsoDateTime,
+  finishedAt: IsoDateTime,
+  exitCode: Schema.Int,
+  reportXml: Schema.String.check(Schema.isMaxLength(2 * 1024 * 1024)),
+});
+export type QaCiReport = typeof QaCiReport.Type;
+export const QaImportInput = Schema.Struct({ projectId: ProjectId, report: QaCiReport });
+export type QaImportInput = typeof QaImportInput.Type;
 export const QaFreshness = Schema.Struct({
   suiteId: ShortText,
   state: Schema.Literals(["current", "stale", "unknown", "never"]),
@@ -115,6 +180,9 @@ export const QaSnapshot = Schema.Struct({
   queuedSuiteIds: Schema.optionalKey(Schema.Array(ShortText)),
   batchError: Schema.optionalKey(Schema.NullOr(Schema.String)),
   batchRunning: Schema.optionalKey(Schema.Boolean),
+  schedule: Schema.optionalKey(Schema.NullOr(QaSchedule)),
+  latestCiRuns: Schema.optionalKey(Schema.Array(QaRun)),
+  branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 
@@ -127,6 +195,10 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
     "configuration",
     "storage",
     "workspace",
+    "schedule",
+    "branch",
+    "report",
+    "duplicate",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -146,6 +218,14 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
         return "The QA working directory must exist inside the project.";
       case "storage":
         return "QA could not read or save its run history.";
+      case "schedule":
+        return "The QA schedule needs a valid time zone, branch, and configured suite.";
+      case "branch":
+        return "The project is on a different branch. Scheduled execution stopped.";
+      case "report":
+        return "The CI report must contain valid JUnit XML (maximum 2 MiB) and valid completion times.";
+      case "duplicate":
+        return "This CI run ID already has a different report. Use a separate ID for each attempt.";
     }
   }
 }

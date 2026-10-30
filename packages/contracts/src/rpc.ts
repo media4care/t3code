@@ -1,5 +1,7 @@
 import {
   QaError,
+  QaSetScheduleInput,
+  QaImportInput,
   QaProjectInput,
   QaStartInput,
   QaRunInput,
@@ -584,6 +586,8 @@ export const WS_METHODS = {
   qaCancelAffected: "qa.cancelAffected",
   qaCancel: "qa.cancel",
   qaDetails: "qa.details",
+  qaSetSchedule: "qa.setSchedule",
+  qaImport: "qa.import",
   insightsSubscribe: "insights.subscribe",
   insightsConfigure: "insights.configure",
   insightsRunNow: "insights.runNow",
@@ -2003,6 +2007,16 @@ const WsQaCancelRpc = Rpc.make(WS_METHODS.qaCancel, {
   success: Schema.Void,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
+const WsQaSetScheduleRpc = Rpc.make(WS_METHODS.qaSetSchedule, {
+  payload: QaSetScheduleInput,
+  success: Schema.Void,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+const WsQaImportRpc = Rpc.make(WS_METHODS.qaImport, {
+  payload: QaImportInput,
+  success: QaRun,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
 const WsQaDetailsRpc = Rpc.make(WS_METHODS.qaDetails, {
   payload: QaRunInput,
   success: QaRunDetails,
@@ -2197,6 +2211,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsQaCancelAffectedRpc,
   WsQaCancelRpc,
   WsQaDetailsRpc,
+  WsQaSetScheduleRpc,
+  WsQaImportRpc,
   WsInsightsSubscribeRpc,
   WsInsightsConfigureRpc,
   WsInsightsRunNowRpc,

@@ -62,6 +62,8 @@ describe("RPC authorization scopes", () => {
     }
     for (const method of [
       WS_METHODS.qaStart,
+      WS_METHODS.qaSetSchedule,
+      WS_METHODS.qaImport,
       WS_METHODS.qaStartAffected,
       WS_METHODS.qaCancelAffected,
       WS_METHODS.qaCancel,
