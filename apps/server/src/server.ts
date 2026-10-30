@@ -90,6 +90,8 @@ import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Qa from "./qa/QaService.ts";
+import * as QaHttp from "./qa/http.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as GitExplorer from "./git/GitExplorer.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -768,6 +770,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
+      Layer.provide(QaHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -805,7 +808,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
     ),
   ),
-  Layer.provide(Qa.layer.pipe(Layer.provide(ProjectStore.layer))),
+  Layer.provide(Qa.layer.pipe(Layer.provide(ProjectStore.layer), Layer.provide(Scheduler.layer))),
   Layer.provide(PreviewBrowser.layer),
   // Links to other environments, shared by Settings (WebSocket) and agents (/mcp).
   Layer.provide(

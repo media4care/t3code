@@ -4,7 +4,10 @@ import {
   type QaRun,
   type QaSnapshot,
   type QaSuite,
+  type QaScheduleConfiguration,
+  type QaCiReport,
 } from "@t3tools/contracts";
+import { QA_CI_REPORT_EXAMPLE } from "@t3tools/client-runtime/qa";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import "~/index.css";
@@ -38,6 +41,8 @@ vi.mock("../../state/server", async () => {
     serverEnvironment: {
       qaLive: (input: unknown) => ({ kind: "snapshot", target: input }),
       qaDetails: (input: unknown) => ({ kind: "details", target: input }),
+      setQaSchedule: { kind: "setSchedule", permissionAtom: () => Atom.make(state.allowed) },
+      importQaReport: { kind: "import", permissionAtom: () => Atom.make(state.allowed) },
       startQa: { kind: "start", permissionAtom: () => Atom.make(state.allowed) },
       startAffectedQa: { kind: "startAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelAffectedQa: { kind: "cancelAffected", permissionAtom: () => Atom.make(state.allowed) },
@@ -74,9 +79,31 @@ vi.mock("../../state/use-atom-command", () => ({
     (command: { kind: string }) =>
     async (target: {
       environmentId: EnvironmentId;
-      input: { projectId: ProjectId; suiteId: string };
+      input: {
+        projectId: ProjectId;
+        suiteId: string;
+        configuration?: QaScheduleConfiguration | null;
+        report?: QaCiReport;
+      };
     }) => {
       const snapshot = state.snapshots[target.input.projectId]!;
+      if (command.kind === "setSchedule") {
+        state.snapshots[target.input.projectId] = {
+          ...snapshot,
+          schedule: target.input.configuration
+            ? {
+                configuration: target.input.configuration,
+                revision: target.input.configuration.enabled ? "enabled" : "paused",
+                nextRunAt: target.input.configuration.enabled ? "2026-10-31T09:00:00.000Z" : null,
+                lastRunAt: null,
+                lastStatus: "never",
+                note: null,
+                runIds: [],
+              }
+            : null,
+        };
+        return { _tag: "Success", value: undefined };
+      }
       if (command.kind === "startAffected") {
         const ids =
           snapshot.freshness?.filter((item) => item.needsRun).map((item) => item.suiteId) ?? [];
@@ -95,9 +122,11 @@ vi.mock("../../state/use-atom-command", () => ({
         };
         return { _tag: "Success", value: undefined };
       }
-      const suite = snapshot.suites.find((item) => item.id === target.input.suiteId)!;
+      const suite = snapshot.suites.find(
+        (item) => item.id === (target.input.report?.suiteId ?? target.input.suiteId),
+      )!;
       const run: QaRun = {
-        id: `${target.environmentId}:${target.input.projectId}`,
+        id: `${target.environmentId}:${target.input.projectId}${target.input.report ? ":ci" : ""}`,
         projectId: target.input.projectId,
         suite,
         cwd: snapshot.workspaceRoot,
@@ -110,11 +139,13 @@ vi.mock("../../state/use-atom-command", () => ({
         dirty: false,
         summary: null,
         note: null,
+        ...(target.input.report ? { source: target.input.report.source } : {}),
       };
       state.runs[run.id] = run;
       state.snapshots[target.input.projectId] = {
         ...snapshot,
-        latestRuns: [run],
+        latestRuns: target.input.report ? snapshot.latestRuns : [run],
+        latestCiRuns: target.input.report ? [run] : (snapshot.latestCiRuns ?? []),
         recentRuns: [run],
       };
       return { _tag: "Success", value: run };
@@ -133,6 +164,9 @@ function setup() {
         suites: [{ id: "unit", name: `${id} tests`, command: `run-${id}` }],
         latestRuns: [],
         recentRuns: [],
+        branch: "main",
+        schedule: null,
+        latestCiRuns: [],
       },
     ]),
   );
@@ -160,6 +194,80 @@ it("keeps runs scoped to the selected project and environment when switching the
   await expect
     .element(screen.getByText("remote:beta: beta tests: captured output", { exact: true }))
     .toBeVisible();
+});
+
+it("manages recurring runs and imports CI results in the selected environment", async () => {
+  setup();
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  await screen.getByRole("combobox", { name: "QA project" }).click();
+  await page.getByRole("option", { name: "Beta · Remote" }).click();
+  await screen.getByRole("button", { name: "Add schedule", exact: true }).click();
+  await screen.getByRole("combobox", { name: "Scheduled suites" }).click();
+  await page.getByRole("option", { name: "Affected suites", exact: true }).click();
+  await screen.getByRole("textbox", { name: "Time zone", exact: true }).fill("Europe/Berlin");
+  await screen.getByRole("button", { name: "Save schedule", exact: true }).click();
+  await vi.waitFor(() =>
+    expect(state.snapshots.beta?.schedule?.configuration.target.type).toBe("affected"),
+  );
+  expect(state.snapshots.alpha?.schedule).toBeNull();
+  await screen.rerender(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await screen.getByRole("button", { name: "Pause schedule", exact: true }).click();
+  await vi.waitFor(() => expect(state.snapshots.beta?.schedule?.configuration.enabled).toBe(false));
+  await screen.rerender(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await screen.getByRole("button", { name: "Resume schedule", exact: true }).click();
+  await vi.waitFor(() => expect(state.snapshots.beta?.schedule?.configuration.enabled).toBe(true));
+  await screen.rerender(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await screen.getByRole("button", { name: "Remove schedule", exact: true }).click();
+  await vi.waitFor(() => expect(state.snapshots.beta?.schedule).toBeNull());
+  await screen.rerender(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await screen.getByText("Import CI report", { exact: true }).click();
+  await screen.getByRole("textbox", { name: "CI report JSON" }).fill("bad json");
+  await screen.getByRole("button", { name: "Import result", exact: true }).click();
+  await expect
+    .element(screen.getByText("Use the CI report JSON format shown below", { exact: false }))
+    .toBeVisible();
+  await screen.getByRole("textbox", { name: "CI report JSON" }).fill(QA_CI_REPORT_EXAMPLE);
+  await screen.getByRole("button", { name: "Import result", exact: true }).click();
+  await expect
+    .element(screen.getByText("remote:beta:ci: beta tests: captured output", { exact: true }))
+    .toBeVisible();
+  expect(state.snapshots.alpha?.recentRuns).toHaveLength(0);
+  expect(state.snapshots.beta?.latestRuns).toHaveLength(0);
+  state.allowed = false;
+  await screen.rerender(
+    <SidebarProvider key="denied">
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Add schedule", exact: true }))
+    .toBeDisabled();
+  await screen.getByText("Import CI report", { exact: true }).click();
+  await screen.getByRole("textbox", { name: "CI report JSON" }).fill(QA_CI_REPORT_EXAMPLE);
+  await expect
+    .element(screen.getByRole("button", { name: "Import result", exact: true }))
+    .toBeDisabled();
 });
 
 function dashboardFixture() {
@@ -236,6 +344,8 @@ function dashboardFixture() {
     suites,
     latestRuns,
     recentRuns: latestRuns,
+    schedule: null,
+    latestCiRuns: [],
     checkedAt: "2026-10-30T11:00:00.000Z",
     freshness: suites.map((suite, index) => ({
       suiteId: suite.id,
@@ -326,7 +436,7 @@ it("shows freshness separately from results, filters affected suites and control
     .element(screen.getByText("5 queued · Runs continue when you leave QA."))
     .toBeVisible();
   await expect.element(api.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
-  await screen.getByRole("button", { name: "Stop affected run" }).click();
+  await screen.getByRole("button", { name: "Stop queued run" }).click();
   await expect
     .element(screen.getByRole("button", { name: "Run affected suites (5)" }))
     .toBeEnabled();

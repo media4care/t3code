@@ -9,6 +9,7 @@ import {
   qaStatusLabel,
   qaRunDuration,
   qaRunSummary,
+  qaRunSource,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -21,6 +22,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import { QaDashboard } from "./QaDashboard";
+import { QaAutomation } from "./QaAutomation";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 export function QaScreen() {
@@ -136,7 +138,7 @@ function ProjectQa({
       <Button label="Refresh QA" onPress={query.refresh} disabled={!connected} />
       {snapshot?.batchError ? (
         <Text accessibilityRole="alert" className="text-danger">
-          Affected run stopped: {snapshot.batchError}
+          Queued run stopped: {snapshot.batchError}
         </Text>
       ) : null}
       {query.error || snapshot?.configurationError ? (
@@ -169,6 +171,17 @@ function ProjectQa({
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
+      {snapshot &&
+      snapshot.schedule !== undefined &&
+      (counts.total > 0 || snapshot.schedule || snapshot.latestCiRuns?.length) ? (
+        <QaAutomation
+          environmentId={environmentId}
+          projectId={projectId}
+          snapshot={snapshot}
+          connected={connected}
+          onView={setSelectedRun}
+        />
+      ) : null}
       {snapshot?.freshness && counts.total > 0 ? (
         <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-4">
           <Text className="font-t3-semibold">
@@ -186,7 +199,7 @@ function ProjectQa({
                 {snapshot.queuedSuiteIds?.length ?? 0} queued · Runs continue when you leave QA.
               </Text>
               <Button
-                label="Stop affected run"
+                label="Stop queued run"
                 disabled={!connected || !stopPermission || busy}
                 onPress={() => {
                   setBusy(true);
@@ -244,7 +257,7 @@ function ProjectQa({
               className="gap-2 rounded-xl border border-border-subtle p-4"
             >
               <Text className="font-t3-semibold">
-                {run.suite.name} · {qaStatusLabel(run)}
+                {run.suite.name} · {qaStatusLabel(run)} · {qaRunSource(run)}
               </Text>
               <Text className="text-sm text-foreground-muted">
                 {new Date(run.startedAt).toLocaleString()} · {qaRunDuration(run)}
@@ -284,12 +297,12 @@ function RunDetails({
       {data ? (
         <>
           <Text>
-            {qaStatusLabel(data.run)} · {qaRunSummary(data.run)}
+            {qaStatusLabel(data.run)} · {qaRunSummary(data.run)} · {qaRunSource(data.run)}
           </Text>
           <Text selectable className="font-mono text-xs text-foreground-muted">
-            {data.run.cwd}
-            {"\n"}
-            {data.run.suite.command}
+            {data.run.source?.type === "ci"
+              ? (data.run.source.url ?? "CI result")
+              : `${data.run.cwd}\n${data.run.suite.command}`}
             {"\n"}
             {data.run.branch ?? "No branch"} · {data.run.commit ?? "Unknown revision"}
             {data.run.dirty ? " + changes" : ""}
