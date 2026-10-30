@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
+  qaDashboard,
   qaStatusLabel,
   qaRunDuration,
   qaRunSummary,
@@ -19,6 +20,7 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
+import { QaDashboard } from "./QaDashboard";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 export function QaScreen() {
@@ -82,15 +84,29 @@ function ProjectQa({
     serverEnvironment.qaLive({ environmentId, input: { projectId } }),
   );
   const start = useAtomCommand(serverEnvironment.startQa);
+  const startAffected = useAtomCommand(serverEnvironment.startAffectedQa);
+  const cancelAffected = useAtomCommand(serverEnvironment.cancelAffectedQa);
   const cancel = useAtomCommand(serverEnvironment.cancelQa);
   const permission = useAtomValue(serverEnvironment.startQa.permissionAtom(environmentId));
+  const affectedPermission = useAtomValue(
+    serverEnvironment.startAffectedQa.permissionAtom(environmentId),
+  );
+  const stopPermission = useAtomValue(
+    serverEnvironment.cancelAffectedQa.permissionAtom(environmentId),
+  );
   const [busy, setBusy] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
   const snapshot = query.data;
   const running = snapshot?.latestRuns.some((run) => run.status === "running");
-  const latest = new Map(snapshot?.latestRuns.map((run) => [run.suite.id, run]));
+  const { entries, counts } = qaDashboard(
+    snapshot?.suites ?? [],
+    snapshot?.latestRuns ?? [],
+    snapshot?.freshness,
+  );
+  const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
+  const [showHistory, setShowHistory] = useState(false);
   const runSuite = async (suiteId: string) => {
     setBusy(true);
     const result = await start({ environmentId, input: { projectId, suiteId } });
@@ -117,7 +133,12 @@ function ProjectQa({
         {"\n"}
         {snapshot?.workspaceRoot}
       </Text>
-      <Button label="Refresh catalog" onPress={query.refresh} disabled={!connected} />
+      <Button label="Refresh QA" onPress={query.refresh} disabled={!connected} />
+      {snapshot?.batchError ? (
+        <Text accessibilityRole="alert" className="text-danger">
+          Affected run stopped: {snapshot.batchError}
+        </Text>
+      ) : null}
       {query.error || snapshot?.configurationError ? (
         <Text accessibilityRole="alert" className="text-danger">
           {query.error ?? snapshot?.configurationError}
@@ -140,47 +161,6 @@ function ProjectQa({
           </Text>
         </View>
       ) : null}
-      {snapshot?.suites.map((suite) => {
-        const run = latest.get(suite.id);
-        return (
-          <View key={suite.id} className="gap-3 rounded-2xl border border-border-subtle p-4">
-            <Text className="text-lg font-t3-semibold">{suite.name}</Text>
-            <Text>{qaStatusLabel(run)}</Text>
-            <Text selectable className="font-mono text-xs text-foreground-muted">
-              {suite.cwd ? `${suite.cwd} › ` : ""}
-              {suite.command}
-            </Text>
-            <Text className="text-sm text-foreground-muted">
-              {run
-                ? `${new Date(run.startedAt).toLocaleString()} · ${qaRunDuration(run)}\n${qaRunSummary(run)}`
-                : "Never run through QA"}
-            </Text>
-            {run?.note ? <Text className="text-sm text-foreground-muted">{run.note}</Text> : null}
-            <View className="flex-row flex-wrap gap-2">
-              {run ? (
-                <Button label="View run" tone="text" onPress={() => setSelectedRun(run.id)} />
-              ) : null}
-              {run?.status === "running" ? (
-                <Button
-                  label="Cancel"
-                  disabled={!connected || !permission || busy}
-                  onPress={() => {
-                    void cancelRun(run.id);
-                  }}
-                />
-              ) : (
-                <Button
-                  label="Run"
-                  disabled={!connected || !permission || busy || running}
-                  onPress={() => {
-                    void runSuite(suite.id);
-                  }}
-                />
-              )}
-            </View>
-          </View>
-        );
-      })}
       {selectedRun ? (
         <RunDetails
           environmentId={environmentId}
@@ -189,7 +169,70 @@ function ProjectQa({
           onClose={() => setSelectedRun(null)}
         />
       ) : null}
+      {snapshot?.freshness && counts.total > 0 ? (
+        <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-4">
+          <Text className="font-t3-semibold">
+            {affectedCount} {affectedCount === 1 ? "suite needs" : "suites need"} a rerun
+          </Text>
+          <Text className="text-xs text-foreground-muted">
+            Includes changed, expired, unknown, untested, and unsuccessful suites.
+            {snapshot.checkedAt
+              ? ` Checked ${new Date(snapshot.checkedAt).toLocaleTimeString()}. Refresh after editing files.`
+              : ""}
+          </Text>
+          {snapshot.batchRunning ? (
+            <>
+              <Text className="text-sm">
+                {snapshot.queuedSuiteIds?.length ?? 0} queued · Runs continue when you leave QA.
+              </Text>
+              <Button
+                label="Stop affected run"
+                disabled={!connected || !stopPermission || busy}
+                onPress={() => {
+                  setBusy(true);
+                  void cancelAffected({ environmentId, input: { projectId } }).finally(() =>
+                    setBusy(false),
+                  );
+                }}
+              />
+            </>
+          ) : (
+            <Button
+              label={`Run affected suites (${affectedCount})`}
+              disabled={!connected || !affectedPermission || busy || running || !affectedCount}
+              onPress={() => {
+                setBusy(true);
+                void startAffected({ environmentId, input: { projectId } }).finally(() =>
+                  setBusy(false),
+                );
+              }}
+            />
+          )}
+        </View>
+      ) : null}
+      {counts.total > 0 ? (
+        <QaDashboard
+          entries={entries}
+          counts={counts}
+          canRun={connected && permission && !busy && !running && !snapshot?.batchRunning}
+          canCancel={connected && permission && !busy}
+          onRun={(suiteId) => {
+            void runSuite(suiteId);
+          }}
+          onCancel={(runId) => {
+            void cancelRun(runId);
+          }}
+          onView={setSelectedRun}
+        />
+      ) : null}
       {snapshot?.recentRuns.length ? (
+        <Button
+          label={showHistory ? "Hide recent runs" : "Recent runs · Latest 50"}
+          tone="text"
+          onPress={() => setShowHistory(!showHistory)}
+        />
+      ) : null}
+      {showHistory && snapshot?.recentRuns.length ? (
         <>
           <Text className="text-lg font-t3-semibold">Recent runs · Latest 50</Text>
           {snapshot.recentRuns.map((run) => (

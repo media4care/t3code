@@ -1,4 +1,10 @@
-import { EnvironmentId, ProjectId, type QaRun, type QaSnapshot } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type QaRun,
+  type QaSnapshot,
+  type QaSuite,
+} from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import "~/index.css";
@@ -33,6 +39,8 @@ vi.mock("../../state/server", async () => {
       qaLive: (input: unknown) => ({ kind: "snapshot", target: input }),
       qaDetails: (input: unknown) => ({ kind: "details", target: input }),
       startQa: { kind: "start", permissionAtom: () => Atom.make(state.allowed) },
+      startAffectedQa: { kind: "startAffected", permissionAtom: () => Atom.make(state.allowed) },
+      cancelAffectedQa: { kind: "cancelAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelQa: { kind: "cancel" },
     },
   };
@@ -63,12 +71,30 @@ vi.mock("../../state/query", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand:
-    () =>
+    (command: { kind: string }) =>
     async (target: {
       environmentId: EnvironmentId;
       input: { projectId: ProjectId; suiteId: string };
     }) => {
       const snapshot = state.snapshots[target.input.projectId]!;
+      if (command.kind === "startAffected") {
+        const ids =
+          snapshot.freshness?.filter((item) => item.needsRun).map((item) => item.suiteId) ?? [];
+        state.snapshots[target.input.projectId] = {
+          ...snapshot,
+          batchRunning: true,
+          queuedSuiteIds: ids,
+        };
+        return { _tag: "Success", value: ids };
+      }
+      if (command.kind === "cancelAffected") {
+        state.snapshots[target.input.projectId] = {
+          ...snapshot,
+          batchRunning: false,
+          queuedSuiteIds: [],
+        };
+        return { _tag: "Success", value: undefined };
+      }
       const suite = snapshot.suites.find((item) => item.id === target.input.suiteId)!;
       const run: QaRun = {
         id: `${target.environmentId}:${target.input.projectId}`,
@@ -134,4 +160,183 @@ it("keeps runs scoped to the selected project and environment when switching the
   await expect
     .element(screen.getByText("remote:beta: beta tests: captured output", { exact: true }))
     .toBeVisible();
+});
+
+function dashboardFixture() {
+  setup();
+  const suites: QaSuite[] = [
+    {
+      id: "api",
+      name: "API integration tests",
+      command: "yarn test:api",
+      component: "Backend",
+      kind: "integration",
+    },
+    {
+      id: "backend",
+      name: "Backend unit tests",
+      command: "yarn test:unit",
+      component: "Backend",
+      kind: "unit",
+    },
+    {
+      id: "family-web",
+      name: "Family browser journeys",
+      command: "playwright test",
+      component: "Family",
+      kind: "playwright",
+    },
+    {
+      id: "family-native",
+      name: "Family mobile flows",
+      command: "maestro test flows",
+      component: "Family",
+      kind: "maestro",
+    },
+    {
+      id: "senior-web",
+      name: "Senior browser journeys",
+      command: "playwright test",
+      component: "Senior",
+      kind: "playwright",
+    },
+    {
+      id: "senior-native",
+      name: "Senior mobile flows",
+      command: "maestro test flows",
+      component: "Senior",
+      kind: "maestro",
+    },
+    {
+      id: "cross-app",
+      name: "Family to Senior video calls",
+      command: "yarn test:cross-app",
+      component: "Cross-app",
+      kind: "e2e",
+    },
+  ];
+  const latestRuns = suites.slice(0, 4).map((suite, index): QaRun => ({
+    id: suite.id,
+    projectId: ProjectId.make("alpha"),
+    suite,
+    cwd: "/work/alpha",
+    startedAt: "2026-10-30T10:00:00.000Z",
+    finishedAt: "2026-10-30T10:01:42.000Z",
+    status: index === 2 ? "failed" : "passed",
+    exitCode: index === 2 ? 1 : 0,
+    commit: "12345678",
+    branch: "main",
+    dirty: false,
+    summary: { tests: 48, failures: index === 2 ? 2 : 0, skipped: 1 },
+    note: null,
+  }));
+  state.snapshots.alpha = {
+    workspaceRoot: "/Users/javier/dev/m4c/app",
+    configurationError: null,
+    suites,
+    latestRuns,
+    recentRuns: latestRuns,
+    checkedAt: "2026-10-30T11:00:00.000Z",
+    freshness: suites.map((suite, index) => ({
+      suiteId: suite.id,
+      state: index === 0 ? "stale" : index < 4 ? "current" : "never",
+      reason:
+        index === 0
+          ? "Backend authentication changed since this run."
+          : "Configured inputs match this run.",
+      changedPaths: index === 0 ? ["backend/auth.ts"] : [],
+      changedFileCount: index === 0 ? 1 : 0,
+      needsRun: index === 0 || index === 2 || index > 3,
+      lastPassedAt: index < 4 ? "2026-10-30T10:01:42.000Z" : null,
+    })),
+  };
+  state.runs = Object.fromEntries(latestRuns.map((run) => [run.id, run]));
+}
+
+it("groups the catalog and combines search with result filters", async () => {
+  dashboardFixture();
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  await expect
+    .element(screen.getByRole("heading", { name: "Test suites", exact: true }))
+    .toBeVisible();
+  await screen.getByText("Backend", { exact: true }).click();
+  await expect
+    .element(
+      screen
+        .getByRole("group", { name: "Backend", exact: true })
+        .getByText("API integration tests", { exact: true }),
+    )
+    .not.toBeVisible();
+  await screen.getByText("Backend", { exact: true }).click();
+  await expect
+    .element(screen.getByRole("heading", { name: "API integration tests", exact: true }))
+    .toBeVisible();
+  await screen.getByRole("combobox", { name: "Group suites by" }).click();
+  await page.getByRole("option", { name: "Test type", exact: true }).click();
+  await expect
+    .element(screen.getByRole("group", { name: "Playwright", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("group", { name: "Backend", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("searchbox", { name: "Search suites" }).fill("FAMILY");
+  await screen.getByRole("button", { name: "Needs attention 1", exact: true }).click();
+  await expect
+    .element(screen.getByRole("heading", { name: "Family browser journeys", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("heading", { name: "Family mobile flows", exact: true }))
+    .not.toBeInTheDocument();
+  await expect.element(screen.getByText("1 of 7 suites", { exact: true })).toBeVisible();
+  await screen.getByRole("searchbox", { name: "Search suites" }).fill("unknown");
+  await expect
+    .element(screen.getByText("No suites match these filters", { exact: true }))
+    .toBeVisible();
+  await screen.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect.element(screen.getByText("7 of 7 suites", { exact: true })).toBeVisible();
+});
+
+it("shows freshness separately from results, filters affected suites and controls the server queue", async () => {
+  dashboardFixture();
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  const api = screen.getByRole("region", { name: "API integration tests" });
+  await expect.element(api.getByText("Passed", { exact: true })).toBeVisible();
+  await expect.element(api.getByText("Needs rerun", { exact: true })).toBeVisible();
+  await api.getByText("Changed inputs (1)").click();
+  await expect.element(api.getByText("backend/auth.ts")).toBeVisible();
+  await screen.getByRole("button", { name: "Show affected", exact: true }).click();
+  await expect
+    .element(screen.getByRole("heading", { name: "Backend unit tests" }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("heading", { name: "Family browser journeys" }))
+    .toBeVisible();
+  await screen.getByRole("button", { name: "Run affected suites (5)" }).click();
+  await expect
+    .element(screen.getByText("5 queued · Runs continue when you leave QA."))
+    .toBeVisible();
+  await expect.element(api.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  await screen.getByRole("button", { name: "Stop affected run" }).click();
+  await expect
+    .element(screen.getByRole("button", { name: "Run affected suites (5)" }))
+    .toBeEnabled();
+  state.allowed = false;
+  await screen.rerender(
+    <SidebarProvider key="denied">
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Run affected suites (5)" }))
+    .toBeDisabled();
 });

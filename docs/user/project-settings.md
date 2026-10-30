@@ -78,8 +78,12 @@ Add suites to the project's checked-in `t3.json`, preserving its other settings:
       {
         "id": "backend-unit",
         "name": "Backend unit tests",
+        "component": "Backend",
+        "kind": "unit",
         "cwd": "backend",
-        "command": "npm test -- --run"
+        "command": "npm test -- --run",
+        "inputs": ["backend", "shared"],
+        "maxAgeHours": 24
       }
     ]
   }
@@ -91,6 +95,12 @@ the environment's login shell; on Windows they use the system command shell.
 `cwd` is optional and relative to
 the project root. Each suite needs a unique, stable `id`; changing its name keeps
 its history. Refresh the catalog after editing the configuration.
+
+Add `component` labels such as Backend or Mobile, and a `kind` such as `unit`,
+`integration`, `playwright`, `maestro`, `e2e`, or `tooling` to organize the dashboard.
+Switch between component and test-type groups, search the catalog, or select a
+health total to filter suites by their latest result. **Needs attention** includes
+failed, incomplete, cancelled, and interrupted runs; **Never run** means no QA history.
 
 Runs execute on the selected project's environment, in its current checkout,
 including uncommitted changes. Prepare the test database, browser, or installed
@@ -111,9 +121,45 @@ Without a report, a zero exit code is labelled **Command passed**, with no infer
 test count. Run details retain the command, working directory, starting Git revision,
 uncommitted-change indicator, timestamps, exit status, and up to 131,072 characters of recent output.
 History and reports stay on the execution environment, outside the repository.
-QA shows each suite's latest run and the project's 50 most recent runs. These
-results describe what ran then; they do not yet determine whether later changes
-require rerunning the suite.
+QA shows each suite's latest run and the project's 50 most recent runs. Freshness
+is separate from the result: a pass can need a rerun, and an unchanged input set
+does not hide a failed attempt. Suites also retain the time of their last pass.
+
+Declare `inputs` as project-relative files or directories, including shared code,
+fixtures, test configuration, and scripts the suite uses. Paths are relative to the
+project root even when `cwd` is set; glob patterns are not supported. Directories
+include Git-tracked and unignored files, plus generated sources, declarations and
+environment files recognized by the push-check cache. Explicit file paths can
+include other ignored configuration. Root package manifests, common lockfiles,
+test configuration and dependency installation state are included automatically.
+Optional `maxAgeHours` makes old results need a rerun.
+
+For a package in a pnpm or npm/Yarn workspace, set `workspacePackage` to its package
+name to include its dependencies. Additional `inputs` extend that selection. T3's
+own catalog uses the same package-impact rules as its push checks and CI, including
+test-only dependencies and cross-package reads. Other repositories use their
+workspace dependency graph and conservatively include files with no known owner.
+
+Refresh QA after editing files. QA compares file contents, including uncommitted
+edits, additions and deletions, against the saved run. It checks again at completion;
+inputs that changed during a run cannot be treated as verified. Older runs without
+input evidence and inputs that cannot be read show unknown freshness. Fingerprints
+stay in the environment's database; they are not committed to Git.
+
+Set `environment: "external"` when a suite tests a deployed service or an installed
+app; this is the default for `maestro` and `e2e` suites. Set `environmentFile` to a
+project-relative file maintained by your deployment/device tooling that identifies
+the actual target build and environment. Missing identity means unknown freshness.
+Use `environment: "workspace"` only when the test builds and controls its targets
+from the current checkout. Unchanged inputs are guidance about the declared files,
+not a guarantee about untracked external state or complete test coverage.
+
+**Run affected suites** rechecks freshness and runs changed, expired, unknown,
+untested, and unsuccessful suites sequentially on the selected environment.
+Closing the client leaves the queue running. **Stop affected run** cancels the active
+command and clears the queue; cancelling its active suite also stops the queue.
+A server restart interrupts the active run and discards pending suites, which stay
+eligible for a rerun. Recurring schedules are not configured by this action.
 
 ## Worktree branch names
 

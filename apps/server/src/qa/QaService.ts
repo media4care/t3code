@@ -30,6 +30,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { parseJunitReport } from "./junit.ts";
+import { InputEvidence, makeInputCapture, assessFreshness, changedInputs } from "./inputs.ts";
 
 const MAX_OUTPUT = 128 * 1024;
 const MAX_REPORT = 2 * 1024 * 1024;
@@ -38,6 +39,8 @@ const decodeConfig = Schema.decodeEffect(
 );
 const decodeRun = Schema.decodeEffect(Schema.fromJsonString(QaRun));
 const encodeRun = Schema.encodeEffect(Schema.fromJsonString(QaRun));
+const encodeEvidence = Schema.encodeEffect(Schema.fromJsonString(InputEvidence));
+const decodeEvidence = Schema.decodeEffect(Schema.fromJsonString(InputEvidence));
 const isQaError = Schema.is(QaError);
 const storageError = (cause: unknown) =>
   isQaError(cause) ? cause : new QaError({ reason: "storage", cause });
@@ -48,6 +51,8 @@ export class QaService extends Context.Service<
     readonly snapshot: (input: QaProjectInput) => Effect.Effect<QaSnapshot, QaError>;
     readonly subscribe: (input: QaProjectInput) => Stream.Stream<QaSnapshot, QaError>;
     readonly start: (input: QaStartInput) => Effect.Effect<QaRun, QaError>;
+    readonly startAffected: (input: QaProjectInput) => Effect.Effect<readonly string[], QaError>;
+    readonly cancelAffected: (input: QaProjectInput) => Effect.Effect<void, QaError>;
     readonly cancel: (input: QaRunInput) => Effect.Effect<void, QaError>;
     readonly details: (input: QaRunInput) => Effect.Effect<QaRunDetails, QaError>;
   }
@@ -66,12 +71,20 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const updates = yield* PubSub.sliding<string>(128);
   const lock = yield* Semaphore.make(1);
+  const captureInputs = yield* makeInputCapture;
+  const batches = new Map<
+    string,
+    { pending: string[]; runId?: string; fiber?: Fiber.Fiber<void, never> }
+  >();
+  const batchErrors = new Map<string, string>();
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const active = new Map<
     string,
     {
       details: QaRunDetails;
       cancelled: boolean;
+      root: string;
+      evidence: InputEvidence;
       fiber?: Fiber.Fiber<void, QaError>;
     }
   >();
@@ -106,18 +119,56 @@ const make = Effect.gen(function* () {
   const snapshot = Effect.fn("QaService.snapshot")(function* (input: QaProjectInput) {
     const root = yield* workspace(input);
     const config = yield* catalog(root).pipe(Effect.result);
-    const latest = yield* sql<{ run_json: string }>`SELECT run_json FROM (
-      SELECT run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
+    const latest = yield* sql<{
+      run_json: string;
+      evidence_json: string | null;
+    }>`SELECT run_json, evidence_json FROM (
+      SELECT id, run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
       FROM qa_runs WHERE project_id = ${input.projectId}
-    ) WHERE ordinal = 1 ORDER BY json_extract(run_json, '$.startedAt') DESC LIMIT 200`;
+    ) LEFT JOIN qa_run_inputs ON run_id = id
+    WHERE ordinal = 1 ORDER BY json_extract(run_json, '$.startedAt') DESC LIMIT 200`;
     const recent = yield* sql<{ run_json: string }>`SELECT run_json FROM qa_runs
       WHERE project_id = ${input.projectId} ORDER BY started_at DESC, rowid DESC LIMIT 50`;
+    const passed = yield* sql<{ suite_id: string; finished_at: string }>`SELECT suite_id,
+      MAX(json_extract(run_json, '$.finishedAt')) AS finished_at FROM qa_runs
+      WHERE project_id = ${input.projectId} AND status = 'passed' GROUP BY suite_id`;
+    const lastPassed = new Map(passed.map((row) => [row.suite_id, row.finished_at]));
+    const suites = config._tag === "Success" ? config.success : [];
+    const current = yield* captureInputs(root, suites);
+    const latestRuns = yield* Effect.forEach(latest, (row) => decodeRun(row.run_json));
+    const evidence = new Map<string, InputEvidence>();
+    for (const row of latest) {
+      if (row.evidence_json) {
+        const value = yield* decodeEvidence(row.evidence_json);
+        evidence.set((yield* decodeRun(row.run_json)).suite.id, value);
+      }
+    }
+    const checkedAt = yield* now;
     return {
       workspaceRoot: root,
       configurationError: config._tag === "Failure" ? config.failure.message : null,
-      suites: config._tag === "Success" ? config.success : [],
-      latestRuns: yield* Effect.forEach(latest, (row) => decodeRun(row.run_json)),
+      suites,
+      latestRuns,
       recentRuns: yield* Effect.forEach(recent, (row) => decodeRun(row.run_json)),
+      checkedAt,
+      freshness: suites.flatMap((suite) => {
+        const inputs = current.get(suite.id);
+        return inputs
+          ? [
+              assessFreshness(
+                suite,
+                latestRuns.find((run) => run.suite.id === suite.id),
+                evidence.get(suite.id),
+                inputs,
+                checkedAt,
+                lastPassed.get(suite.id) ?? null,
+              ),
+            ]
+          : [];
+      }),
+      queuedSuiteIds: [...(batches.get(input.projectId)?.pending ?? [])],
+      batchError: batchErrors.get(input.projectId) ?? null,
+      batchRunning: batches.has(input.projectId),
     };
   }, Effect.mapError(storageError));
 
@@ -230,6 +281,22 @@ const make = Effect.gen(function* () {
         reportXml,
         run: { ...run, exitCode, status, summary, note },
       };
+      const configured = (yield* catalog(entry.root).pipe(Effect.orElseSucceed(() => []))).find(
+        (suite) => suite.id === run.suite.id,
+      );
+      const after = configured
+        ? (yield* captureInputs(entry.root, [configured])).get(run.suite.id)
+        : undefined;
+      entry.evidence = {
+        ...entry.evidence,
+        stable:
+          !!after &&
+          !!configured &&
+          !entry.evidence.problem &&
+          !after.problem &&
+          changedInputs(entry.evidence, after).length === 0 &&
+          after.configuration === entry.evidence.configuration,
+      };
     },
     Effect.scoped,
     (effect, entry) =>
@@ -256,66 +323,140 @@ const make = Effect.gen(function* () {
               ...entry.details,
               run: { ...entry.details.run, finishedAt: yield* now },
             };
-            yield* save(entry.details).pipe(
-              Effect.ensuring(Effect.sync(() => active.delete(entry.details.run.id))),
-              Effect.ensuring(PubSub.publish(updates, entry.details.run.projectId)),
-            );
+            yield* sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  yield* save(entry.details);
+                  yield* sql`UPDATE qa_run_inputs SET evidence_json = ${yield* encodeEvidence(entry.evidence)}
+                WHERE run_id = ${entry.details.run.id}`;
+                }),
+              )
+              .pipe(
+                Effect.ensuring(Effect.sync(() => active.delete(entry.details.run.id))),
+                Effect.ensuring(PubSub.publish(updates, entry.details.run.projectId)),
+              );
           }),
         ),
         Effect.mapError(storageError),
       ),
   );
 
+  const startRun = Effect.fn("QaService.startRun")(function* (input: QaStartInput) {
+    const root = yield* workspace(input);
+    const suite = (yield* catalog(root)).find((candidate) => candidate.id === input.suiteId);
+    if (!suite) return yield* new QaError({ reason: "suite-not-found" });
+    if ([...active.values()].some((entry) => entry.details.run.projectId === input.projectId))
+      return yield* new QaError({ reason: "busy" });
+    const cwd = yield* fs
+      .realPath(path.resolve(root, suite.cwd ?? "."))
+      .pipe(Effect.mapError((cause) => new QaError({ reason: "workspace", cause })));
+    const relative = path.relative(root, cwd);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      return yield* new QaError({ reason: "workspace" });
+    const [commit, branch, changes] = yield* Effect.all(
+      [
+        git(root, ["rev-parse", "HEAD"]),
+        git(root, ["branch", "--show-current"]),
+        git(root, ["status", "--porcelain"]),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const run: QaRun = {
+      id: yield* crypto.randomUUIDv4(),
+      projectId: input.projectId,
+      suite,
+      cwd,
+      startedAt: yield* now,
+      finishedAt: null,
+      status: "running",
+      exitCode: null,
+      commit,
+      branch: branch || null,
+      dirty: changes === null ? null : changes.length > 0,
+      summary: null,
+      note: null,
+    };
+    const evidence = (yield* captureInputs(root, [suite])).get(suite.id)!;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json)
+          VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, 'running', ${yield* encodeRun(run)})`;
+        yield* sql`INSERT INTO qa_run_inputs VALUES (${run.id}, ${yield* encodeEvidence(evidence)})`;
+      }),
+    );
+    const entry: NonNullable<ReturnType<typeof active.get>> = {
+      details: { run, output: "", outputTruncated: false, reportXml: null },
+      cancelled: false,
+      root,
+      evidence,
+    };
+    active.set(run.id, entry);
+    entry.fiber = yield* execute(entry).pipe(
+      Effect.interruptible,
+      Effect.forkIn(scope, { startImmediately: true }),
+    );
+    yield* PubSub.publish(updates, input.projectId);
+    return entry;
+  }, Effect.mapError(storageError));
+
   const start = Effect.fn("QaService.start")(
     function* (input: QaStartInput) {
-      const root = yield* workspace(input);
-      const suite = (yield* catalog(root)).find((candidate) => candidate.id === input.suiteId);
-      if (!suite) return yield* new QaError({ reason: "suite-not-found" });
-      if ([...active.values()].some((entry) => entry.details.run.projectId === input.projectId))
-        return yield* new QaError({ reason: "busy" });
-      const cwd = yield* fs
-        .realPath(path.resolve(root, suite.cwd ?? "."))
-        .pipe(Effect.mapError((cause) => new QaError({ reason: "workspace", cause })));
-      const relative = path.relative(root, cwd);
-      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-        return yield* new QaError({ reason: "workspace" });
-      const [commit, branch, changes] = yield* Effect.all(
-        [
-          git(root, ["rev-parse", "HEAD"]),
-          git(root, ["branch", "--show-current"]),
-          git(root, ["status", "--porcelain"]),
-        ],
-        { concurrency: "unbounded" },
-      );
-      const run: QaRun = {
-        id: yield* crypto.randomUUIDv4(),
-        projectId: input.projectId,
-        suite,
-        cwd,
-        startedAt: yield* now,
-        finishedAt: null,
-        status: "running",
-        exitCode: null,
-        commit,
-        branch: branch || null,
-        dirty: changes === null ? null : changes.length > 0,
-        summary: null,
-        note: null,
-      };
-      yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json)
-      VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, 'running', ${yield* encodeRun(run)})`;
-      const entry: NonNullable<ReturnType<typeof active.get>> = {
-        details: { run, output: "", outputTruncated: false, reportXml: null },
-        cancelled: false,
-      };
-      active.set(run.id, entry);
-      entry.fiber = yield* execute(entry).pipe(Effect.interruptible, Effect.forkIn(scope));
-      yield* PubSub.publish(updates, input.projectId);
-      return run;
+      if (batches.has(input.projectId)) return yield* new QaError({ reason: "busy" });
+      batchErrors.delete(input.projectId);
+      return (yield* startRun(input)).details.run;
     },
     lock.withPermit,
     Effect.uninterruptible,
-    Effect.mapError(storageError),
+  );
+
+  const startAffected = Effect.fn("QaService.startAffected")(
+    function* (input: QaProjectInput) {
+      if (
+        batches.has(input.projectId) ||
+        [...active.values()].some((entry) => entry.details.run.projectId === input.projectId)
+      )
+        return yield* new QaError({ reason: "busy" });
+      const current = yield* snapshot(input);
+      if (current.configurationError) return yield* new QaError({ reason: "configuration" });
+      const ids = current.freshness.filter((item) => item.needsRun).map((item) => item.suiteId);
+      if (!ids.length) return ids;
+      const batch: NonNullable<ReturnType<typeof batches.get>> = { pending: [...ids] };
+      batchErrors.delete(input.projectId);
+      batches.set(input.projectId, batch);
+      batch.fiber = yield* Effect.gen(function* () {
+        for (const suiteId of ids) {
+          const entry = yield* lock.withPermit(
+            Effect.gen(function* () {
+              const entry = yield* startRun({ ...input, suiteId });
+              batch.pending.shift();
+              batch.runId = entry.details.run.id;
+              yield* PubSub.publish(updates, input.projectId);
+              return entry;
+            }).pipe(Effect.uninterruptible),
+          );
+          if (entry.fiber) yield* Fiber.join(entry.fiber);
+          if (entry.cancelled) break;
+        }
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            batchErrors.set(input.projectId, error.message);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.gen(function* () {
+            batches.delete(input.projectId);
+            yield* PubSub.publish(updates, input.projectId);
+          }),
+        ),
+        Effect.interruptible,
+        Effect.forkIn(scope, { startImmediately: true }),
+      );
+      yield* PubSub.publish(updates, input.projectId);
+      return ids;
+    },
+    lock.withPermit,
+    Effect.uninterruptible,
   );
 
   const cancel = Effect.fn("QaService.cancel")(function* (input: QaRunInput) {
@@ -326,9 +467,19 @@ const make = Effect.gen(function* () {
     yield* Fiber.interrupt(entry.fiber);
   });
 
+  const cancelAffected = Effect.fn("QaService.cancelAffected")(function* (input: QaProjectInput) {
+    yield* workspace(input);
+    const batch = batches.get(input.projectId);
+    if (!batch?.fiber) return;
+    yield* Fiber.interrupt(batch.fiber);
+    if (batch.runId) yield* cancel({ ...input, runId: batch.runId });
+  });
+
   return QaService.of({
     snapshot,
     start,
+    startAffected,
+    cancelAffected,
     cancel,
     details,
     subscribe: (input) =>

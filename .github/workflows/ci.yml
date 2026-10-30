@@ -44,6 +44,7 @@ jobs:
           sparse-checkout: |
             /pnpm-workspace.yaml
             /.github/scripts/ci-changes.cjs
+            /packages/shared/src/workspaceChanges.cjs
             /.github/actions/ci-changes/
             /*/package.json
             /*/*/package.json
