@@ -10,6 +10,7 @@ import {
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  QA_SHARED_RESULTS_NOTICE,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -143,6 +144,14 @@ function ProjectQa({
         {snapshot?.workspaceRoot}
       </Text>
       <Button label="Refresh QA" onPress={query.refresh} disabled={!connected} />
+      {snapshot?.sharedResults?.enabled ? (
+        <Text className="text-sm text-foreground-muted">{QA_SHARED_RESULTS_NOTICE}</Text>
+      ) : null}
+      {snapshot?.sharedResults?.warning ? (
+        <Text accessibilityRole="alert" className="text-danger">
+          {snapshot.sharedResults.warning}
+        </Text>
+      ) : null}
       {snapshot?.batchError ? (
         <Text accessibilityRole="alert" className="text-danger">
           Queued run stopped: {snapshot.batchError}
@@ -314,9 +323,11 @@ function RunDetails({
             {qaStatusLabel(data.run)} · {qaRunSummary(data.run)} · {qaRunSource(data.run)}
           </Text>
           <Text selectable className="font-mono text-xs text-foreground-muted">
-            {data.run.source?.type === "ci"
-              ? (data.run.source.url ?? "CI result")
-              : `${data.run.cwd}\n${data.run.suite.command}`}
+            {data.run.repositoryFile
+              ? data.run.repositoryFile
+              : data.run.source?.type === "ci"
+                ? (data.run.source.url ?? "CI result")
+                : `${data.run.cwd}\n${data.run.suite.command}`}
             {"\n"}
             {data.run.branch ?? "No branch"} · {data.run.commit ?? "Unknown revision"}
             {data.run.dirty ? " + changes" : ""}

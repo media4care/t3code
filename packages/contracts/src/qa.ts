@@ -41,6 +41,7 @@ export const QaSuite = Schema.Struct({
 export type QaSuite = typeof QaSuite.Type;
 
 export const QaConfiguration = Schema.Struct({
+  sharedResults: Schema.optionalKey(Schema.Boolean),
   suites: Schema.Array(QaSuite).check(
     Schema.isMaxLength(100),
     Schema.makeFilter((suites) => new Set(suites.map((suite) => suite.id)).size === suites.length),
@@ -94,6 +95,7 @@ export const QaRun = Schema.Struct({
   source: Schema.optionalKey(
     Schema.Union([Schema.Struct({ type: Schema.Literal("schedule") }), QaCiSource]),
   ),
+  repositoryFile: Schema.optionalKey(InputPath),
 });
 export type QaRun = typeof QaRun.Type;
 
@@ -220,6 +222,9 @@ export const QaSnapshot = Schema.Struct({
   latestCiRuns: Schema.optionalKey(Schema.Array(QaRun)),
   branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
   testResultsAvailable: Schema.optionalKey(Schema.Boolean),
+  sharedResults: Schema.optionalKey(
+    Schema.Struct({ enabled: Schema.Boolean, warning: Schema.NullOr(Schema.String) }),
+  ),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 

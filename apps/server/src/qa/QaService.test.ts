@@ -43,6 +43,9 @@ class QaTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.group
 const projectId = ProjectId.make("qa-test");
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeRun = Schema.decodeUnknownEffect(QaRun);
+const decodeSharedRecord = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
 const layer = Layer.mergeAll(Sqlite.layerMemory, ProcessRunner.layer).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
@@ -58,6 +61,7 @@ const suite: QaSuite = {
 const fixture = Effect.fn("Qa.test.fixture")(function* (
   script: string,
   suites: readonly QaSuite[] = [suite],
+  options: { sharedResults?: boolean } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -68,7 +72,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
   const processes = yield* ProcessRunner.ProcessRunner;
   const git = (args: readonly string[]) => processes.run({ command: "git", args, cwd: root });
   yield* git(["init", "-q"]);
-  yield* fs.writeFileString(path.join(root, "t3.json"), encodeJson({ qa: { suites } }));
+  yield* fs.writeFileString(path.join(root, "t3.json"), encodeJson({ qa: { suites, ...options } }));
   yield* fs.writeFileString(path.join(root, "run.cjs"), script);
   const projectLayer = Layer.mock(ProjectStore.ProjectStoreV2)({
     get: (id) =>
@@ -137,6 +141,208 @@ const completed = Effect.fn("Qa.test.completed")(function* (
 });
 
 describe("QA runs", () => {
+  it.live("reuses a repository result in another checkout without local run history", () =>
+    Effect.gen(function* () {
+      const tracked = { ...suite, inputs: ["."] };
+      const script = `require('node:fs').writeFileSync(process.env.T3_QA_REPORT_PATH,
+        '<testsuite><testcase name="private test name"/></testsuite>');
+        console.log('private command output');`;
+      const first = yield* fixture(script, [tracked], { sharedResults: true });
+      yield* first.fs.writeFileString(first.path.join(first.root, ".gitignore"), ".env\n");
+      yield* first.fs.writeFileString(
+        first.path.join(first.root, ".env"),
+        "QA_FIXTURE_SECRET=original\n",
+      );
+      const run = yield* first.service.start({ projectId, suiteId: suite.id });
+      const finished = yield* completed(first.service, run.id);
+      const relative = "t3.qa-results/unit.json";
+      const contents = yield* first.fs.readFileString(first.path.join(first.root, relative));
+      assert.notInclude(contents, first.root);
+      assert.notInclude(contents, "private command output");
+      assert.notInclude(contents, "private test name");
+      assert.notInclude(contents, script);
+      assert.notInclude(contents, "QA_FIXTURE_SECRET");
+      assert.isFalse((yield* first.service.snapshot({ projectId })).freshness?.[0]?.needsRun);
+      yield* first.fs.writeFileString(
+        first.path.join(first.root, "run.cjs"),
+        "require('node:net').createServer().listen(0, '127.0.0.1');",
+      );
+      const cancelled = yield* first.service.start({ projectId, suiteId: suite.id });
+      yield* first.service.cancel({ projectId, runId: cancelled.id });
+      assert.equal(
+        (yield* first.service.details({ projectId, runId: cancelled.id })).run.status,
+        "cancelled",
+      );
+      assert.equal(yield* first.fs.readFileString(first.path.join(first.root, relative)), contents);
+
+      const second = yield* fixture(script, [tracked], { sharedResults: true });
+      yield* second.fs.writeFileString(second.path.join(second.root, ".gitignore"), ".env\n");
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, ".env"),
+        "QA_FIXTURE_SECRET=original\n",
+      );
+      yield* second.fs.makeDirectory(second.path.join(second.root, "t3.qa-results"));
+      yield* second.fs.writeFileString(second.path.join(second.root, relative), contents);
+      const snapshot = yield* second.service.snapshot({ projectId });
+      assert.equal(snapshot.latestRuns[0]?.id, run.id);
+      assert.deepEqual(snapshot.latestRuns[0]?.summary, finished.run.summary);
+      assert.equal(snapshot.latestRuns[0]?.repositoryFile, relative);
+      assert.equal(snapshot.freshness?.[0]?.state, "current");
+      assert.isFalse(snapshot.freshness?.[0]?.needsRun);
+      assert.deepEqual(yield* second.service.startAffected({ projectId }), []);
+      assert.isEmpty(yield* second.sql`SELECT id FROM qa_runs`);
+      const details = yield* second.service.details({ projectId, runId: run.id });
+      assert.isNull(details.reportXml);
+      assert.include(details.output, "execution environment");
+      assert.include(
+        (yield* second.service.tests({ projectId, runId: run.id })).unavailableReason ?? "",
+        "execution environment",
+      );
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, ".env"),
+        "QA_FIXTURE_SECRET=another-developer\n",
+      );
+      assert.isTrue((yield* second.service.snapshot({ projectId })).freshness?.[0]?.needsRun);
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, ".env"),
+        "QA_FIXTURE_SECRET=original\n",
+      );
+      assert.isFalse((yield* second.service.snapshot({ projectId })).freshness?.[0]?.needsRun);
+
+      yield* second.fs.writeFileString(second.path.join(second.root, "run.cjs"), script + "\n");
+      assert.isTrue((yield* second.service.snapshot({ projectId })).freshness?.[0]?.needsRun);
+      yield* second.fs.writeFileString(second.path.join(second.root, "run.cjs"), script);
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, "t3.json"),
+        encodeJson({
+          qa: {
+            sharedResults: true,
+            suites: [{ ...tracked, command: "node --no-warnings run.cjs" }],
+          },
+        }),
+      );
+      assert.isTrue((yield* second.service.snapshot({ projectId })).freshness?.[0]?.needsRun);
+
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, "t3.json"),
+        encodeJson({
+          qa: { sharedResults: true, suites: [{ ...tracked, maxAgeHours: 0.000000001 }] },
+        }),
+      );
+      assert.include(
+        (yield* second.service.snapshot({ projectId })).freshness?.[0]?.reason ?? "",
+        "freshness limit",
+      );
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, "t3.json"),
+        encodeJson({
+          qa: { sharedResults: true, suites: [tracked] },
+        }),
+      );
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, "run.cjs"),
+        script + "\nprocess.exitCode = 1;",
+      );
+      const failed = yield* second.service.start({ projectId, suiteId: suite.id });
+      assert.equal((yield* completed(second.service, failed.id)).run.status, "failed");
+      const failedSummary = yield* second.fs.readFileString(
+        second.path.join(second.root, relative),
+      );
+      yield* second.fs.writeFileString(second.path.join(second.root, relative), contents);
+      assert.equal((yield* second.service.snapshot({ projectId })).latestRuns[0]?.id, failed.id);
+      yield* second.fs.writeFileString(second.path.join(second.root, relative), failedSummary);
+      yield* second.sql`DELETE FROM qa_runs`;
+      const sharedFailure = yield* second.service.snapshot({ projectId });
+      assert.equal(sharedFailure.latestRuns[0]?.status, "failed");
+      assert.equal(sharedFailure.freshness?.[0]?.state, "current");
+      assert.isTrue(sharedFailure.freshness?.[0]?.needsRun);
+
+      yield* second.fs.writeFileString(
+        second.path.join(second.root, "t3.json"),
+        encodeJson({
+          qa: { sharedResults: false, suites: [tracked] },
+        }),
+      );
+      assert.isEmpty((yield* second.service.snapshot({ projectId })).latestRuns);
+      const disabled = yield* second.service.start({ projectId, suiteId: suite.id });
+      yield* completed(second.service, disabled.id);
+      assert.equal(
+        yield* second.fs.readFileString(second.path.join(second.root, relative)),
+        failedSummary,
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live(
+    "does not reuse unverifiable repository results or lose local outcomes when sharing fails",
+    () =>
+      Effect.gen(function* () {
+        const tracked = { id: "unit", name: "Unit", command: "node run.cjs", inputs: ["."] };
+        const { service, fs, path, root, sql } = yield* fixture("", [tracked], {
+          sharedResults: true,
+        });
+        const run = yield* service.start({ projectId, suiteId: "unit" });
+        yield* completed(service, run.id);
+        const filename = path.join(root, "t3.qa-results/unit.json");
+        const contents = yield* fs.readFileString(filename);
+        const saved = yield* decodeSharedRecord(contents);
+        yield* sql`DELETE FROM qa_runs`;
+        yield* fs.writeFileString(filename, encodeJson({ ...saved, fingerprint: null }));
+        const unverified = yield* service.snapshot({ projectId });
+        assert.equal(unverified.latestRuns[0]?.status, "passed");
+        assert.equal(unverified.freshness?.[0]?.state, "unknown");
+        assert.isTrue(unverified.freshness?.[0]?.needsRun);
+        for (const invalid of [
+          "<<<<<<< merge conflict",
+          " ".repeat(16 * 1024 + 1),
+          encodeJson({ ...saved, version: 2 }),
+          encodeJson({ ...saved, suiteId: "another-suite" }),
+          encodeJson({ ...saved, exitCode: 1 }),
+          encodeJson({ ...saved, summary: { tests: 1, failures: 1, skipped: 0 } }),
+          encodeJson({
+            ...saved,
+            startedAt: "2099-01-01T00:00:00.000Z",
+            finishedAt: "2099-01-02T00:00:00.000Z",
+          }),
+          encodeJson({ ...saved, finishedAt: "2000-01-01T00:00:00.000Z" }),
+        ]) {
+          yield* fs.writeFileString(filename, invalid);
+          const state = yield* service.snapshot({ projectId });
+          assert.isEmpty(state.latestRuns);
+          assert.isTrue(state.freshness?.[0]?.needsRun);
+          assert.isString(state.sharedResults?.warning);
+        }
+        const failedExport = yield* service.start({ projectId, suiteId: "unit" });
+        const local = yield* completed(service, failedExport.id);
+        assert.equal(local.run.status, "passed");
+        assert.include(local.run.note ?? "", "repository summary could not be saved");
+        yield* sql`DELETE FROM qa_runs`;
+        yield* fs.remove(filename);
+        const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-external-" });
+        const target = path.join(outside, "unit.json");
+        yield* fs.writeFileString(target, contents);
+        yield* fs.symlink(target, filename);
+        assert.isEmpty((yield* service.snapshot({ projectId })).latestRuns);
+        const linkedFile = yield* service.start({ projectId, suiteId: "unit" });
+        assert.include(
+          (yield* completed(service, linkedFile.id)).run.note ?? "",
+          "could not be saved",
+        );
+        assert.equal(yield* fs.readFileString(target), contents);
+        yield* fs.remove(filename);
+        yield* fs.remove(path.join(root, "t3.qa-results"), { recursive: true });
+        yield* fs.symlink(outside, path.join(root, "t3.qa-results"));
+        yield* sql`DELETE FROM qa_runs`;
+        assert.isEmpty((yield* service.snapshot({ projectId })).latestRuns);
+        const linkedDirectory = yield* service.start({ projectId, suiteId: "unit" });
+        assert.include(
+          (yield* completed(service, linkedDirectory.id)).run.note ?? "",
+          "could not be saved",
+        );
+        assert.equal(yield* fs.readFileString(target), contents);
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live(
     "runs due schedules once, records actual results, and keeps interval state across restarts",
     () =>
@@ -782,7 +988,21 @@ describe("QA runs", () => {
 
   it.live("retains the launch error when the shell cannot start", () =>
     Effect.gen(function* () {
-      const { serviceLayer } = yield* fixture("");
+      const {
+        service: original,
+        serviceLayer,
+        fs,
+        path,
+        root,
+      } = yield* fixture(
+        "",
+        [{ id: "unit", name: "Unit", command: "node run.cjs", inputs: ["run.cjs"] }],
+        { sharedResults: true },
+      );
+      const passed = yield* original.start({ projectId, suiteId: "unit" });
+      yield* completed(original, passed.id);
+      const filename = path.join(root, "t3.qa-results/unit.json");
+      const contents = yield* fs.readFileString(filename);
       const context = yield* Layer.build(
         Layer.fresh(serviceLayer).pipe(
           Layer.provide(Layer.succeed(HostProcess.Environment, { SHELL: "/t3-qa-missing-shell" })),
@@ -794,15 +1014,27 @@ describe("QA runs", () => {
       assert.equal(result.run.status, "incomplete");
       assert.include(result.output, "/t3-qa-missing-shell");
       assert.include(result.run.outputTail ?? "", "/t3-qa-missing-shell");
+      assert.equal(yield* fs.readFileString(filename), contents);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
   it.live("bounds noisy command output and supports commands without reports", () =>
     Effect.gen(function* () {
-      const { service, sql } = yield* fixture(
+      const { service, sql, git } = yield* fixture(
         "console.log('x'.repeat(200000) + '\\n\\x1b[31mError: unsupported Node version\\x1b[0m');",
         [{ id: "unit", name: "Unit tests", command: "node run.cjs" }],
+        { sharedResults: true },
       );
+      yield* git(["add", "."]);
+      yield* git([
+        "-c",
+        "user.name=QA",
+        "-c",
+        "user.email=qa@example.test",
+        "commit",
+        "-qm",
+        "fixture",
+      ]);
       const run = yield* service.start({ projectId, suiteId: "unit" });
       const result = yield* completed(service, run.id);
       assert.equal(result.run.status, "passed");
@@ -810,6 +1042,7 @@ describe("QA runs", () => {
       assert.isTrue(result.outputTruncated);
       assert.isAtMost(result.output.length, 128 * 1024);
       assert.isUndefined(result.run.outputTail);
+      assert.isFalse(result.run.dirty);
       // Older runs store only the captured output, without a dashboard excerpt.
       yield* sql`UPDATE qa_runs SET status = 'failed', run_json = json_set(run_json, '$.status', 'failed', '$.exitCode', 1) WHERE id = ${run.id}`;
       const snapshot = yield* service.snapshot({ projectId });
@@ -819,6 +1052,8 @@ describe("QA runs", () => {
       assert.notInclude(snapshot.latestRuns[0]?.outputTail ?? "", "\u001b");
       assert.equal(snapshot.latestRuns[0]?.outputTail, failed.run.outputTail);
       assert.equal(snapshot.recentRuns[0]?.outputTail, failed.run.outputTail);
+      const repeated = yield* service.start({ projectId, suiteId: "unit" });
+      assert.isFalse((yield* completed(service, repeated.id)).run.dirty);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

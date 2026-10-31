@@ -625,4 +625,25 @@ it("lists individual results with paging, search, result filters, and failure de
     )
     .toBeVisible();
   await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
+  const shared: QaRun = { ...run, repositoryFile: "t3.qa-results/api.json" };
+  state.runs.api = shared;
+  state.tests = {};
+  state.snapshots.alpha = {
+    ...state.snapshots.alpha!,
+    latestRuns: [shared],
+    recentRuns: [shared],
+    testResultsAvailable: true,
+    sharedResults: { enabled: true, warning: null },
+  };
+  await screen.rerender(
+    <SidebarProvider key="repository-result">
+      <QaPage />
+    </SidebarProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "View run", exact: true }).click();
+  await expect.element(screen.getByText("t3.qa-results/api.json", { exact: true })).toBeVisible();
+  await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
 });

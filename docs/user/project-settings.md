@@ -120,7 +120,7 @@ a passing result. Reports are limited to 2 MiB.
 Without a report, a zero exit code is labelled **Command passed**, with no inferred
 test count. Run details retain the command, working directory, starting Git revision,
 uncommitted-change indicator, timestamps, exit status, and up to 131,072 characters of recent output.
-History and reports stay on the execution environment, outside the repository.
+Full history, output and reports stay on the execution environment.
 Choose **View tests** on a suite to browse individual names, pass/fail/skipped
 results, durations, and expandable failure or skip details. Search by name, group,
 or file, filter by result, and page through large reports. The list also works for
@@ -150,8 +150,35 @@ workspace dependency graph and conservatively include files with no known owner.
 Refresh QA after editing files. QA compares file contents, including uncommitted
 edits, additions and deletions, against the saved run. It checks again at completion;
 inputs that changed during a run cannot be treated as verified. Older runs without
-input evidence and inputs that cannot be read show unknown freshness. Fingerprints
-stay in the environment's database; they are not committed to Git.
+input evidence and inputs that cannot be read show unknown freshness.
+
+To share results with other developers, add `"sharedResults": true` beside `suites`
+in `qa`. Completed manual and scheduled runs then save a small summary per suite in
+`t3.qa-results/`. Cancellation, server interruption and launch failures stay in local
+history and leave the last shared result intact. Commit these files with the tested changes and share the commit
+through your normal Git workflow. QA reads them after another developer pulls;
+**Repository result** identifies a summary from the checkout. Refresh QA after pulling.
+The summaries contain the outcome, counts, times, starting revision, branch name, run ID,
+uncommitted-change flag and a combined input fingerprint. Changes to summary files alone
+do not set the uncommitted-change flag. Summaries exclude command output, individual test reports, file contents
+and local paths. Opening the original execution environment provides the full details.
+
+A shared pass can be reused only when the configured inputs match, stayed stable
+during execution and have not expired. Declare complete `inputs` or `workspacePackage`
+coverage first; missing input or external-environment evidence still requires a rerun.
+Lockfiles and local configuration can differ across machines and make a shared result
+stale. QA also compares pnpm installation metadata when present. Local configuration
+includes ignored `.env*` files within declared inputs
+and root `.env*` files: their presence and contents must match too. Their hashes contribute
+to the combined fingerprint, but their contents and individual hashes are not published.
+A matching Git revision alone does not establish an equivalent test environment. The
+combined fingerprint can detect a mismatch without identifying the changed file.
+A newer failed local run remains visible and needs a rerun.
+The summary directory is excluded from test inputs, so committing results does not
+invalidate them. Keep it out of `.gitignore`. Resolve merge conflicts by retaining a
+complete summary from one run; QA checks its fingerprint against the resulting files.
+Set `sharedResults` to `false` to stop writing and using repository results. Existing
+files remain in Git until you remove them. Imported CI reports remain separate.
 
 Set `environment: "external"` when a suite tests a deployed service or an installed
 app; this is the default for `maestro` and `e2e` suites. Set `environmentFile` to a

@@ -6,6 +6,7 @@ import {
   QA_KIND_LABELS,
   groupQaSuites,
   qaRunDuration,
+  qaRunSource,
   qaRunSummary,
   qaStatusLabel,
   qaFreshnessLabel,
@@ -300,6 +301,9 @@ function SuiteCard({
           ? `Last run ${new Date(run.startedAt).toLocaleString()} · ${qaRunDuration(run)}`
           : "No QA runs recorded"}
       </Text>
+      {run?.repositoryFile ? (
+        <Text className="text-xs text-foreground-muted">{qaRunSource(run)}</Text>
+      ) : null}
       {freshness ? (
         <View className="gap-2 rounded-lg bg-subtle p-3">
           <Text
@@ -346,7 +350,9 @@ function SuiteCard({
         />
         {run ? (
           <Button
-            label={run.summary ? `View tests (${run.summary.tests})` : "View run"}
+            label={
+              run.summary && !run.repositoryFile ? `View tests (${run.summary.tests})` : "View run"
+            }
             tone="text"
             onPress={() => onView(run.id)}
           />
