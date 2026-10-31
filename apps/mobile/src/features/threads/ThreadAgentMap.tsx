@@ -9,9 +9,12 @@ import {
 import { subagentDetailPreview } from "@t3tools/client-runtime/state/subagent-display";
 import {
   deriveWorkflowGroups,
+  isActiveSubagentStatus,
   projectedSubagentsToRuntime,
+  type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
+import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -24,6 +27,7 @@ import { useServerConfigs } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
+import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const STATUS_CLASSES = {
   working: "text-primary-text",
@@ -140,7 +144,7 @@ function AgentMapRow(props: {
       <View className="absolute left-0 top-8 h-px w-4 bg-border" />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${node.agent.title}, ${status.label}`}
+        accessibilityLabel={`${metadata.provider}, ${metadata.model}, ${node.agent.title}, ${status.label}`}
         accessibilityState={{ expanded: props.selected }}
         onPress={props.onSelect}
         className={cn(
@@ -152,7 +156,6 @@ function AgentMapRow(props: {
           {driver ? <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={18} /> : null}
           <View className="min-w-0 flex-1">
             <Text className="font-t3-medium text-xs">{metadata.model}</Text>
-            <Text className="text-xs text-foreground-muted">{metadata.provider}</Text>
           </View>
           <Text className="text-xs text-foreground-muted">{node.kind}</Text>
         </View>
@@ -162,9 +165,12 @@ function AgentMapRow(props: {
             {subagentDetailPreview(node.agent) ?? agentMapEmptyDetail(node)}
           </Text>
         </View>
-        <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
-          {status.label}
-        </Text>
+        <View className="flex-row flex-wrap items-center justify-between gap-2">
+          <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
+            {status.label}
+          </Text>
+          <AgentElapsed agent={node.agent} />
+        </View>
         {node.source?.remoteChild ? (
           <Text className="text-xs text-foreground-muted">on {node.source.remoteChild.label}</Text>
         ) : null}
@@ -186,6 +192,19 @@ function AgentMapRow(props: {
         />
       ) : null}
     </View>
+  );
+}
+
+function AgentElapsed({ agent }: { agent: RuntimeSubagent }) {
+  const nowMs = useVisibleSecondClock(isActiveSubagentStatus(agent.status));
+  const elapsedMs = deriveSubagentElapsedMs(agent, nowMs);
+  return elapsedMs === null ? null : (
+    <Text
+      accessibilityLabel={`Total time: ${formatDuration(elapsedMs)}`}
+      className="text-xs tabular-nums text-foreground-muted"
+    >
+      {formatDuration(elapsedMs)}
+    </Text>
   );
 }
 
