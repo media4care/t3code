@@ -532,15 +532,10 @@ function RunDetails({
             {data.run.dirty ? " · Working directory had uncommitted changes" : ""}
             {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
           </p>
-          {data.run.note ? <p className="mt-3 text-sm">{data.run.note}</p> : null}
-          {supportsTests ? (
-            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
-          ) : (
-            <p className="mt-4 text-sm text-muted-foreground">
-              Update this environment’s server to view individual test results.
-            </p>
-          )}
-          <details className="mt-4">
+          <details
+            className="mt-4"
+            open={data.run.status === "failed" || data.run.status === "incomplete"}
+          >
             <summary className="cursor-pointer text-sm font-medium">Run output</summary>
             {data.outputTruncated ? (
               <p className="mt-3 text-sm text-muted-foreground">
@@ -554,6 +549,14 @@ function RunDetails({
                   : "No output captured.")}
             </pre>
           </details>
+          {data.run.note ? <p className="mt-3 text-sm">{data.run.note}</p> : null}
+          {supportsTests ? (
+            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
+          ) : (
+            <p className="mt-4 text-sm text-muted-foreground">
+              Update this environment’s server to view individual test results.
+            </p>
+          )}
           {data.reportXml ? (
             <details className="mt-4">
               <summary className="cursor-pointer text-sm font-medium">Saved JUnit report</summary>

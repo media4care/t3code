@@ -268,6 +268,19 @@ function SuiteCard({
         </div>
       </div>
       <h4 className="mt-3 font-semibold leading-snug">{suite.name}</h4>
+      {run?.outputTail ? (
+        <div className="mt-3 rounded-lg border border-error/20 bg-error/5 p-3">
+          <p className="text-xs font-medium text-destructive-foreground">
+            Failure output{run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
+          </p>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">
+            {run.outputTail}
+          </pre>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Recent output. Open the run for more.
+          </p>
+        </div>
+      ) : null}
       {freshness ? (
         <div className="mt-3 rounded-lg bg-muted/40 p-3 text-xs">
           <Badge

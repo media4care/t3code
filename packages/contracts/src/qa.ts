@@ -74,6 +74,8 @@ const QaCiSource = Schema.Struct({
   ),
 });
 
+export const QA_OUTPUT_TAIL_LIMIT = 2000;
+
 export const QaRun = Schema.Struct({
   id: ShortText,
   projectId: ProjectId,
@@ -88,6 +90,7 @@ export const QaRun = Schema.Struct({
   dirty: Schema.NullOr(Schema.Boolean),
   summary: Schema.NullOr(QaReportSummary),
   note: Schema.NullOr(Schema.String),
+  outputTail: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(QA_OUTPUT_TAIL_LIMIT))),
   source: Schema.optionalKey(
     Schema.Union([Schema.Struct({ type: Schema.Literal("schedule") }), QaCiSource]),
   ),
