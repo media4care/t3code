@@ -21,7 +21,7 @@ import {
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
 } from "@t3tools/client-runtime/insights";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   FlatList,
   Linking,
@@ -39,6 +39,7 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Menu } from "../../components/ui/Menu";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { environmentPresentations } from "../../state/presentation";
@@ -85,6 +86,17 @@ export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?
   const [selected, setSelected] = useState<EnvironmentId | null>(null);
   const environment = environments.find((e) => e.environmentId === selected) ?? environments[0];
   const navigation = useNavigation();
+  const environmentPicker = (
+    <Picker
+      label="Insights environment"
+      value={environment?.environmentId ?? ""}
+      choices={environments.map((e) => ({
+        value: e.environmentId,
+        label: `${e.label}${e.connection.phase === "connected" ? "" : " · Offline"}`,
+      }))}
+      onChange={(id) => setSelected(EnvironmentId.make(id))}
+    />
+  );
   return (
     <>
       {inWorkspace && Platform.OS === "ios" ? null : (
@@ -96,29 +108,21 @@ export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?
         />
       )}
       <ScreenContent>
-        <View className="px-4 py-2">
-          <Picker
-            label="Insights environment"
-            value={environment?.environmentId ?? ""}
-            choices={environments.map((e) => ({
-              value: e.environmentId,
-              label: `${e.label}${e.connection.phase === "connected" ? "" : " · Offline"}`,
-            }))}
-            onChange={(id) => setSelected(EnvironmentId.make(id))}
-          />
-        </View>
         {environment ? (
           <EnvironmentInsights
             key={environment.environmentId}
             environmentId={environment.environmentId}
             connected={environment.connection.phase === "connected"}
+            environmentPicker={environmentPicker}
           />
         ) : (
-          <EmptyState
-            title="Connect an environment"
-            detail="Insights uses the threads and providers on your T3 server."
-            variant="plain"
-          />
+          <ScreenScrollView contentInsetAdjustmentBehavior="automatic">
+            <EmptyState
+              title="Connect an environment"
+              detail="Insights uses the threads and providers on your T3 server."
+              variant="plain"
+            />
+          </ScreenScrollView>
         )}
       </ScreenContent>
     </>
@@ -128,9 +132,11 @@ export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?
 function EnvironmentInsights({
   environmentId,
   connected,
+  environmentPicker,
 }: {
   environmentId: EnvironmentId;
   connected: boolean;
+  environmentPicker: ReactNode;
 }) {
   const query = useEnvironmentQuery(serverEnvironment.insightsLive({ environmentId, input: {} }));
   const canOperate = useAtomValue(
@@ -199,6 +205,7 @@ function EnvironmentInsights({
       }
       ListHeaderComponent={
         <View className="gap-4">
+          {environmentPicker}
           <Text className="font-t3-semibold text-2xl text-foreground">Workflow overview</Text>
           {!connected && (
             <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
