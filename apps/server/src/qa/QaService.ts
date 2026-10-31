@@ -4,6 +4,7 @@ import {
   QaRun,
   QaSchedule,
   QA_TEST_PAGE_SIZE,
+  QA_OUTPUT_TAIL_LIMIT,
   ProjectId,
   type QaSetScheduleInput,
   type QaImportInput,
@@ -17,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +35,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as NodeUtil from "node:util";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -60,6 +63,12 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const isQaError = Schema.is(QaError);
 const storageError = (cause: unknown) =>
   isQaError(cause) ? cause : new QaError({ reason: "storage", cause });
+
+function withOutputTail(run: QaRun, output: string): QaRun {
+  if (run.status !== "failed" && run.status !== "incomplete") return run;
+  const outputTail = NodeUtil.stripVTControlCharacters(output.slice(-QA_OUTPUT_TAIL_LIMIT)).trim();
+  return outputTail ? { ...run, outputTail } : run;
+}
 
 export class QaService extends Context.Service<
   QaService,
@@ -159,13 +168,16 @@ const make = Effect.gen(function* () {
     const config = yield* catalog(root).pipe(Effect.result);
     const latest = yield* sql<{
       run_json: string;
+      output_tail: string;
       evidence_json: string | null;
-    }>`SELECT run_json, evidence_json FROM (
+    }>`SELECT latest.run_json, CASE WHEN saved.status IN ('failed', 'incomplete') THEN substr(saved.output, ${-QA_OUTPUT_TAIL_LIMIT}) ELSE '' END AS output_tail, evidence_json FROM (
       SELECT id, run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
       FROM qa_runs WHERE project_id = ${input.projectId} AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
-    ) LEFT JOIN qa_run_inputs ON run_id = id
-    WHERE ordinal = 1 ORDER BY json_extract(run_json, '$.startedAt') DESC LIMIT 200`;
-    const recent = yield* sql<{ run_json: string }>`SELECT run_json FROM qa_runs
+    ) latest LEFT JOIN qa_run_inputs ON run_id = latest.id
+    JOIN qa_runs saved ON saved.id = latest.id
+    WHERE ordinal = 1 ORDER BY json_extract(latest.run_json, '$.startedAt') DESC LIMIT 200`;
+    const recent = yield* sql<{ run_json: string; output_tail: string }>`SELECT run_json,
+      CASE WHEN status IN ('failed', 'incomplete') THEN substr(output, ${-QA_OUTPUT_TAIL_LIMIT}) ELSE '' END AS output_tail FROM qa_runs
       WHERE project_id = ${input.projectId} ORDER BY started_at DESC, rowid DESC LIMIT 50`;
     const passed = yield* sql<{ suite_id: string; finished_at: string }>`SELECT suite_id,
       MAX(json_extract(run_json, '$.finishedAt')) AS finished_at FROM qa_runs
@@ -178,7 +190,9 @@ const make = Effect.gen(function* () {
     const lastPassed = new Map(passed.map((row) => [row.suite_id, row.finished_at]));
     const suites = config._tag === "Success" ? config.success : [];
     const current = yield* captureInputs(root, suites);
-    const latestRuns = yield* Effect.forEach(latest, (row) => decodeRun(row.run_json));
+    const latestRuns = yield* Effect.forEach(latest, (row) =>
+      decodeRun(row.run_json).pipe(Effect.map((run) => withOutputTail(run, row.output_tail))),
+    );
     const evidence = new Map<string, InputEvidence>();
     for (const row of latest) {
       if (row.evidence_json) {
@@ -192,7 +206,9 @@ const make = Effect.gen(function* () {
       configurationError: config._tag === "Failure" ? config.failure.message : null,
       suites,
       latestRuns,
-      recentRuns: yield* Effect.forEach(recent, (row) => decodeRun(row.run_json)),
+      recentRuns: yield* Effect.forEach(recent, (row) =>
+        decodeRun(row.run_json).pipe(Effect.map((run) => withOutputTail(run, row.output_tail))),
+      ),
       checkedAt,
       freshness: suites.flatMap((suite) => {
         const inputs = current.get(suite.id);
@@ -231,7 +247,7 @@ const make = Effect.gen(function* () {
       SELECT run_json, output, output_truncated, report_xml FROM qa_runs WHERE id = ${input.runId} AND project_id = ${input.projectId}`;
     if (!rows[0]) return yield* new QaError({ reason: "run-not-found" });
     return {
-      run: yield* decodeRun(rows[0].run_json),
+      run: withOutputTail(yield* decodeRun(rows[0].run_json), rows[0].output),
       output: rows[0].output,
       outputTruncated: rows[0].output_truncated !== 0,
       reportXml: rows[0].report_xml,
@@ -393,6 +409,17 @@ const make = Effect.gen(function* () {
         Effect.onExit((exit) =>
           Effect.gen(function* () {
             if (Exit.isFailure(exit)) {
+              if (!entry.cancelled && !Cause.hasInterrupts(exit.cause)) {
+                const diagnostic = Cause.prettyErrors(exit.cause)
+                  .map((error) => error.message)
+                  .join("\n");
+                const output = `${entry.details.output}\n${diagnostic}`;
+                entry.details = {
+                  ...entry.details,
+                  output: output.slice(-MAX_OUTPUT),
+                  outputTruncated: entry.details.outputTruncated || output.length > MAX_OUTPUT,
+                };
+              }
               entry.details = {
                 ...entry.details,
                 run: {

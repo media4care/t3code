@@ -36,6 +36,7 @@ import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as Etag from "effect/http/Etag";
 import * as QaHttp from "./http.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 class QaTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.qa) {}
 
@@ -680,6 +681,7 @@ describe("QA runs", () => {
       for (const [xml, exitCode, expected] of [
         ["<testsuite><testcase><failure/></testcase></testsuite>", 0, "failed"],
         ["<testsuite><testcase/></testsuite>", 1, "failed"],
+        [null, 1, "failed"],
         [null, 0, "incomplete"],
         ["<testsuite/>", 0, "incomplete"],
         ["<testsuite><testcase><skipped/></testcase></testsuite>", 0, "incomplete"],
@@ -687,18 +689,22 @@ describe("QA runs", () => {
       ] as const) {
         yield* fs.writeFileString(
           path.join(root, "run.cjs"),
-          `${xml === null ? "" : `require('node:fs').writeFileSync(process.env.T3_QA_REPORT_PATH, ${encodeJson(xml)});`} process.exitCode = ${exitCode};`,
+          `${xml === null ? "" : `require('node:fs').writeFileSync(process.env.T3_QA_REPORT_PATH, ${encodeJson(xml)});`} console.error('Cannot connect to the Docker daemon'); process.exitCode = ${exitCode};`,
         );
         const run = yield* service.start({ projectId, suiteId: "unit" });
         const result = yield* completed(service, run.id);
         assert.equal(result.run.status, expected);
+        assert.include(result.run.outputTail ?? "", "Cannot connect to the Docker daemon");
+        const snapshot = yield* service.snapshot({ projectId });
+        assert.equal(snapshot.latestRuns[0]?.outputTail, result.run.outputTail);
+        assert.equal(snapshot.recentRuns[0]?.outputTail, result.run.outputTail);
         if (!result.reportXml) {
           const tests = yield* service.tests({ projectId, runId: run.id });
           assert.isEmpty(tests.tests);
           assert.isNotNull(tests.unavailableReason);
         }
       }
-      assert.equal((yield* service.snapshot({ projectId })).recentRuns.length, 6);
+      assert.equal((yield* service.snapshot({ projectId })).recentRuns.length, 7);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -774,10 +780,27 @@ describe("QA runs", () => {
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("retains the launch error when the shell cannot start", () =>
+    Effect.gen(function* () {
+      const { serviceLayer } = yield* fixture("");
+      const context = yield* Layer.build(
+        Layer.fresh(serviceLayer).pipe(
+          Layer.provide(Layer.succeed(HostProcess.Environment, { SHELL: "/t3-qa-missing-shell" })),
+        ),
+      );
+      const service = Context.get(context, Qa.QaService);
+      const run = yield* service.start({ projectId, suiteId: "unit" });
+      const result = yield* completed(service, run.id);
+      assert.equal(result.run.status, "incomplete");
+      assert.include(result.output, "/t3-qa-missing-shell");
+      assert.include(result.run.outputTail ?? "", "/t3-qa-missing-shell");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("bounds noisy command output and supports commands without reports", () =>
     Effect.gen(function* () {
-      const { service } = yield* fixture(
-        "console.log('x'.repeat(200000)); console.error('done');",
+      const { service, sql } = yield* fixture(
+        "console.log('x'.repeat(200000) + '\\n\\x1b[31mError: unsupported Node version\\x1b[0m');",
         [{ id: "unit", name: "Unit tests", command: "node run.cjs" }],
       );
       const run = yield* service.start({ projectId, suiteId: "unit" });
@@ -786,6 +809,16 @@ describe("QA runs", () => {
       assert.isNull(result.run.summary);
       assert.isTrue(result.outputTruncated);
       assert.isAtMost(result.output.length, 128 * 1024);
+      assert.isUndefined(result.run.outputTail);
+      // Older runs store only the captured output, without a dashboard excerpt.
+      yield* sql`UPDATE qa_runs SET status = 'failed', run_json = json_set(run_json, '$.status', 'failed', '$.exitCode', 1) WHERE id = ${run.id}`;
+      const snapshot = yield* service.snapshot({ projectId });
+      const failed = yield* service.details({ projectId, runId: run.id });
+      assert.isAtMost(snapshot.latestRuns[0]!.outputTail!.length, 2000);
+      assert.include(snapshot.latestRuns[0]?.outputTail ?? "", "Error: unsupported Node version");
+      assert.notInclude(snapshot.latestRuns[0]?.outputTail ?? "", "\u001b");
+      assert.equal(snapshot.latestRuns[0]?.outputTail, failed.run.outputTail);
+      assert.equal(snapshot.recentRuns[0]?.outputTail, failed.run.outputTail);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

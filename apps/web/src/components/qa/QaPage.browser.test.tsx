@@ -234,6 +234,40 @@ it("keeps runs scoped to the selected project and environment when switching the
     .toBeVisible();
 });
 
+it("opens failed run output without a report and lets it be collapsed", async () => {
+  dashboardFixture();
+  const run = state.runs["family-web"]!;
+  const failure: QaRun = {
+    ...run,
+    summary: null,
+    outputTail: "Cannot connect to the Docker daemon",
+    note: "No valid JUnit report was produced.",
+  };
+  state.runs[run.id] = failure;
+  state.snapshots.alpha = {
+    ...state.snapshots.alpha!,
+    latestRuns: state.snapshots.alpha!.latestRuns.map((item) =>
+      item.id === run.id ? failure : item,
+    ),
+  };
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  const suite = screen.getByRole("region", { name: run.suite.name, exact: true });
+  await expect.element(suite.getByText(failure.outputTail!, { exact: true })).toBeVisible();
+  await suite.getByRole("button", { name: "View run", exact: true }).click();
+  const details = screen.getByRole("region", { name: "Run details", exact: true });
+  const output = details.getByText(`${run.id}: ${run.suite.name}: captured output`, {
+    exact: true,
+  });
+  await expect.element(output).toBeVisible();
+  await details.getByText("Run output", { exact: true }).click();
+  await expect.element(output).not.toBeVisible();
+});
+
 it("manages recurring runs and imports CI results in the selected environment", async () => {
   setup();
   await using screen = await render(

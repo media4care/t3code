@@ -300,8 +300,10 @@ function RunDetails({
     serverEnvironment.qaDetails({ environmentId, input: { projectId, runId } }),
   );
   const [showReport, setShowReport] = useState(false);
-  const [showOutput, setShowOutput] = useState(false);
+  const [outputExpanded, setOutputExpanded] = useState<boolean | null>(null);
   const data = query.data;
+  const showOutput =
+    outputExpanded ?? (data?.run.status === "failed" || data?.run.status === "incomplete");
   return (
     <View className="gap-3 rounded-2xl border border-border-subtle p-4">
       <Text className="text-lg font-t3-semibold">{data?.run.suite.name ?? "Run details"}</Text>
@@ -318,19 +320,12 @@ function RunDetails({
             {"\n"}
             {data.run.branch ?? "No branch"} · {data.run.commit ?? "Unknown revision"}
             {data.run.dirty ? " + changes" : ""}
+            {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
           </Text>
-          {data.run.note ? <Text>{data.run.note}</Text> : null}
-          {supportsTests ? (
-            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
-          ) : (
-            <Text className="text-sm text-foreground-muted">
-              Update this environment’s server to view individual test results.
-            </Text>
-          )}
           <Button
             label={showOutput ? "Hide output" : "Run output"}
             tone="text"
-            onPress={() => setShowOutput(!showOutput)}
+            onPress={() => setOutputExpanded(!showOutput)}
           />
           {showOutput ? (
             <>
@@ -342,12 +337,23 @@ function RunDetails({
               <View className="max-h-80">
                 <ScrollView nestedScrollEnabled>
                   <Text selectable className="font-mono text-xs">
-                    {data.output || "No output captured yet. Refresh to see progress."}
+                    {data.output ||
+                      (data.run.status === "running"
+                        ? "No output captured yet. Refresh to see progress."
+                        : "No output captured.")}
                   </Text>
                 </ScrollView>
               </View>
             </>
           ) : null}
+          {data.run.note ? <Text>{data.run.note}</Text> : null}
+          {supportsTests ? (
+            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
+          ) : (
+            <Text className="text-sm text-foreground-muted">
+              Update this environment’s server to view individual test results.
+            </Text>
+          )}
           {data.reportXml ? (
             <Button
               label={showReport ? "Hide JUnit report" : "View JUnit report"}

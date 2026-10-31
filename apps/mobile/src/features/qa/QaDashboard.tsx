@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Pressable, View, type TextInputInstance } from "react-native";
+import { Pressable, ScrollView, View, type TextInputInstance } from "react-native";
 import {
   QA_FILTER_OPTIONS,
   QA_GROUP_OPTIONS,
@@ -273,6 +273,23 @@ function SuiteCard({
         {showComponent ? <Text className="text-xs text-foreground-muted">{component}</Text> : null}
       </View>
       <Text className="font-t3-semibold text-base">{suite.name}</Text>
+      {run?.outputTail ? (
+        <View className="gap-2 rounded-lg bg-danger p-3">
+          <Text className="font-t3-semibold text-xs text-danger-foreground">
+            Failure output{run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
+          </Text>
+          <View className="max-h-40">
+            <ScrollView nestedScrollEnabled>
+              <Text selectable className="font-mono text-xs">
+                {run.outputTail}
+              </Text>
+            </ScrollView>
+          </View>
+          <Text className="text-xs text-foreground-muted">
+            Recent output. Open the run for more.
+          </Text>
+        </View>
+      ) : null}
       <Text
         className={`text-sm ${run?.status === "failed" ? "text-danger-foreground" : RESULTS[category].color}`}
       >
