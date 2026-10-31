@@ -85,6 +85,8 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
               defaultModelSelection: null,
               defaultThreadEnvMode: null,
               autoPull: false,
+              pinnedAt: null,
+              archivedAt: null,
               faviconPath: null,
               projectIcon: null,
               scripts: [],
