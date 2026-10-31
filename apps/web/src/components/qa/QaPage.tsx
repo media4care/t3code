@@ -18,6 +18,7 @@ import {
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  QA_SHARED_RESULTS_NOTICE,
   type QaGrouping,
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
@@ -184,6 +185,14 @@ function ProjectQa({
       {snapshot?.configurationError ? (
         <p role="alert" className="text-sm text-destructive-foreground">
           {snapshot.configurationError}
+        </p>
+      ) : null}
+      {snapshot?.sharedResults?.enabled ? (
+        <p className="text-sm text-muted-foreground">{QA_SHARED_RESULTS_NOTICE}</p>
+      ) : null}
+      {snapshot?.sharedResults?.warning ? (
+        <p role="alert" className="text-sm text-destructive-foreground">
+          {snapshot.sharedResults.warning}
         </p>
       ) : null}
       {snapshot?.batchError ? (
@@ -510,7 +519,11 @@ function RunDetails({
             </span>
           </div>
           <p className="mt-3 text-sm text-muted-foreground">{qaRunSource(data.run)}</p>
-          {data.run.source?.type !== "ci" ? (
+          {data.run.repositoryFile ? (
+            <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
+              {data.run.repositoryFile}
+            </p>
+          ) : data.run.source?.type !== "ci" ? (
             <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
               {data.run.cwd}
               <br />

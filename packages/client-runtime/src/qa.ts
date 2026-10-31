@@ -35,12 +35,17 @@ export function qaScheduleLabel(configuration: QaScheduleConfiguration) {
 }
 
 export function qaRunSource(run: QaRun) {
-  return run.source?.type === "ci"
-    ? `${run.source.provider} · ${run.source.environment}`
-    : run.source?.type === "schedule"
-      ? "Scheduled"
-      : "Manual";
+  return run.repositoryFile
+    ? "Repository result"
+    : run.source?.type === "ci"
+      ? `${run.source.provider} · ${run.source.environment}`
+      : run.source?.type === "schedule"
+        ? "Scheduled"
+        : "Manual";
 }
+
+export const QA_SHARED_RESULTS_NOTICE =
+  "Run summaries are saved in t3.qa-results/. Commit and share these files with your changes so other checkouts can reuse matching results. Full logs and reports stay on the execution environment.";
 
 export function qaDefaultSchedule(branch: string): QaScheduleConfiguration {
   return {

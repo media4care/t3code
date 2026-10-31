@@ -40,7 +40,14 @@ import * as NodeUtil from "node:util";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { parseJunitReport } from "./junit.ts";
-import { InputEvidence, makeInputCapture, assessFreshness, changedInputs } from "./inputs.ts";
+import {
+  InputEvidence,
+  makeInputCapture,
+  assessFreshness,
+  changedInputs,
+  SHARED_RESULTS_DIRECTORY,
+} from "./inputs.ts";
+import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   nextScheduledRunAt,
@@ -101,6 +108,7 @@ const make = Effect.gen(function* () {
   const updates = yield* PubSub.sliding<string>(128);
   const lock = yield* Semaphore.make(1);
   const captureInputs = yield* makeInputCapture;
+  const sharedResults = yield* makeSharedResults;
   const batches = new Map<
     string,
     {
@@ -120,6 +128,7 @@ const make = Effect.gen(function* () {
       cancelled: boolean;
       root: string;
       evidence: InputEvidence;
+      shareResult: boolean;
       fiber?: Fiber.Fiber<void, QaError>;
     }
   >();
@@ -158,7 +167,7 @@ const make = Effect.gen(function* () {
             error.reason._tag === "NotFound" ? Effect.succeed("{}") : Effect.fail(error),
         }),
       );
-      return (yield* decodeConfig(contents)).qa?.suites ?? [];
+      return (yield* decodeConfig(contents)).qa ?? { suites: [] };
     },
     Effect.mapError((cause) => new QaError({ reason: "configuration", cause })),
   );
@@ -188,43 +197,75 @@ const make = Effect.gen(function* () {
       FROM qa_runs WHERE project_id = ${input.projectId} AND json_extract(run_json, '$.source.type') = 'ci'
     ) WHERE ordinal = 1 LIMIT 100`;
     const lastPassed = new Map(passed.map((row) => [row.suite_id, row.finished_at]));
-    const suites = config._tag === "Success" ? config.success : [];
+    const suites = config._tag === "Success" ? config.success.suites : [];
+    const sharing = config._tag === "Success" && config.success.sharedResults === true;
+    const shared = sharing
+      ? yield* sharedResults.read(root, suites, input.projectId)
+      : { records: new Map<string, { run: QaRun; fingerprint: string | null }>(), warning: null };
     const current = yield* captureInputs(root, suites);
     const latestRuns = yield* Effect.forEach(latest, (row) =>
       decodeRun(row.run_json).pipe(Effect.map((run) => withOutputTail(run, row.output_tail))),
     );
-    const evidence = new Map<string, InputEvidence>();
+    const evidence = new Map<string, InputEvidence | { fingerprint: string | null }>();
     for (const row of latest) {
       if (row.evidence_json) {
         const value = yield* decodeEvidence(row.evidence_json);
         evidence.set((yield* decodeRun(row.run_json)).suite.id, value);
       }
     }
+    for (const { run, fingerprint } of shared.records.values()) {
+      if (
+        run.status === "passed" &&
+        run.finishedAt &&
+        run.finishedAt > (lastPassed.get(run.suite.id) ?? "")
+      )
+        lastPassed.set(run.suite.id, run.finishedAt);
+      const index = latestRuns.findIndex((local) => local.suite.id === run.suite.id);
+      const local = latestRuns[index];
+      if (
+        local &&
+        (local.status === "running" || Date.parse(local.startedAt) >= Date.parse(run.startedAt))
+      )
+        continue;
+      if (index === -1) latestRuns.push(run);
+      else latestRuns[index] = run;
+      evidence.set(run.suite.id, { fingerprint });
+    }
+    const recentRuns = yield* Effect.forEach(recent, (row) =>
+      decodeRun(row.run_json).pipe(Effect.map((run) => withOutputTail(run, row.output_tail))),
+    );
+    for (const { run } of shared.records.values())
+      if (!recentRuns.some((local) => local.id === run.id)) recentRuns.push(run);
+    recentRuns.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
     const checkedAt = yield* now;
     return {
       workspaceRoot: root,
       configurationError: config._tag === "Failure" ? config.failure.message : null,
       suites,
       latestRuns,
-      recentRuns: yield* Effect.forEach(recent, (row) =>
-        decodeRun(row.run_json).pipe(Effect.map((run) => withOutputTail(run, row.output_tail))),
-      ),
+      recentRuns: recentRuns.slice(0, 50),
+      sharedResults: { enabled: sharing, warning: shared.warning },
       checkedAt,
-      freshness: suites.flatMap((suite) => {
-        const inputs = current.get(suite.id);
-        return inputs
-          ? [
-              assessFreshness(
-                suite,
-                latestRuns.find((run) => run.suite.id === suite.id),
-                evidence.get(suite.id),
-                inputs,
-                checkedAt,
-                lastPassed.get(suite.id) ?? null,
-              ),
-            ]
-          : [];
-      }),
+      freshness: yield* Effect.forEach(suites, (suite) =>
+        Effect.gen(function* () {
+          const inputs = current.get(suite.id);
+          if (!inputs) return yield* new QaError({ reason: "storage" });
+          const before = evidence.get(suite.id);
+          return assessFreshness(
+            suite,
+            latestRuns.find((run) => run.suite.id === suite.id),
+            before,
+            {
+              ...inputs,
+              ...(before && "fingerprint" in before
+                ? { fingerprint: yield* sharedResults.fingerprint(inputs) }
+                : {}),
+            },
+            checkedAt,
+            lastPassed.get(suite.id) ?? null,
+          );
+        }),
+      ),
       queuedSuiteIds: [...(batches.get(input.projectId)?.pending ?? [])],
       batchError: batchErrors.get(input.projectId) ?? null,
       batchRunning: batches.has(input.projectId),
@@ -245,7 +286,26 @@ const make = Effect.gen(function* () {
       report_xml: string | null;
     }>`
       SELECT run_json, output, output_truncated, report_xml FROM qa_runs WHERE id = ${input.runId} AND project_id = ${input.projectId}`;
-    if (!rows[0]) return yield* new QaError({ reason: "run-not-found" });
+    if (!rows[0]) {
+      const root = yield* workspace(input).pipe(
+        Effect.mapError((error) =>
+          error.reason === "project-not-found" ? new QaError({ reason: "run-not-found" }) : error,
+        ),
+      );
+      const config = yield* catalog(root);
+      if (config.sharedResults) {
+        const shared = yield* sharedResults.read(root, config.suites, input.projectId);
+        const result = [...shared.records.values()].find(({ run }) => run.id === input.runId);
+        if (result)
+          return {
+            run: result.run,
+            output: SHARED_RESULT_DETAILS,
+            outputTruncated: false,
+            reportXml: null,
+          };
+      }
+      return yield* new QaError({ reason: "run-not-found" });
+    }
     return {
       run: withOutputTail(yield* decodeRun(rows[0].run_json), rows[0].output),
       output: rows[0].output,
@@ -261,8 +321,9 @@ const make = Effect.gen(function* () {
     if (reportXml === null)
       return {
         ...empty,
-        unavailableReason:
-          run.status === "running"
+        unavailableReason: run.repositoryFile
+          ? SHARED_RESULT_DETAILS
+          : run.status === "running"
             ? "Individual results will appear when this run produces its report."
             : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
       };
@@ -386,9 +447,11 @@ const make = Effect.gen(function* () {
         reportXml,
         run: { ...run, exitCode, status, summary, note },
       };
-      const configured = (yield* catalog(entry.root).pipe(Effect.orElseSucceed(() => []))).find(
-        (suite) => suite.id === run.suite.id,
+      const config = yield* catalog(entry.root).pipe(
+        Effect.orElseSucceed(() => ({ suites: [], sharedResults: false })),
       );
+      entry.shareResult = entry.shareResult && config.sharedResults === true;
+      const configured = config.suites.find((suite) => suite.id === run.suite.id);
       const after = configured
         ? (yield* captureInputs(entry.root, [configured])).get(run.suite.id)
         : undefined;
@@ -439,6 +502,24 @@ const make = Effect.gen(function* () {
               ...entry.details,
               run: { ...entry.details.run, finishedAt: yield* now },
             };
+            if (entry.shareResult && Exit.isSuccess(exit)) {
+              const saved = yield* sharedResults
+                .write(entry.root, entry.details.run, entry.evidence)
+                .pipe(Effect.result);
+              if (saved._tag === "Failure")
+                entry.details = {
+                  ...entry.details,
+                  run: {
+                    ...entry.details.run,
+                    note: [
+                      entry.details.run.note,
+                      "The run finished, but its repository summary could not be saved. Check t3.qa-results/.",
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                  },
+                };
+            }
             yield* sql
               .withTransaction(
                 Effect.gen(function* () {
@@ -461,7 +542,8 @@ const make = Effect.gen(function* () {
     input: QaStartInput & { expectedBranch?: string },
   ) {
     const root = yield* workspace(input);
-    const suite = (yield* catalog(root)).find((candidate) => candidate.id === input.suiteId);
+    const config = yield* catalog(root);
+    const suite = config.suites.find((candidate) => candidate.id === input.suiteId);
     if (!suite) return yield* new QaError({ reason: "suite-not-found" });
     if ([...active.values()].some((entry) => entry.details.run.projectId === input.projectId))
       return yield* new QaError({ reason: "busy" });
@@ -475,7 +557,7 @@ const make = Effect.gen(function* () {
       [
         git(root, ["rev-parse", "HEAD"]),
         git(root, ["branch", "--show-current"]),
-        git(root, ["status", "--porcelain"]),
+        git(root, ["status", "--porcelain", "--", ".", `:(exclude)${SHARED_RESULTS_DIRECTORY}`]),
       ],
       { concurrency: "unbounded" },
     );
@@ -510,6 +592,7 @@ const make = Effect.gen(function* () {
       cancelled: false,
       root,
       evidence,
+      shareResult: config.sharedResults === true,
     };
     active.set(run.id, entry);
     entry.fiber = yield* execute(entry).pipe(
@@ -630,7 +713,7 @@ const make = Effect.gen(function* () {
         yield* sql`DELETE FROM qa_schedules WHERE project_id = ${input.projectId}`;
       } else {
         const configuration = input.configuration;
-        const suites = configuration.enabled ? yield* catalog(root) : [];
+        const suites = configuration.enabled ? (yield* catalog(root)).suites : [];
         const next = nextDue(configuration, yield* DateTime.now);
         const target = configuration.target;
         if (
@@ -784,7 +867,7 @@ const make = Effect.gen(function* () {
     function* (input: QaImportInput) {
       const root = yield* workspace(input);
       const report = input.report;
-      const suite = (yield* catalog(root)).find((item) => item.id === report.suiteId);
+      const suite = (yield* catalog(root)).suites.find((item) => item.id === report.suiteId);
       if (!suite) return yield* new QaError({ reason: "suite-not-found" });
       const timestamp = yield* now;
       const started = Date.parse(report.startedAt);

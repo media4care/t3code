@@ -19,6 +19,7 @@ import type { QaRun, QaTestKind } from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
   qaRunDuration,
+  qaRunSource,
   qaStatusLabel,
   qaFreshnessLabel,
   type QaDashboardEntry,
@@ -338,6 +339,7 @@ function SuiteCard({
           )}
         </span>
         {run ? <span>{qaRunDuration(run)}</span> : null}
+        {run?.repositoryFile ? <span>{qaRunSource(run)}</span> : null}
       </div>
       {run?.summary ? (
         <div className="mt-4 flex flex-wrap gap-4 rounded-lg bg-muted/40 px-3 py-2 text-xs">
@@ -378,7 +380,7 @@ function SuiteCard({
       <div className="mt-auto flex justify-end gap-2 pt-4">
         {run ? (
           <Button variant="ghost" size="sm" onClick={() => onView(run.id)}>
-            {run.summary ? `View tests (${run.summary.tests})` : "View run"}
+            {run.summary && !run.repositoryFile ? `View tests (${run.summary.tests})` : "View run"}
           </Button>
         ) : null}
         {run?.status === "running" ? (

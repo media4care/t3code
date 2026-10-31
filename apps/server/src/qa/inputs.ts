@@ -23,6 +23,7 @@ export const InputEvidence = Schema.Struct({
   stable: Schema.Boolean,
 });
 export type InputEvidence = typeof InputEvidence.Type;
+export const SHARED_RESULTS_DIRECTORY = "t3.qa-results";
 
 const ROOT_INPUTS = [
   ...INSTALL_INPUTS,
@@ -115,7 +116,13 @@ export const makeInputCapture = Effect.gen(function* () {
               item._tag === "Success"
                 ? item.success.stdout
                     .split("\0")
-                    .filter((name) => name && (index === 0 || !name.endsWith("/")))
+                    .filter(
+                      (name) =>
+                        name &&
+                        name !== SHARED_RESULTS_DIRECTORY &&
+                        !name.startsWith(`${SHARED_RESULTS_DIRECTORY}/`) &&
+                        (index === 0 || !name.endsWith("/")),
+                    )
                 : [],
             ),
           ),
@@ -194,6 +201,11 @@ export const makeInputCapture = Effect.gen(function* () {
             : { hash: "", problem: `Input could not be inspected: ${name}` };
         const real = yield* fs.realPath(filename);
         const target = path.relative(root, real).split(path.sep).join("/");
+        if (
+          target === SHARED_RESULTS_DIRECTORY ||
+          target.startsWith(`${SHARED_RESULTS_DIRECTORY}/`)
+        )
+          return { hash: "", problem: "Repository QA summaries cannot be used as test inputs." };
         if (target === ".." || target.startsWith("../") || path.isAbsolute(target))
           return { hash: "", problem: `Linked input is outside the project: ${name}` };
         const before = inspected.success;
@@ -336,8 +348,8 @@ export function changedInputs(before: InputEvidence, after: InputEvidence) {
 export function assessFreshness(
   suite: QaSuite,
   run: QaRun | undefined,
-  before: InputEvidence | undefined,
-  current: InputEvidence,
+  before: InputEvidence | { fingerprint: string | null } | undefined,
+  current: InputEvidence & { fingerprint?: string },
   checkedAt: string,
   lastPassedAt: string | null,
 ): QaFreshness {
@@ -363,24 +375,34 @@ export function assessFreshness(
       "unknown",
       "This run predates input tracking. Run the suite to record its inputs.",
     );
-  if (before.problem) return result("unknown", before.problem);
-  if (before.configuration !== current.configuration)
-    return result(
-      "stale",
-      "The command, working directory, report, or input configuration changed.",
-    );
-  const changes = changedInputs(before, current);
-  if (changes.length)
-    return result(
-      "stale",
-      `${changes.length} input ${changes.length === 1 ? "file changed" : "files changed"} since this run.`,
-      changes,
-    );
-  if (!before.stable)
-    return result(
-      "unknown",
-      "Inputs changed during this run, or could not be verified when it finished.",
-    );
+  if ("fingerprint" in before) {
+    if (!before.fingerprint)
+      return result("unknown", "The repository result has no verified, stable input fingerprint.");
+    if (before.fingerprint !== current.fingerprint)
+      return result(
+        "stale",
+        "Test inputs or suite configuration differ from the repository result. Compared inputs include ignored environment files and lockfiles.",
+      );
+  } else {
+    if (before.problem) return result("unknown", before.problem);
+    if (before.configuration !== current.configuration)
+      return result(
+        "stale",
+        "The command, working directory, report, or input configuration changed.",
+      );
+    const changes = changedInputs(before, current);
+    if (changes.length)
+      return result(
+        "stale",
+        `${changes.length} input ${changes.length === 1 ? "file changed" : "files changed"} since this run.`,
+        changes,
+      );
+    if (!before.stable)
+      return result(
+        "unknown",
+        "Inputs changed during this run, or could not be verified when it finished.",
+      );
+  }
   if (
     suite.maxAgeHours &&
     Date.parse(checkedAt) - Date.parse(run.startedAt) >= suite.maxAgeHours * 3600000
@@ -389,7 +411,9 @@ export function assessFreshness(
   return result(
     "current",
     run.status === "passed"
-      ? "Configured inputs match this run."
+      ? run.repositoryFile
+        ? "Configured inputs match this repository result."
+        : "Configured inputs match this run."
       : "Configured inputs match, but the last run did not pass.",
   );
 }
