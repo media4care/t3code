@@ -94,7 +94,6 @@ export function AgentMapCard({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-medium">{metadata.model}</span>
-          <span className="block truncate text-2xs text-muted-foreground">{metadata.provider}</span>
         </span>
         <span className="shrink-0 text-2xs text-muted-foreground">
           <AgentElapsed agent={node.agent} compact />
