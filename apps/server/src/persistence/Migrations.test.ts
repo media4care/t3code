@@ -6,8 +6,31 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
+import Insights from "./Migrations/077_Insights.ts";
+import QaRuns from "./Migrations/078_QaRuns.ts";
+import QaInputs from "./Migrations/079_QaInputs.ts";
+import QaAutomation from "./Migrations/080_QaAutomation.ts";
+
+const seedExplorer = Effect.fn("test.seedExplorer")(function* (throughId: number) {
+  yield* runMigrations({ toMigrationInclusive: 72 });
+  yield* Migrator.make({})({
+    loader: Migrator.fromRecord(
+      Object.fromEntries(
+        (
+          [
+            ["73_Insights", Insights],
+            ["74_QaRuns", QaRuns],
+            ["75_QaInputs", QaInputs],
+            ["76_QaAutomation", QaAutomation],
+          ] as const
+        ).filter(([name]) => Number(String(name).slice(0, 2)) <= throughId),
+      ),
+    ),
+  });
+});
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
 const newerMigrationId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
@@ -29,6 +52,75 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect.each([73, 74, 75, 76])(
+    "preserves Explorer data when upgrading legacy migration %s",
+    (lastId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedExplorer(lastId);
+        yield* sql`INSERT INTO insights_reports VALUES ('report', 'thread', 'completed', '2026-10-30', 42, '{"recommendations":["keep"]}')`;
+        yield* sql`UPDATE effect_sql_migrations SET created_at = '2026-10-30 00:00:00' WHERE migration_id >= 73`;
+        if (lastId >= 74)
+          yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, output) VALUES ('run', 'project', 'suite', '2026-10-30', 'passed', '{}', 'saved output')`;
+        if (lastId >= 75) yield* sql`INSERT INTO qa_run_inputs VALUES ('run', '{"hash":"saved"}')`;
+        if (lastId >= 76)
+          yield* sql`INSERT INTO qa_schedules VALUES ('project', '{"enabled":true}')`;
+        const tables = [
+          "insights_reports",
+          ...(lastId >= 74 ? ["qa_runs"] : []),
+          ...(lastId >= 75 ? ["qa_run_inputs"] : []),
+          ...(lastId >= 76 ? ["qa_schedules"] : []),
+        ];
+        const before = yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`);
+        yield* runMigrations();
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.deepStrictEqual(
+          yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`),
+          before,
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 77`,
+          [{ created_at: "2026-10-30 00:00:00" }],
+        );
+        const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
+        assert.ok(columns.some((column) => column.name === "pinned_at"));
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("rolls back an Explorer upgrade if an upstream migration fails", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedExplorer(76);
+      const before = yield* history;
+      yield* sql`CREATE TRIGGER fail_explorer_upgrade BEFORE INSERT ON effect_sql_migrations WHEN NEW.name = 'ProjectionProjectsPinArchive' BEGIN SELECT RAISE(FAIL, 'injected failure'); END`;
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(runMigrations())));
+      assert.deepStrictEqual(yield* history, before);
+      const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
+      assert.isFalse(columns.some((column) => column.name === "pinned_at"));
+      yield* sql`DROP TRIGGER fail_explorer_upgrade`;
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* history, migrationManifest);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect.each(["gap", "unknown"])("refuses an Explorer history with a %s", (problem) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedExplorer(76);
+      if (problem === "gap") {
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 74`;
+      } else {
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (77, 'UnknownMigration')`;
+      }
+      const before = yield* history;
+      const exit = yield* Effect.exit(runMigrations());
+      assert.isTrue(Exit.isFailure(exit));
+      assert.include(String(exit), "Cannot upgrade Explorer with unexpected later migrations");
+      assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("refuses to start when another migration took a V2 id", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -69,10 +161,13 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("upgrades a database at exactly 54", () =>
+  it.effect.each([54, 76])("upgrades a database at exactly %s", (id) =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
+      yield* runMigrations({ toMigrationInclusive: id });
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([next]) => next > id),
+      );
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

@@ -1,7 +1,7 @@
-import InsightsMigration from "./Migrations/073_Insights.ts";
-import QaRunsMigration from "./Migrations/074_QaRuns.ts";
-import QaInputsMigration from "./Migrations/075_QaInputs.ts";
-import QaAutomationMigration from "./Migrations/076_QaAutomation.ts";
+import InsightsMigration from "./Migrations/077_Insights.ts";
+import QaRunsMigration from "./Migrations/078_QaRuns.ts";
+import QaInputsMigration from "./Migrations/079_QaInputs.ts";
+import QaAutomationMigration from "./Migrations/080_QaAutomation.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -216,6 +216,53 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 
 const run = Migrator.make({});
 
+// Explorer shipped ids 73-76 before upstream used them; preserve its tables and timestamps.
+const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables =
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
+      if (tables.length === 0) return [];
+      const history = yield* sql<{
+        migration_id: number;
+        name: string;
+      }>`SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 73 ORDER BY migration_id`;
+      if (!history.some((row) => row.migration_id === 73 && row.name === "Insights")) return [];
+      const names = ["Insights", "QaRuns", "QaInputs", "QaAutomation"];
+      if (
+        !history.every((row, index) => row.migration_id === 73 + index && row.name === names[index])
+      ) {
+        return yield* new Migrator.MigrationError({
+          kind: "BadState",
+          message: "Cannot upgrade Explorer with unexpected later migrations.",
+        });
+      }
+      yield* assertV2MigrationsCanRun(72);
+      for (const row of history) {
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + 4} WHERE migration_id = ${row.migration_id}`;
+      }
+      const executed: Array<readonly [number, string]> = [];
+      for (const [id, name, migration] of migrationEntries) {
+        if (id !== 73 && id !== 74 && id !== 75 && id !== 76) continue;
+        yield* migration.pipe(
+          Effect.mapError(
+            (cause) =>
+              new Migrator.MigrationError({
+                cause,
+                kind: "Failed",
+                message: `Migration "${id}_${name}" failed`,
+              }),
+          ),
+        );
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+        executed.push([id, name]);
+      }
+      return executed;
+    }),
+  );
+});
+
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
@@ -226,11 +273,16 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  const explorerMigrations =
+    toMigrationInclusive === undefined || toMigrationInclusive >= 76
+      ? yield* reconcileExplorerMigrations()
+      : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
     ...previewMigrations,
+    ...explorerMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
