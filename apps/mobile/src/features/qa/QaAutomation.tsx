@@ -129,6 +129,7 @@ export function QaAutomation({
           <View className="flex-row flex-wrap gap-2">
             <Button
               label={schedule ? "Edit schedule" : "Add schedule"}
+              icon={schedule ? "pencil" : "calendar.badge.clock"}
               disabled={!connected || !canSchedule || busy}
               onPress={() => setEditing(true)}
             />
@@ -136,6 +137,7 @@ export function QaAutomation({
               <>
                 <Button
                   label={schedule.configuration.enabled ? "Pause schedule" : "Resume schedule"}
+                  icon={schedule.configuration.enabled ? "pause" : "play"}
                   disabled={!connected || !canSchedule || busy}
                   onPress={() => {
                     void configure({
@@ -146,6 +148,7 @@ export function QaAutomation({
                 />
                 <Button
                   label="Remove schedule"
+                  icon="trash"
                   tone="text"
                   disabled={!connected || !canSchedule || busy}
                   onPress={() => {
@@ -192,6 +195,7 @@ export function QaAutomation({
         )}
         <Button
           label={importing ? "Close import" : "Import CI report"}
+          icon={importing ? "xmark" : "arrow.down.circle"}
           tone="text"
           onPress={() => setImporting(!importing)}
         />
@@ -210,6 +214,7 @@ export function QaAutomation({
             />
             <Button
               label="Import result"
+              icon="checkmark"
               disabled={!connected || !canImport || busy || !report.trim()}
               onPress={() => {
                 void submit();
@@ -359,12 +364,13 @@ function ScheduleEditor({
       <View className="flex-row gap-2">
         <Button
           label="Save schedule"
+          icon="checkmark"
           disabled={disabled}
           onPress={() => {
             void onSave(value);
           }}
         />
-        <Button label="Cancel" tone="text" onPress={onCancel} />
+        <Button label="Cancel" icon="xmark" tone="text" onPress={onCancel} />
       </View>
     </View>
   );
