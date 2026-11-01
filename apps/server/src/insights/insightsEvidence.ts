@@ -16,6 +16,12 @@ export function emptyInsightsMetrics(): InsightsMetrics {
   };
 }
 
+export function addInsightsMetrics(total: InsightsMetrics, next: InsightsMetrics): InsightsMetrics {
+  const sum = { ...total };
+  for (const key of Object.keys(sum) as Array<keyof InsightsMetrics>) sum[key] += next[key];
+  return sum;
+}
+
 export function insightKey(key: string): string {
   return key
     .trim()

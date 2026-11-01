@@ -1082,6 +1082,12 @@ it.effect("hides tools for links and refuses another environment while the beta 
           failure: OrchestratorMcpFailure,
           failureMode: "return",
         }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
+        Tool.make("forLinks", {
+          description: "Answers a linked environment.",
+          success: Schema.Struct({ ok: Schema.Boolean }),
+          failure: OrchestratorMcpFailure,
+          failureMode: "return",
+        }).annotate(McpSchema.EnabledWhen, McpInvocationContext.onlyForLinks),
         Tool.make("where", {
           description: "Says where it ran.",
           parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
@@ -1097,6 +1103,7 @@ it.effect("hides tools for links and refuses another environment while the beta 
           LinksToolkit,
           McpToolAccess.toLayer(LinksToolkit, {
             links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
+            forLinks: McpToolAccess.reads(() => Effect.succeed({ ok: true })),
             where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
           }),
         ),

@@ -95,3 +95,30 @@ it("acts at an administrator's ceiling for a client approved above it", () => {
   expect(modes(scope("auto-accept-edits"), "auto").runtimeMode).toBe("auto-accept-edits");
   expect(modes(scope("full-access")).runtimeMode).toBe("full-access");
 });
+
+it.effect("shows link-only tools to another environment's link and no other caller", () => {
+  const thread: McpInvocationContext.McpInvocationScope = {
+    environmentId: EnvironmentId.make("environment-1"),
+    requestNamespace: "provider-session-1",
+    thread: {
+      threadId: ThreadId.make("thread-1"),
+      providerSessionId: "provider-session-1",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    },
+    client: undefined,
+    capabilities: new Set(),
+    issuedAt: 1,
+  };
+  const client = { sessionId: "session-1", label: "Mac Studio", access: "read-only" as const };
+  const visibleTo = (scope: McpInvocationContext.McpInvocationScope) =>
+    Effect.sync(McpInvocationContext.onlyForLinks).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    );
+  return Effect.gen(function* () {
+    expect(yield* visibleTo(thread)).toBe(false);
+    expect(yield* visibleTo({ ...thread, thread: undefined, client })).toBe(false);
+    expect(
+      yield* visibleTo({ ...thread, thread: undefined, client: { ...client, linked: true } }),
+    ).toBe(true);
+  });
+});
