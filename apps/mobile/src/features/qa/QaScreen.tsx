@@ -13,10 +13,12 @@ import {
   QA_SHARED_RESULTS_NOTICE,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import { Menu } from "../../components/ui/Menu";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -35,33 +37,60 @@ export function QaScreen() {
     `${project.environmentId}:${project.id}`;
   const project = projects.find((item) => projectKey(item) === selection) ?? projects[0];
   const environment = environments.find((item) => item.environmentId === project?.environmentId);
+  const projectItems = projects.map((item) => ({
+    id: projectKey(item),
+    title: item.title,
+    subtitle: environments.find((e) => e.environmentId === item.environmentId)?.label,
+    selected: projectKey(item) === (project ? projectKey(project) : null),
+    onPress: () => setSelection(projectKey(item)),
+  }));
   return (
     <>
-      {Platform.OS === "ios" ? null : <AppBar title="QA" subtitle="Test suites and run history" />}
+      {Platform.OS === "ios" ? (
+        <NativeStackScreenOptions
+          optionsVersion={JSON.stringify(projectItems)}
+          options={{
+            unstable_headerRightItems: () =>
+              projectItems.length > 1
+                ? [
+                    withNativeGlassHeaderItem({
+                      accessibilityLabel: "QA project",
+                      icon: { name: "folder", type: "sfSymbol" },
+                      label: "",
+                      type: "menu",
+                      menu: {
+                        title: "QA project",
+                        items: projectItems.map((item) => ({
+                          type: "action" as const,
+                          label: item.title,
+                          description: item.subtitle,
+                          state: item.selected ? ("on" as const) : undefined,
+                          onPress: item.onPress,
+                        })),
+                      },
+                    }),
+                  ]
+                : [],
+          }}
+        />
+      ) : (
+        <AppBar
+          title="QA"
+          subtitle={project?.title ?? "Test suites and run history"}
+          menus={
+            projectItems.length > 1
+              ? [{ title: "QA project", icon: "folder", items: projectItems }]
+              : []
+          }
+        />
+      )}
       <ScreenContent>
-        <View className="px-4 py-2">
-          <Menu
-            actions={projects.map((item) => ({
-              id: projectKey(item),
-              title: `${item.title} · ${environments.find((e) => e.environmentId === item.environmentId)?.label ?? "Environment"}`,
-              state: projectKey(item) === (project ? projectKey(project) : null) ? "on" : "off",
-            }))}
-            onPressAction={({ nativeEvent }) => setSelection(nativeEvent.event)}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="QA project"
-              className="min-h-11 justify-center rounded-xl border border-border-subtle px-4 py-2"
-            >
-              <Text>{project?.title ?? "Select a project"} ▾</Text>
-            </Pressable>
-          </Menu>
-        </View>
         {project ? (
           <ProjectQa
             key={projectKey(project)}
             environmentId={project.environmentId}
             projectId={project.id}
+            projectTitle={project.title}
             connected={environment?.connection.phase === "connected"}
             environmentLabel={environment?.label ?? "Environment"}
           />
@@ -76,11 +105,13 @@ export function QaScreen() {
 function ProjectQa({
   environmentId,
   projectId,
+  projectTitle,
   connected,
   environmentLabel,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  projectTitle: string;
   connected: boolean;
   environmentLabel: string;
 }) {
@@ -130,20 +161,26 @@ function ProjectQa({
   return (
     <ScrollView
       ref={scroll}
+      contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
         padding: 16,
         paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0) + 24,
         gap: 16,
       }}
     >
-      <Text className="text-2xl font-t3-semibold">Test suites</Text>
-      <Text className="text-sm text-foreground-muted">
-        {environmentLabel}
-        {connected ? "" : " · Offline"}
-        {"\n"}
-        {snapshot?.workspaceRoot}
-      </Text>
-      <Button label="Refresh QA" onPress={query.refresh} disabled={!connected} />
+      <View className="gap-1">
+        <Text className="text-2xl font-t3-semibold">{projectTitle}</Text>
+        <Text className="text-sm text-foreground-muted">
+          {environmentLabel}
+          {connected ? "" : " · Offline"}
+        </Text>
+      </View>
+      <Button
+        label="Refresh QA"
+        icon="arrow.clockwise"
+        onPress={query.refresh}
+        disabled={!connected}
+      />
       {snapshot?.sharedResults?.enabled ? (
         <Text className="text-sm text-foreground-muted">{QA_SHARED_RESULTS_NOTICE}</Text>
       ) : null}
@@ -218,6 +255,7 @@ function ProjectQa({
               </Text>
               <Button
                 label="Stop queued run"
+                icon="stop.fill"
                 disabled={!connected || !stopPermission || busy}
                 onPress={() => {
                   setBusy(true);
@@ -230,6 +268,7 @@ function ProjectQa({
           ) : (
             <Button
               label={`Run affected suites (${affectedCount})`}
+              icon="play"
               disabled={!connected || !affectedPermission || busy || running || !affectedCount}
               onPress={() => {
                 setBusy(true);
@@ -259,6 +298,7 @@ function ProjectQa({
       {snapshot?.recentRuns.length ? (
         <Button
           label={showHistory ? "Hide recent runs" : "Recent runs · Latest 50"}
+          icon="clock"
           tone="text"
           onPress={() => setShowHistory(!showHistory)}
         />
@@ -309,35 +349,65 @@ function RunDetails({
     serverEnvironment.qaDetails({ environmentId, input: { projectId, runId } }),
   );
   const [showReport, setShowReport] = useState(false);
+  const [showCommand, setShowCommand] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState<boolean | null>(null);
   const data = query.data;
+  const running = data?.run.status === "running";
   const showOutput =
-    outputExpanded ?? (data?.run.status === "failed" || data?.run.status === "incomplete");
+    outputExpanded ??
+    (running ||
+      data?.run.status === "failed" ||
+      data?.run.status === "incomplete" ||
+      data?.run.status === "interrupted");
   return (
-    <View className="gap-3 rounded-2xl border border-border-subtle p-4">
+    <View
+      className={`gap-3 rounded-2xl border p-4 ${running ? "border-primary bg-update" : "border-border-subtle"}`}
+    >
       <Text className="text-lg font-t3-semibold">{data?.run.suite.name ?? "Run details"}</Text>
       {query.error ? <Text accessibilityRole="alert">{query.error}</Text> : null}
       {data ? (
         <>
-          <Text>
-            {qaStatusLabel(data.run)} · {qaRunSummary(data.run)} · {qaRunSource(data.run)}
-          </Text>
-          <Text selectable className="font-mono text-xs text-foreground-muted">
-            {data.run.repositoryFile
-              ? data.run.repositoryFile
-              : data.run.source?.type === "ci"
-                ? (data.run.source.url ?? "CI result")
-                : `${data.run.cwd}\n${data.run.suite.command}`}
-            {"\n"}
-            {data.run.branch ?? "No branch"} · {data.run.commit ?? "Unknown revision"}
+          {running ? (
+            <View className="flex-row items-center gap-2">
+              <AppActivityIndicator colorClassName="accent-update-foreground" />
+              <Text className="font-t3-semibold text-update-foreground">
+                Running since {new Date(data.run.startedAt).toLocaleTimeString()}
+              </Text>
+            </View>
+          ) : (
+            <Text>
+              {qaStatusLabel(data.run)} · {qaRunSummary(data.run)} · {qaRunDuration(data.run)}
+            </Text>
+          )}
+          <Text className="text-xs text-foreground-muted">
+            {qaRunSource(data.run)} · {data.run.branch ?? "No branch"} ·{" "}
+            {data.run.commit?.slice(0, 8) ?? "Unknown revision"}
             {data.run.dirty ? " + changes" : ""}
             {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
           </Text>
-          <Button
-            label={showOutput ? "Hide output" : "Run output"}
-            tone="text"
-            onPress={() => setOutputExpanded(!showOutput)}
-          />
+          <View className="flex-row flex-wrap gap-2">
+            <Button
+              label={showOutput ? "Hide output" : "Output"}
+              icon="terminal"
+              tone="text"
+              onPress={() => setOutputExpanded(!showOutput)}
+            />
+            <Button
+              label={showCommand ? "Hide command" : "Command"}
+              icon="chevron.left.forwardslash.chevron.right"
+              tone="text"
+              onPress={() => setShowCommand(!showCommand)}
+            />
+          </View>
+          {showCommand ? (
+            <Text selectable className="font-mono text-xs text-foreground-muted">
+              {data.run.repositoryFile
+                ? data.run.repositoryFile
+                : data.run.source?.type === "ci"
+                  ? (data.run.source.url ?? "CI result")
+                  : `${data.run.cwd}\n${data.run.suite.command}`}
+            </Text>
+          ) : null}
           {showOutput ? (
             <>
               {data.outputTruncated ? (
@@ -349,7 +419,7 @@ function RunDetails({
                 <ScrollView nestedScrollEnabled>
                   <Text selectable className="font-mono text-xs">
                     {data.output ||
-                      (data.run.status === "running"
+                      (running
                         ? "No output captured yet. Refresh to see progress."
                         : "No output captured.")}
                   </Text>
@@ -358,7 +428,7 @@ function RunDetails({
             </>
           ) : null}
           {data.run.note ? <Text>{data.run.note}</Text> : null}
-          {supportsTests ? (
+          {running || !data.run.summary ? null : supportsTests ? (
             <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
           ) : (
             <Text className="text-sm text-foreground-muted">
@@ -368,6 +438,7 @@ function RunDetails({
           {data.reportXml ? (
             <Button
               label={showReport ? "Hide JUnit report" : "View JUnit report"}
+              icon="doc.text"
               tone="text"
               onPress={() => setShowReport(!showReport)}
             />
@@ -386,8 +457,12 @@ function RunDetails({
         <Text>Loading run…</Text>
       )}
       <View className="flex-row flex-wrap gap-2">
-        <Button label="Refresh output" onPress={query.refresh} />
-        <Button label="Close" tone="text" onPress={onClose} />
+        <Button
+          label={running ? "Refresh progress" : "Refresh"}
+          icon="arrow.clockwise"
+          onPress={query.refresh}
+        />
+        <Button label="Close" icon="xmark" tone="text" onPress={onClose} />
       </View>
     </View>
   );

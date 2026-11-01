@@ -67,6 +67,7 @@ import IconFilterFilled from "@tabler/icons-react-native/IconFilterFilled";
 import IconFolder from "@tabler/icons-react-native/IconFolder";
 import IconFolderOpen from "@tabler/icons-react-native/IconFolderOpen";
 import IconHeadphones from "@tabler/icons-react-native/IconHeadphones";
+import IconFlask from "@tabler/icons-react-native/IconFlask";
 import IconFolderPlus from "@tabler/icons-react-native/IconFolderPlus";
 import IconGitPullRequestClosed from "@tabler/icons-react-native/IconGitPullRequestClosed";
 import IconGitPullRequestDraft from "@tabler/icons-react-native/IconGitPullRequestDraft";
@@ -104,8 +105,10 @@ import IconPlayerPause from "@tabler/icons-react-native/IconPlayerPause";
 import IconPlayerPlay from "@tabler/icons-react-native/IconPlayerPlay";
 import IconPlayerStopFilled from "@tabler/icons-react-native/IconPlayerStopFilled";
 import IconPlus from "@tabler/icons-react-native/IconPlus";
+import IconPuzzle from "@tabler/icons-react-native/IconPuzzle";
 import IconQrcode from "@tabler/icons-react-native/IconQrcode";
 import IconRefresh from "@tabler/icons-react-native/IconRefresh";
+import IconRoute from "@tabler/icons-react-native/IconRoute";
 import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconShare from "@tabler/icons-react-native/IconShare";
 import IconServer from "@tabler/icons-react-native/IconServer";
@@ -207,6 +210,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "exclamationmark.triangle": IconAlertTriangle,
   "exclamationmark.circle": IconAlertCircle,
   eye: IconEye,
+  flask: IconFlask,
   "eye.slash": IconEyeOff,
   folder: IconFolder,
   "folder.badge.plus": IconFolderPlus,
@@ -249,6 +253,8 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "slash.circle": IconBan,
   "qrcode.viewfinder": IconQrcode,
   "point.3.connected.trianglepath.dotted": IconNetwork,
+  "point.topleft.down.to.point.bottomright.curvepath": IconRoute,
+  puzzlepiece: IconPuzzle,
   "point.topleft.down.curvedto.point.bottomright.up": IconGitMerge,
   safari: IconExternalLink,
   "server.rack": IconServer,

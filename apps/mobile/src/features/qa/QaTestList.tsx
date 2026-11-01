@@ -118,6 +118,7 @@ export function QaTestList({
               {selection.search || selection.status !== "all" ? (
                 <Button
                   label="Clear test filters"
+                  icon="xmark"
                   tone="text"
                   onPress={() => setSelection({ search: "", status: "all", offset: 0 })}
                 />
@@ -126,6 +127,7 @@ export function QaTestList({
                 <View className="flex-row flex-wrap gap-2">
                   <Button
                     label="Previous tests"
+                    icon="chevron.left"
                     disabled={!selection.offset || query.isPending}
                     onPress={() =>
                       setSelection({
@@ -136,6 +138,7 @@ export function QaTestList({
                   />
                   <Button
                     label="Next tests"
+                    icon="chevron.right"
                     disabled={data.nextOffset === null || query.isPending}
                     onPress={() => {
                       if (data.nextOffset !== null)
