@@ -1,6 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ThreadId, type InsightStatus } from "@t3tools/contracts";
 import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  type InsightStatus,
+  type InsightsSettings,
+} from "@t3tools/contracts";
+import {
+  insightsLinkedEnvironments,
+  setLinkedInsightsProject,
   insightImplementationStatus,
   insightImplementationUrl,
   matchesInsightFilter,
@@ -53,5 +62,37 @@ describe("implementation tracking", () => {
     [null, null],
   ])("only links web change references: %s", (reference, expected) => {
     expect(insightImplementationUrl(reference)).toBe(expected);
+  });
+});
+
+describe("linked projects", () => {
+  const studio = EnvironmentId.make("studio");
+  const settings: InsightsSettings = {
+    enabled: true,
+    projectId: ProjectId.make("app"),
+    projectIds: [],
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+    timeOfDay: "09:00",
+    lookbackDays: 30,
+    maxRuns: 60,
+  };
+
+  it("adds and removes linked projects, dropping an environment once nothing is selected", () => {
+    const app2 = setLinkedInsightsProject(settings, studio, ProjectId.make("app2"), true);
+    const both = setLinkedInsightsProject(app2, studio, ProjectId.make("app3"), true);
+    expect(both.linkedProjects).toEqual([{ environmentId: studio, projectIds: ["app2", "app3"] }]);
+    const app3 = setLinkedInsightsProject(both, studio, ProjectId.make("app2"), false);
+    expect(app3.linkedProjects).toEqual([{ environmentId: studio, projectIds: ["app3"] }]);
+    expect(setLinkedInsightsProject(app3, studio, ProjectId.make("app3"), false)).toEqual(settings);
+    expect(setLinkedInsightsProject(both, studio, null, false)).toEqual(settings);
+  });
+
+  it("keeps an environment that is no longer linked visible so its selection can be removed", () => {
+    const gone = EnvironmentId.make("gone");
+    const selected = setLinkedInsightsProject(settings, gone, ProjectId.make("old"), true);
+    expect(insightsLinkedEnvironments(selected, new Map([[studio, "Mac Studio"]]))).toEqual([
+      { environmentId: studio, label: "Mac Studio", linked: true },
+      { environmentId: gone, label: "gone", linked: false },
+    ]);
   });
 });

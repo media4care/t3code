@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
   ProjectId,
@@ -38,6 +39,15 @@ export const InsightsSettings = Schema.Struct({
   timeOfDay: Schema.String.check(Schema.isPattern(/^([01]\d|2[0-3]):[0-5]\d$/)),
   lookbackDays: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 90 })),
   maxRuns: Schema.Int.check(Schema.isBetween({ minimum: 10, maximum: 200 })),
+  /** Projects in linked environments whose activity joins this environment's report. */
+  linkedProjects: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        environmentId: EnvironmentId,
+        projectIds: Schema.Array(ProjectId).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+      }),
+    ).check(Schema.isMaxLength(10)),
+  ),
 });
 export type InsightsSettings = typeof InsightsSettings.Type;
 
@@ -51,6 +61,8 @@ export const InsightEvidence = Schema.Struct({
   title: Schema.String,
   kind: Schema.Literals(["run", "message", "tool", "workflow", "attribution"]),
   text: Schema.String,
+  /** Set when the thread lives in a linked environment rather than the report's own. */
+  environmentId: Schema.optionalKey(EnvironmentId),
 });
 export type InsightEvidence = typeof InsightEvidence.Type;
 
@@ -113,6 +125,32 @@ export const InsightsMetrics = Schema.Struct({
 });
 export type InsightsMetrics = typeof InsightsMetrics.Type;
 
+export const InsightsProject = Schema.Struct({
+  projectId: ProjectId,
+  title: Schema.String,
+  workspaceRoot: Schema.String,
+});
+export type InsightsProject = typeof InsightsProject.Type;
+
+/** What a linked environment is asked for: activity in its projects after its own cursor. */
+export const InsightsEvidenceInput = Schema.Struct({
+  projectIds: Schema.Array(ProjectId).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  lookbackDays: InsightsSettings.fields.lookbackDays,
+  maxRuns: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })),
+  fromSequence: NonNegativeInt,
+  characterBudget: Schema.Int.check(Schema.isBetween({ minimum: 10000, maximum: 150000 })),
+});
+export type InsightsEvidenceInput = typeof InsightsEvidenceInput.Type;
+
+export const InsightsEvidenceResult = Schema.Struct({
+  projects: Schema.Array(InsightsProject),
+  metrics: InsightsMetrics,
+  evidence: Schema.Array(InsightEvidence),
+  throughSequence: NonNegativeInt,
+  hasMore: Schema.Boolean,
+});
+export type InsightsEvidenceResult = typeof InsightsEvidenceResult.Type;
+
 export const InsightsReport = Schema.Struct({
   id: Schema.String,
   threadId: ThreadId,
@@ -130,6 +168,20 @@ export const InsightsReport = Schema.Struct({
   throughSequence: NonNegativeInt,
   hasMore: Schema.Boolean,
   modelSelection: ModelSelection,
+  /** Linked environments this report covered, each with its own event cursor. */
+  linked: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        environmentId: EnvironmentId,
+        label: Schema.String,
+        scopeKey: Schema.String,
+        fromSequence: NonNegativeInt,
+        throughSequence: NonNegativeInt,
+        hasMore: Schema.Boolean,
+        projects: Schema.Array(InsightsProject),
+      }),
+    ),
+  ),
 });
 export type InsightsReport = typeof InsightsReport.Type;
 
@@ -210,7 +262,8 @@ export class InsightsError extends Schema.TaggedError<InsightsError>()("Insights
       analysis_running: "An Insights analysis is already running.",
       schedule: "The Insights schedule could not be updated or started.",
       launch: "The implementation thread could not be started.",
-      invalid_settings: "Choose an available project and a Codex Astra model with max effort.",
+      invalid_settings:
+        "Choose an available project and a Codex Astra model with max effort. Linked projects need Linked environments on and a link to their environment.",
     };
     return messages[this.reason];
   }

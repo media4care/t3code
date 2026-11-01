@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   InsightRecommendation,
   InsightsSettings,
   ProjectId,
@@ -39,6 +40,51 @@ export function defaultInsightsSettings(
         maxRuns: 60,
       }
     : null;
+}
+
+/** The linked environments a settings form shows: linked now, or still selected from before. */
+export function insightsLinkedEnvironments(
+  settings: InsightsSettings,
+  linked: ReadonlyMap<EnvironmentId, string>,
+): ReadonlyArray<{ environmentId: EnvironmentId; label: string; linked: boolean }> {
+  const selected = (settings.linkedProjects ?? []).map((entry) => entry.environmentId);
+  return [...new Set([...linked.keys(), ...selected])].map((environmentId) => ({
+    environmentId,
+    label: linked.get(environmentId) ?? environmentId,
+    linked: linked.has(environmentId),
+  }));
+}
+
+export function linkedInsightsProjectIds(
+  settings: InsightsSettings,
+  environmentId: EnvironmentId,
+): ReadonlyArray<ProjectId> {
+  return (
+    settings.linkedProjects?.find((entry) => entry.environmentId === environmentId)?.projectIds ??
+    []
+  );
+}
+
+/** Settings with `projectId` in `environmentId` included or not; empty environments drop out. */
+export function setLinkedInsightsProject(
+  settings: InsightsSettings,
+  environmentId: EnvironmentId,
+  projectId: ProjectId | null,
+  included: boolean,
+): InsightsSettings {
+  const current = linkedInsightsProjectIds(settings, environmentId);
+  const projectIds =
+    projectId === null
+      ? []
+      : included
+        ? [...new Set([...current, projectId])]
+        : current.filter((id) => id !== projectId);
+  const others = (settings.linkedProjects ?? []).filter(
+    (entry) => entry.environmentId !== environmentId,
+  );
+  const linkedProjects = projectIds.length ? [...others, { environmentId, projectIds }] : others;
+  const { linkedProjects: _previous, ...rest } = settings;
+  return linkedProjects.length ? { ...rest, linkedProjects } : rest;
 }
 
 export const INSIGHT_STATUS_LABELS = {

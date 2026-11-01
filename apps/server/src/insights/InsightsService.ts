@@ -1,6 +1,9 @@
 import {
   CommandId,
+  type EnvironmentId,
   InsightAttributionInput,
+  InsightsEvidenceInput,
+  InsightsEvidenceResult,
   InsightRecommendation,
   InsightUpdateInput,
   InsightsError,
@@ -13,6 +16,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   type InsightEvidence,
+  type InsightsProject,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -21,6 +25,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -30,11 +35,22 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import { emptyInsightsMetrics, evidenceExcerpt, insightKey } from "./insightsEvidence.ts";
+import {
+  addInsightsMetrics,
+  emptyInsightsMetrics,
+  evidenceExcerpt,
+  insightKey,
+} from "./insightsEvidence.ts";
 import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
 
 const TASK_ID = ScheduledTaskId.make("insights:daily");
+/** Excerpt characters one packet may carry, shared between this environment and linked ones. */
+const CHARACTER_BUDGET = 150000;
+/** Collect holds the Insights lock, so a linked environment that stops answering is skipped. */
+const LINKED_TIMEOUT = "2 minutes";
 const decodeSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(InsightsSettings));
 const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(InsightsReport));
 const decodeRecommendation = Schema.decodeUnknownEffect(
@@ -67,10 +83,16 @@ export class InsightsService extends Context.Service<
         report: InsightsReport;
         previousReports: ReadonlyArray<InsightsReport>;
         recommendations: ReadonlyArray<InsightRecommendation>;
-        projects: ReadonlyArray<{ projectId: ProjectId; title: string; workspaceRoot: string }>;
+        projects: ReadonlyArray<
+          InsightsProject & { environmentId?: EnvironmentId; environmentLabel?: string }
+        >;
       },
       InsightsError
     >;
+    /** This environment's share of a linked environment's analysis. */
+    readonly evidence: (
+      input: InsightsEvidenceInput,
+    ) => Effect.Effect<InsightsEvidenceResult, InsightsError>;
     readonly submit: (
       threadId: ThreadId,
       input: InsightsSubmitInput,
@@ -88,6 +110,8 @@ const make = Effect.gen(function* () {
   const launcher = yield* ThreadLaunch.ThreadLaunchService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providers = yield* ProviderRegistry.ProviderRegistry;
+  const links = yield* PeerLinks.PeerLinks;
+  const peers = yield* PeerMcpClient.PeerMcpClient;
   const crypto = yield* Crypto.Crypto;
   const updates = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
@@ -172,9 +196,19 @@ const make = Effect.gen(function* () {
     const provider = (yield* providers.getProviders).find(
       (p) => p.instanceId === input.modelSelection.instanceId,
     );
+    const linked = input.linkedProjects ?? [];
+    const linkedAvailable =
+      linked.length === 0 ||
+      ((yield* links.enabled) &&
+        new Set(linked.map((entry) => entry.environmentId)).size === linked.length &&
+        (yield* Effect.forEach(linked, (entry) => links.get(entry.environmentId)).pipe(
+          Effect.map((found) => found.every(Option.isSome)),
+          Effect.orElseSucceed(() => false),
+        )));
     if (
       !ids.has(input.projectId) ||
       input.projectIds.some((id) => !ids.has(id)) ||
+      !linkedAvailable ||
       provider?.driver !== "codex" ||
       !provider.enabled ||
       !input.modelSelection.model.includes("astra") ||
@@ -196,9 +230,18 @@ const make = Effect.gen(function* () {
   const configure = Effect.fn("InsightsService.configure")(
     function* (input: InsightsSettings) {
       if (input.enabled) yield* validateConfiguration(input);
+      const { linkedProjects, ...rest } = input;
       const config: InsightsSettings = {
-        ...input,
+        ...rest,
         projectIds: [...new Set(input.projectIds)],
+        ...(linkedProjects?.length
+          ? {
+              linkedProjects: linkedProjects.map((entry) => ({
+                ...entry,
+                projectIds: [...new Set(entry.projectIds)],
+              })),
+            }
+          : {}),
         modelSelection: {
           ...input.modelSelection,
           options: [
@@ -272,26 +315,247 @@ const make = Effect.gen(function* () {
     Effect.mapError(storageError),
   );
 
+  const boundedId = (id: string) =>
+    id.length <= 300
+      ? Effect.succeed(id)
+      : crypto
+          .digest("SHA-256", new TextEncoder().encode(id))
+          .pipe(Effect.map((digest) => `sha256:${Hex.encode(digest)}`));
+
+  const projectsIn = (projectIds: ReadonlyArray<ProjectId>) =>
+    sql<InsightsProject>`SELECT project_id AS projectId, title, workspace_root AS workspaceRoot
+      FROM projection_projects WHERE deleted_at IS NULL AND ${projectIds.length ? sql.in("project_id", projectIds) : sql`1 = 1`}`;
+
+  /** Activity in `projectIds` (all when empty) after `fromSequence`, as bounded evidence. */
+  const gather = Effect.fn("InsightsService.gather")(function* (
+    input: InsightsEvidenceInput & { readonly excludeThreadId: ThreadId | null },
+  ) {
+    const highRows = yield* sql<{
+      sequence: number;
+    }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM orchestration_events WHERE application_event_version = 2`;
+    const upper = highRows[0]?.sequence ?? 0;
+    const createdAt = yield* now;
+    const since = DateTime.formatIso(
+      DateTime.subtract(DateTime.makeUnsafe(createdAt), { days: input.lookbackDays }),
+    );
+    const rows = yield* sql<{
+      run_id: string;
+      thread_id: ThreadId;
+      project_id: ProjectId;
+      title: string;
+      status: string;
+      selection: string;
+      started_at: string | null;
+      completed_at: string | null;
+      sequence: number;
+    }>`SELECT r.run_id, r.thread_id, t.project_id, t.title, r.status,
+      json_extract(r.payload_json, '$.modelSelection') AS selection,
+      json_extract(r.payload_json, '$.startedAt') AS started_at, r.completed_at, changed.sequence
+      FROM (SELECT json_extract(metadata_json, '$.runId') AS run_id, MAX(sequence) AS sequence FROM orchestration_events
+        WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND sequence > ${input.fromSequence} AND sequence <= ${upper} AND occurred_at >= ${since} AND json_extract(metadata_json, '$.runId') IS NOT NULL
+        GROUP BY json_extract(metadata_json, '$.runId')) changed
+      JOIN orchestration_v2_projection_runs r ON r.run_id = changed.run_id
+      JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
+      WHERE t.deleted_at IS NULL AND ${input.excludeThreadId === null ? sql`1 = 1` : sql`r.thread_id <> ${input.excludeThreadId}`}
+        AND ${input.projectIds.length ? sql.in("t.project_id", input.projectIds) : sql`1 = 1`}
+        AND NOT EXISTS (SELECT 1 FROM insights_reports previous WHERE previous.thread_id = r.thread_id)
+        AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_messages m WHERE m.thread_id = r.thread_id AND json_extract(m.payload_json, '$.scheduledTaskId') = ${TASK_ID})
+      ORDER BY changed.sequence ASC LIMIT ${input.maxRuns + 1}`;
+    const runs = rows.slice(0, input.maxRuns);
+    const hasMore = rows.length > input.maxRuns;
+    const throughSequence = hasMore ? runs.at(-1)!.sequence : upper;
+    const metrics = { ...emptyInsightsMetrics() };
+    const evidence: InsightEvidence[] = [];
+    const excerptLimit = Math.max(
+      160,
+      Math.min(2200, Math.floor(input.characterBudget / Math.max(1, runs.length) / 32)),
+    );
+    for (const run of runs) {
+      metrics.runs++;
+      if (run.status === "completed") metrics.completed++;
+      else if (run.status === "failed") metrics.failed++;
+      else if (["interrupted", "cancelled", "rolled_back"].includes(run.status))
+        metrics.interrupted++;
+      else metrics.active++;
+      if (run.started_at && run.completed_at)
+        metrics.activeMilliseconds += Math.max(
+          0,
+          Date.parse(run.completed_at) - Date.parse(run.started_at),
+        );
+      const identity = {
+        occurredAt: run.completed_at ?? run.started_at ?? createdAt,
+        threadId: run.thread_id,
+        runId: run.run_id,
+        projectId: run.project_id,
+        title: run.title,
+      };
+      const counts = yield* sql<{ failures: number; requests: number }>`SELECT
+        SUM(CASE WHEN type IN ('dynamic_tool', 'command_execution') AND (status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1) THEN 1 ELSE 0 END) AS failures,
+        SUM(CASE WHEN type IN ('user_input_request', 'approval_request') THEN 1 ELSE 0 END) AS requests
+        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}`;
+      metrics.toolFailures += counts[0]?.failures ?? 0;
+      metrics.humanRequests += counts[0]?.requests ?? 0;
+      const usage = yield* sql<{ tokens: number | null; samples: number }>`SELECT
+        SUM(json_extract(p.payload_json, '$.turnTokenUsage.inputTokens') + json_extract(p.payload_json, '$.turnTokenUsage.outputTokens')) AS tokens,
+        COUNT(json_extract(p.payload_json, '$.turnTokenUsage.inputTokens') + json_extract(p.payload_json, '$.turnTokenUsage.outputTokens')) AS samples
+        FROM orchestration_v2_projection_provider_turns p
+        JOIN orchestration_v2_projection_run_attempts a ON a.attempt_id = p.run_attempt_id
+        WHERE a.run_id = ${run.run_id}`;
+      metrics.tokens += usage[0]?.tokens ?? 0;
+      if ((usage[0]?.samples ?? 0) > 0) metrics.runsWithTokenUsage++;
+      evidence.push({
+        ...identity,
+        id: `run:${run.run_id}`,
+        itemId: null,
+        kind: "run",
+        text: `Status: ${run.status}; model selection: ${run.selection}; started: ${run.started_at}; ended: ${run.completed_at}; tool failures: ${counts[0]?.failures ?? 0}; user/approval requests: ${counts[0]?.requests ?? 0}; recorded tokens: ${usage[0]?.tokens ?? "unknown"}. Completion is not verified task success.`,
+      });
+      const items = yield* sql<{
+        id: string;
+        type: string;
+        status: string;
+        text: string;
+        occurred_at: string;
+      }>`SELECT turn_item_id AS id, type, status, updated_at AS occurred_at,
+        substr(COALESCE(json_extract(payload_json, '$.text'), json_extract(payload_json, '$.output'), json_extract(payload_json, '$.input'), json_extract(payload_json, '$.questions'), json_extract(payload_json, '$.prompt'), ''), 1, 5000) AS text
+        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}
+          AND type IN ('user_message', 'assistant_message', 'dynamic_tool', 'command_execution', 'user_input_request', 'approval_request')
+        ORDER BY CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1 THEN 0 WHEN type = 'user_message' THEN 1 WHEN type = 'assistant_message' THEN 2 ELSE 3 END, ordinal DESC LIMIT 8`;
+      for (const item of items)
+        evidence.push({
+          ...identity,
+          occurredAt: item.occurred_at,
+          id: `item:${item.id}`,
+          itemId: item.id,
+          kind: item.type.endsWith("message") ? "message" : "tool",
+          text: evidenceExcerpt(`${item.type} (${item.status}): ${item.text}`, excerptLimit),
+        });
+      const children = yield* sql<{
+        id: string;
+        text: string;
+        occurred_at: string;
+        total: number;
+      }>`SELECT subagent_id AS id,
+        updated_at AS occurred_at, COUNT(*) OVER () AS total, substr(payload_json, 1, 6000) AS text FROM orchestration_v2_projection_subagents WHERE run_id = ${run.run_id} ORDER BY updated_at DESC LIMIT 12`;
+      metrics.subagents += children[0]?.total ?? 0;
+      for (const child of children)
+        evidence.push({
+          ...identity,
+          occurredAt: child.occurred_at,
+          id: `agent:${child.id}`,
+          itemId: null,
+          kind: "workflow",
+          text: evidenceExcerpt(child.text, excerptLimit),
+        });
+      const attributions = yield* sql<{
+        id: number;
+        payload_json: string;
+        created_at: string;
+      }>`SELECT id, payload_json, created_at FROM insights_attributions WHERE run_id = ${run.run_id} ORDER BY id DESC LIMIT 12`;
+      for (const attribution of attributions)
+        evidence.push({
+          ...identity,
+          occurredAt: attribution.created_at,
+          id: `attribution:${attribution.id}`,
+          itemId: null,
+          kind: "attribution",
+          text: evidenceExcerpt(
+            `Agent-reported attribution: ${attribution.payload_json}`,
+            excerptLimit,
+          ),
+        });
+    }
+    return {
+      projects: yield* projectsIn(input.projectIds),
+      metrics,
+      evidence: yield* Effect.forEach(evidence, (entry) =>
+        boundedId(entry.id).pipe(Effect.map((id) => ({ ...entry, id }))),
+      ),
+      throughSequence,
+      hasMore,
+      createdAt,
+    };
+  });
+
+  const evidenceFor = Effect.fn("InsightsService.evidence")(function* (
+    input: InsightsEvidenceInput,
+  ) {
+    const { createdAt: _createdAt, ...result } = yield* gather({ ...input, excludeThreadId: null });
+    return result;
+  }, Effect.mapError(storageError));
+
+  type LinkedProjects = NonNullable<InsightsSettings["linkedProjects"]>[number];
+
+  /** One linked environment's share, or why it could not be reached; its cursor then stays put. */
+  const gatherLinked = Effect.fn("InsightsService.gatherLinked")(function* (
+    entry: LinkedProjects,
+    share: Pick<InsightsEvidenceInput, "lookbackDays" | "maxRuns" | "characterBudget">,
+  ) {
+    const link = yield* links.get(entry.environmentId).pipe(Effect.orElseSucceed(Option.none));
+    const label = Option.isSome(link) ? link.value.label : entry.environmentId;
+    const scopeKey = `${share.lookbackDays}:${[...entry.projectIds].sort().join("\n")}`;
+    const cursorRows = yield* sql<{
+      sequence: number;
+    }>`SELECT COALESCE(MAX(json_extract(c.value, '$.throughSequence')), 0) AS sequence
+      FROM insights_reports r, json_each(r.payload_json, '$.linked') c
+      WHERE r.status IN ('completed', 'empty') AND json_extract(c.value, '$.environmentId') = ${entry.environmentId}
+        AND json_extract(c.value, '$.scopeKey') = ${scopeKey}`;
+    const fromSequence = cursorRows[0]?.sequence ?? 0;
+    return yield* peers
+      .call({
+        environmentId: entry.environmentId,
+        tool: "t3_insights_evidence",
+        arguments: { ...share, projectIds: entry.projectIds, fromSequence },
+        // Evidence is a read; the narrowest modes keep the link from doing anything else.
+        limits: { runtimeMode: "approval-required", interactionMode: "plan" },
+        success: InsightsEvidenceResult,
+      })
+      .pipe(
+        Effect.timeout(LINKED_TIMEOUT),
+        Effect.map((result) => ({
+          _tag: "Reached" as const,
+          environmentId: entry.environmentId,
+          label,
+          scopeKey,
+          fromSequence,
+          missing: entry.projectIds.filter(
+            (id) => !result.projects.some((project) => project.projectId === id),
+          ).length,
+          result,
+        })),
+        Effect.catch((error) =>
+          Effect.succeed({ _tag: "Unreached" as const, label, message: error.message }),
+        ),
+      );
+  });
+
   const collect = Effect.fn("InsightsService.collect")(
     function* (threadId: ThreadId) {
       const config = yield* settings();
       if (config === null) return yield* new InsightsError({ reason: "not_configured" });
       yield* recoverReports();
       const state = yield* snapshot();
-      const projects = yield* sql<{
-        projectId: ProjectId;
-        title: string;
-        workspaceRoot: string;
-      }>`SELECT project_id AS projectId, title, workspace_root AS workspaceRoot
-      FROM projection_projects WHERE deleted_at IS NULL AND ${config.projectIds.length ? sql.in("project_id", config.projectIds) : sql`1 = 1`}`;
+      const localProjects = yield* projectsIn(config.projectIds);
+      const withLinked = (value: InsightsReport) => [
+        ...localProjects,
+        ...(value.linked ?? []).flatMap((entry) =>
+          entry.projects.map((project) => ({
+            ...project,
+            environmentId: entry.environmentId,
+            environmentLabel: entry.label,
+          })),
+        ),
+      ];
       const own = state.reports.find((r) => r.threadId === threadId && r.status === "analyzing");
-      if (own)
+      if (own) {
+        const resumed = yield* report(own.id);
         return {
-          report: yield* report(own.id),
+          report: resumed,
           previousReports: state.reports,
           recommendations: state.recommendations,
-          projects,
+          projects: withLinked(resumed),
         };
+      }
       if (state.reports.some((r) => r.status === "analyzing"))
         return yield* new InsightsError({ reason: "analysis_running" });
       const scopeKey = `${config.lookbackDays}:${[...config.projectIds].sort().join("\n")}`;
@@ -299,151 +563,51 @@ const make = Effect.gen(function* () {
         sequence: number;
       }>`SELECT COALESCE(MAX(through_sequence), 0) AS sequence FROM insights_reports WHERE status IN ('completed', 'empty') AND json_extract(payload_json, '$.scopeKey') = ${scopeKey}`;
       const fromSequence = cursorRows[0]?.sequence ?? 0;
-      const highRows = yield* sql<{
-        sequence: number;
-      }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM orchestration_events WHERE application_event_version = 2`;
-      const upper = highRows[0]?.sequence ?? 0;
-      const createdAt = yield* now;
-      const since = DateTime.formatIso(
-        DateTime.subtract(DateTime.makeUnsafe(createdAt), { days: config.lookbackDays }),
+      const linkedProjects = config.linkedProjects ?? [];
+      const linksOn = linkedProjects.length > 0 && (yield* links.enabled);
+      const shares = 1 + (linksOn ? linkedProjects.length : 0);
+      const share = {
+        lookbackDays: config.lookbackDays,
+        maxRuns: Math.ceil(config.maxRuns / shares),
+        characterBudget: Math.floor(CHARACTER_BUDGET / shares),
+      };
+      const local = yield* gather({
+        ...share,
+        projectIds: config.projectIds,
+        fromSequence,
+        excludeThreadId: threadId,
+      });
+      const remote = linksOn
+        ? yield* Effect.forEach(linkedProjects, (entry) => gatherLinked(entry, share), {
+            concurrency: "unbounded",
+          })
+        : [];
+      const reached = remote.filter((entry) => entry._tag === "Reached");
+      const linkedEvidence = yield* Effect.forEach(reached, (entry) =>
+        Effect.forEach(entry.result.evidence, (item) =>
+          boundedId(`${entry.environmentId}/${item.id}`).pipe(
+            Effect.map((id) => ({ ...item, id, environmentId: entry.environmentId })),
+          ),
+        ),
+      ).pipe(Effect.map((groups) => groups.flat()));
+      const metrics = reached.reduce(
+        (total, entry) => addInsightsMetrics(total, entry.result.metrics),
+        local.metrics,
       );
-      const rows = yield* sql<{
-        run_id: string;
-        thread_id: ThreadId;
-        project_id: ProjectId;
-        title: string;
-        status: string;
-        selection: string;
-        started_at: string | null;
-        completed_at: string | null;
-        sequence: number;
-      }>`SELECT r.run_id, r.thread_id, t.project_id, t.title, r.status,
-      json_extract(r.payload_json, '$.modelSelection') AS selection,
-      json_extract(r.payload_json, '$.startedAt') AS started_at, r.completed_at, changed.sequence
-      FROM (SELECT json_extract(metadata_json, '$.runId') AS run_id, MAX(sequence) AS sequence FROM orchestration_events
-        WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND sequence > ${fromSequence} AND sequence <= ${upper} AND occurred_at >= ${since} AND json_extract(metadata_json, '$.runId') IS NOT NULL
-        GROUP BY json_extract(metadata_json, '$.runId')) changed
-      JOIN orchestration_v2_projection_runs r ON r.run_id = changed.run_id
-      JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
-      WHERE t.deleted_at IS NULL AND r.thread_id <> ${threadId}
-        AND ${config.projectIds.length ? sql.in("t.project_id", config.projectIds) : sql`1 = 1`}
-        AND NOT EXISTS (SELECT 1 FROM insights_reports previous WHERE previous.thread_id = r.thread_id)
-        AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_messages m WHERE m.thread_id = r.thread_id AND json_extract(m.payload_json, '$.scheduledTaskId') = ${TASK_ID})
-      ORDER BY changed.sequence ASC LIMIT ${config.maxRuns + 1}`;
-      const runs = rows.slice(0, config.maxRuns);
-      const hasMore = rows.length > config.maxRuns;
-      const throughSequence = hasMore ? runs.at(-1)!.sequence : upper;
-      const metrics = { ...emptyInsightsMetrics() };
-      const evidence: InsightEvidence[] = [];
-      const excerptLimit = Math.max(
-        160,
-        Math.min(2200, Math.floor(150000 / Math.max(1, runs.length) / 32)),
-      );
-      for (const run of runs) {
-        metrics.runs++;
-        if (run.status === "completed") metrics.completed++;
-        else if (run.status === "failed") metrics.failed++;
-        else if (["interrupted", "cancelled", "rolled_back"].includes(run.status))
-          metrics.interrupted++;
-        else metrics.active++;
-        if (run.started_at && run.completed_at)
-          metrics.activeMilliseconds += Math.max(
-            0,
-            Date.parse(run.completed_at) - Date.parse(run.started_at),
-          );
-        const identity = {
-          occurredAt: run.completed_at ?? run.started_at ?? createdAt,
-          threadId: run.thread_id,
-          runId: run.run_id,
-          projectId: run.project_id,
-          title: run.title,
-        };
-        const counts = yield* sql<{ failures: number; requests: number }>`SELECT
-        SUM(CASE WHEN type IN ('dynamic_tool', 'command_execution') AND (status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1) THEN 1 ELSE 0 END) AS failures,
-        SUM(CASE WHEN type IN ('user_input_request', 'approval_request') THEN 1 ELSE 0 END) AS requests
-        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}`;
-        metrics.toolFailures += counts[0]?.failures ?? 0;
-        metrics.humanRequests += counts[0]?.requests ?? 0;
-        const usage = yield* sql<{ tokens: number | null; samples: number }>`SELECT
-        SUM(json_extract(p.payload_json, '$.turnTokenUsage.inputTokens') + json_extract(p.payload_json, '$.turnTokenUsage.outputTokens')) AS tokens,
-        COUNT(json_extract(p.payload_json, '$.turnTokenUsage.inputTokens') + json_extract(p.payload_json, '$.turnTokenUsage.outputTokens')) AS samples
-        FROM orchestration_v2_projection_provider_turns p
-        JOIN orchestration_v2_projection_run_attempts a ON a.attempt_id = p.run_attempt_id
-        WHERE a.run_id = ${run.run_id}`;
-        metrics.tokens += usage[0]?.tokens ?? 0;
-        if ((usage[0]?.samples ?? 0) > 0) metrics.runsWithTokenUsage++;
-        evidence.push({
-          ...identity,
-          id: `run:${run.run_id}`,
-          itemId: null,
-          kind: "run",
-          text: `Status: ${run.status}; model selection: ${run.selection}; started: ${run.started_at}; ended: ${run.completed_at}; tool failures: ${counts[0]?.failures ?? 0}; user/approval requests: ${counts[0]?.requests ?? 0}; recorded tokens: ${usage[0]?.tokens ?? "unknown"}. Completion is not verified task success.`,
-        });
-        const items = yield* sql<{
-          id: string;
-          type: string;
-          status: string;
-          text: string;
-          occurred_at: string;
-        }>`SELECT turn_item_id AS id, type, status, updated_at AS occurred_at,
-        substr(COALESCE(json_extract(payload_json, '$.text'), json_extract(payload_json, '$.output'), json_extract(payload_json, '$.input'), json_extract(payload_json, '$.questions'), json_extract(payload_json, '$.prompt'), ''), 1, 5000) AS text
-        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}
-          AND type IN ('user_message', 'assistant_message', 'dynamic_tool', 'command_execution', 'user_input_request', 'approval_request')
-        ORDER BY CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1 THEN 0 WHEN type = 'user_message' THEN 1 WHEN type = 'assistant_message' THEN 2 ELSE 3 END, ordinal DESC LIMIT 8`;
-        for (const item of items)
-          evidence.push({
-            ...identity,
-            occurredAt: item.occurred_at,
-            id: `item:${item.id}`,
-            itemId: item.id,
-            kind: item.type.endsWith("message") ? "message" : "tool",
-            text: evidenceExcerpt(`${item.type} (${item.status}): ${item.text}`, excerptLimit),
-          });
-        const children = yield* sql<{
-          id: string;
-          text: string;
-          occurred_at: string;
-          total: number;
-        }>`SELECT subagent_id AS id,
-        updated_at AS occurred_at, COUNT(*) OVER () AS total, substr(payload_json, 1, 6000) AS text FROM orchestration_v2_projection_subagents WHERE run_id = ${run.run_id} ORDER BY updated_at DESC LIMIT 12`;
-        metrics.subagents += children[0]?.total ?? 0;
-        for (const child of children)
-          evidence.push({
-            ...identity,
-            occurredAt: child.occurred_at,
-            id: `agent:${child.id}`,
-            itemId: null,
-            kind: "workflow",
-            text: evidenceExcerpt(child.text, excerptLimit),
-          });
-        const attributions = yield* sql<{
-          id: number;
-          payload_json: string;
-          created_at: string;
-        }>`SELECT id, payload_json, created_at FROM insights_attributions WHERE run_id = ${run.run_id} ORDER BY id DESC LIMIT 12`;
-        for (const attribution of attributions)
-          evidence.push({
-            ...identity,
-            occurredAt: attribution.created_at,
-            id: `attribution:${attribution.id}`,
-            itemId: null,
-            kind: "attribution",
-            text: evidenceExcerpt(
-              `Agent-reported attribution: ${attribution.payload_json}`,
-              excerptLimit,
-            ),
-          });
-      }
+      const hasMore = local.hasMore || reached.some((entry) => entry.result.hasMore);
+      const createdAt = local.createdAt;
       const actualRows = yield* sql<{
         selection: string;
       }>`SELECT json_extract(payload_json, '$.modelSelection') AS selection FROM orchestration_v2_projection_runs WHERE thread_id = ${threadId} ORDER BY ordinal DESC LIMIT 1`;
       const value: InsightsReport = {
         id: `insights:${yield* crypto.randomUUIDv4()}`,
         threadId,
-        status: runs.length ? "analyzing" : "empty",
+        status: metrics.runs ? "analyzing" : "empty",
         createdAt,
-        completedAt: runs.length ? null : createdAt,
-        summary: runs.length ? "Analysis in progress" : "No new activity in the selected projects.",
+        completedAt: metrics.runs ? null : createdAt,
+        summary: metrics.runs
+          ? "Analysis in progress"
+          : "No new activity in the selected projects.",
         wins: [],
         limitations: [
           "Evidence is sampled: up to 8 timeline items and 12 delegations per run. Inspect source threads before drawing conclusions.",
@@ -451,20 +615,39 @@ const make = Effect.gen(function* () {
           ...(hasMore
             ? ["More activity remains for the next analysis; the checkpoint has not skipped it."]
             : []),
+          ...(linkedProjects.length > 0 && !linksOn
+            ? ["Linked projects were skipped because Linked environments is off on this machine."]
+            : []),
+          ...remote.flatMap((entry) =>
+            entry._tag === "Unreached"
+              ? [
+                  `${entry.label} could not be reached (${entry.message}). Its activity will be retried next analysis.`,
+                ]
+              : entry.missing > 0
+                ? [`${entry.missing} selected project(s) no longer exist on ${entry.label}.`]
+                : [],
+          ),
         ],
         metrics,
-        evidence: yield* Effect.forEach(evidence, (entry) =>
-          entry.id.length <= 300
-            ? Effect.succeed(entry)
-            : crypto
-                .digest("SHA-256", new TextEncoder().encode(entry.id))
-                .pipe(Effect.map((digest) => ({ ...entry, id: `sha256:${Hex.encode(digest)}` }))),
-        ),
+        evidence: [...local.evidence, ...linkedEvidence],
         recommendationIds: [],
         scopeKey,
         fromSequence,
-        throughSequence,
+        throughSequence: local.throughSequence,
         hasMore,
+        ...(reached.length
+          ? {
+              linked: reached.map((entry) => ({
+                environmentId: entry.environmentId,
+                label: entry.label,
+                scopeKey: entry.scopeKey,
+                fromSequence: entry.fromSequence,
+                throughSequence: entry.result.throughSequence,
+                hasMore: entry.result.hasMore,
+                projects: entry.result.projects,
+              })),
+            }
+          : {}),
         modelSelection: actualRows[0]
           ? yield* decodeSelection(actualRows[0].selection)
           : config.modelSelection,
@@ -475,7 +658,7 @@ const make = Effect.gen(function* () {
         report: value,
         previousReports: state.reports.slice(0, 14),
         recommendations: state.recommendations,
-        projects,
+        projects: withLinked(value),
       };
     },
     lock.withPermits(1),
@@ -631,7 +814,10 @@ const make = Effect.gen(function* () {
         .launch({
           commandId: CommandId.make(`insight-implementation:${id}`),
           threadId,
-          projectId: rec.evidence[0]?.projectId ?? config.projectId,
+          // Linked evidence names a project there; the change is made in a checkout here.
+          projectId:
+            rec.evidence.find((entry) => entry.environmentId === undefined)?.projectId ??
+            config.projectId,
           title: rec.title,
           modelSelection: config.modelSelection,
           runtimeMode: "full-access",
@@ -683,6 +869,7 @@ const make = Effect.gen(function* () {
     update,
     implement,
     collect,
+    evidence: evidenceFor,
     submit,
     record,
     subscribe: () =>

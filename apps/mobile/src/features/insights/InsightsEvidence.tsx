@@ -29,7 +29,13 @@ export function InsightsEvidence({
               label={item.title}
               tone="text"
               onPress={() =>
-                selectDetail({ name: "Thread", params: { environmentId, threadId: item.threadId } })
+                selectDetail({
+                  name: "Thread",
+                  params: {
+                    environmentId: item.environmentId ?? environmentId,
+                    threadId: item.threadId,
+                  },
+                })
               }
             />
             <Text selectable className="text-xs text-foreground-muted">

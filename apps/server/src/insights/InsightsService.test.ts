@@ -1,8 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  EnvironmentId,
+  type InsightsEvidenceResult,
   InsightsSettings,
   InsightsSubmitInput,
+  OrchestratorMcpFailure,
   ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
@@ -11,8 +14,10 @@ import {
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -21,60 +26,131 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Insights from "./InsightsService.ts";
 
-const layer = Insights.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      Layer.mock(ScheduledTasks.ScheduledTaskService)({
-        list: () => Effect.succeed({ tasks: [] }),
-        subscribeList: () => Stream.make({ tasks: [] }),
-        upsert: (input) => {
-          assert.equal(input.schedule.type, "fixed_time");
-          assert.deepEqual(input.modelSelection.options, [{ id: "reasoningEffort", value: "max" }]);
-          return Effect.succeed({
-            task: ScheduledTask.make({
-              ...input,
-              id: input.id ?? ScheduledTaskId.make("test"),
-              threadId: null,
-              schedule: { type: "fixed_time", timeOfDay: "09:00" },
-              createdBy: "user",
-              creationSource: "web",
-              createdAt: timestamp,
-              updatedAt: timestamp,
-              nextRunAt: null,
-              lastRunAt: null,
-              lastRunStatus: "never",
-              lastRunError: null,
-              runCount: 0,
+const studio = EnvironmentId.make("studio");
+
+/** A linked Mac Studio answering each evidence call with the next response, or unreachable. */
+const linkedStudio = (responses: Array<InsightsEvidenceResult | "unreachable">) => {
+  const calls: Array<Record<string, unknown>> = [];
+  const launches: Array<ProjectId> = [];
+  const layer = Layer.mergeAll(
+    Layer.mock(PeerLinks.PeerLinks)({
+      enabled: Effect.succeed(true),
+      get: (environmentId) =>
+        Effect.succeed(
+          environmentId === studio
+            ? Option.some({
+                environmentId,
+                label: "Mac Studio",
+                urls: [],
+                access: "read-only" as const,
+                linkedAt: DateTime.makeUnsafe(0),
+                expiresAt: DateTime.makeUnsafe(Date.parse("2027-01-01T00:00:00.000Z")),
+                lastReachedAt: null,
+                lastError: null,
+              })
+            : Option.none(),
+        ),
+    }),
+    Layer.mock(PeerMcpClient.PeerMcpClient)({
+      call: (input) => {
+        calls.push(input.arguments);
+        const next = responses.shift();
+        return next === undefined || next === "unreachable"
+          ? Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: "The linked environment stopped answering.",
+              }),
+            )
+          : // oxlint-disable-next-line t3code/no-inline-schema-compile -- each call brings its own schema
+            Schema.decodeEffect(Schema.fromJsonString(input.success))(JSON.stringify(next)).pipe(
+              Effect.orDie,
+            );
+      },
+    }),
+    Layer.mock(ThreadLaunch.ThreadLaunchService)({
+      launch: (input) => {
+        launches.push(input.projectId);
+        return Effect.die("not needed");
+      },
+    }),
+  );
+  return { calls, launches, layer };
+};
+
+const layerWith = (
+  peers: Layer.Layer<
+    PeerLinks.PeerLinks | PeerMcpClient.PeerMcpClient | ThreadLaunch.ThreadLaunchService
+  >,
+) =>
+  Insights.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ScheduledTasks.ScheduledTaskService)({
+          list: () => Effect.succeed({ tasks: [] }),
+          subscribeList: () => Stream.make({ tasks: [] }),
+          upsert: (input) => {
+            assert.equal(input.schedule.type, "fixed_time");
+            assert.deepEqual(input.modelSelection.options, [
+              { id: "reasoningEffort", value: "max" },
+            ]);
+            return Effect.succeed({
+              task: ScheduledTask.make({
+                ...input,
+                id: input.id ?? ScheduledTaskId.make("test"),
+                threadId: null,
+                schedule: { type: "fixed_time", timeOfDay: "09:00" },
+                createdBy: "user",
+                creationSource: "web",
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                nextRunAt: null,
+                lastRunAt: null,
+                lastRunStatus: "never",
+                lastRunError: null,
+                runCount: 0,
+              }),
+            });
+          },
+        }),
+        peers,
+        Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.empty }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([
+            ServerProvider.make({
+              instanceId: ProviderInstanceId.make("codex"),
+              driver: ProviderDriverKind.make("codex"),
+              enabled: true,
+              installed: true,
+              version: null,
+              status: "ready",
+              auth: { status: "authenticated" },
+              checkedAt: "2026-10-30T10:00:00.000Z",
+              models: [{ slug: "gpt-6-astra", name: "Astra", isCustom: false, capabilities: null }],
+              skills: [],
+              slashCommands: [],
             }),
-          });
-        },
-      }),
-      Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-      Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.empty }),
-      Layer.mock(ProviderRegistry.ProviderRegistry)({
-        getProviders: Effect.succeed([
-          ServerProvider.make({
-            instanceId: ProviderInstanceId.make("codex"),
-            driver: ProviderDriverKind.make("codex"),
-            enabled: true,
-            installed: true,
-            version: null,
-            status: "ready",
-            auth: { status: "authenticated" },
-            checkedAt: "2026-10-30T10:00:00.000Z",
-            models: [{ slug: "gpt-6-astra", name: "Astra", isCustom: false, capabilities: null }],
-            skills: [],
-            slashCommands: [],
-          }),
-        ]),
-      }),
-      NodeCrypto.layer,
+          ]),
+        }),
+        NodeCrypto.layer,
+      ),
     ),
+    Layer.provideMerge(Sqlite.layerMemory),
+  );
+const layer = layerWith(
+  Layer.mergeAll(
+    Layer.mock(PeerLinks.PeerLinks)({
+      enabled: Effect.succeed(false),
+      get: () => Effect.succeedNone,
+    }),
+    Layer.mock(PeerMcpClient.PeerMcpClient)({}),
+    Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
   ),
-  Layer.provideMerge(Sqlite.layerMemory),
 );
 const analyst = ThreadId.make("analyst");
 const timestamp = "2026-10-30T10:00:00.000Z";
@@ -274,6 +350,10 @@ it.effect("requires an available Astra and project, enforces max effort, and per
           instanceId: ProviderInstanceId.make("missing"),
         },
       },
+      {
+        ...config,
+        linkedProjects: [{ environmentId: studio, projectIds: [ProjectId.make("app2")] }],
+      },
     ])
       assert.equal((yield* Effect.flip(service.configure(invalid))).reason, "invalid_settings");
     assert.isFalse((yield* service.configure({ ...config, enabled: false })).settings!.enabled);
@@ -366,3 +446,95 @@ it.effect(
       assert.equal((yield* service.recommendation(id)).assessments.at(-1)?.outcome, "improved");
     }).pipe(Effect.provide(layer)),
 );
+
+it.effect(
+  "merges a linked environment into one report, keeping its own cursor when it cannot be reached",
+  () => {
+    const remote: InsightsEvidenceResult = {
+      projects: [
+        { projectId: ProjectId.make("app2"), title: "app2", workspaceRoot: "/studio/app2" },
+      ],
+      metrics: { ...emptyRemoteMetrics, runs: 1, completed: 1 },
+      evidence: [
+        {
+          id: "run:remote-run",
+          threadId: ThreadId.make("remote-work"),
+          runId: "remote-run",
+          itemId: null,
+          projectId: ProjectId.make("app2"),
+          occurredAt: timestamp,
+          title: "Remote work",
+          kind: "run",
+          text: "Status: completed",
+        },
+      ],
+      throughSequence: 7,
+      hasMore: false,
+    };
+    const peer = linkedStudio([
+      remote,
+      "unreachable",
+      { ...remote, evidence: [], throughSequence: 9 },
+    ]);
+    return Effect.gen(function* () {
+      yield* seed();
+      const service = yield* Insights.InsightsService;
+      yield* service.configure({
+        ...config,
+        linkedProjects: [{ environmentId: studio, projectIds: [ProjectId.make("app2")] }],
+      });
+      const packet = yield* service.collect(analyst);
+      assert.deepEqual(peer.calls[0], {
+        lookbackDays: 30,
+        maxRuns: 5,
+        characterBudget: 75000,
+        projectIds: ["app2"],
+        fromSequence: 0,
+      });
+      assert.equal(packet.report.metrics.runs, 2);
+      const linkedEvidence = packet.report.evidence.find((e) => e.environmentId === studio);
+      assert.equal(linkedEvidence?.id, "studio/run:remote-run");
+      assert.deepEqual(
+        packet.projects.find((p) => p.environmentId === studio),
+        {
+          projectId: ProjectId.make("app2"),
+          title: "app2",
+          workspaceRoot: "/studio/app2",
+          environmentId: studio,
+          environmentLabel: "Mac Studio",
+        },
+      );
+      const completed = yield* service.submit(
+        analyst,
+        submission(packet.report.id, linkedEvidence!.id),
+      );
+      yield* Effect.exit(service.implement(completed.recommendationIds[0]!));
+      assert.deepEqual(peer.launches, [config.projectId]);
+
+      const unreached = yield* service.collect(analyst);
+      assert.equal(peer.calls[1]?.fromSequence, 7);
+      assert.isUndefined(unreached.report.linked);
+      assert.isTrue(
+        unreached.report.limitations.some((l) => l.startsWith("Mac Studio could not be reached")),
+      );
+
+      const retried = yield* service.collect(analyst);
+      assert.equal(peer.calls[2]?.fromSequence, 7);
+      assert.equal(retried.report.linked?.[0]?.throughSequence, 9);
+    }).pipe(Effect.provide(layerWith(peer.layer)));
+  },
+);
+
+const emptyRemoteMetrics = {
+  runs: 0,
+  completed: 0,
+  failed: 0,
+  interrupted: 0,
+  active: 0,
+  toolFailures: 0,
+  humanRequests: 0,
+  subagents: 0,
+  tokens: 0,
+  runsWithTokenUsage: 0,
+  activeMilliseconds: 0,
+};
