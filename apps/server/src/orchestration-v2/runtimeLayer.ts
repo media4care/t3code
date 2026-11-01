@@ -1,4 +1,6 @@
 import * as Insights from "../insights/InsightsService.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -380,6 +382,8 @@ export const layerProduction = Layer.mergeAll(
         layerScheduledTaskProvided,
         layerThreadLaunchProvided,
         layerOrchestratorProvided,
+        // The same instances server.ts gives Settings and /mcp, by layer memoization.
+        PeerMcpClient.layer.pipe(Layer.provideMerge(PeerLinks.layer)),
       ),
     ),
   ),

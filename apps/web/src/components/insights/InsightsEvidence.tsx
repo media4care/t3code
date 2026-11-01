@@ -17,7 +17,10 @@ export function InsightsEvidence({
           <div key={item.id} className="rounded-lg border border-border p-3">
             <Link
               to="/$environmentId/$threadId"
-              params={{ environmentId, threadId: item.threadId }}
+              params={{
+                environmentId: item.environmentId ?? environmentId,
+                threadId: item.threadId,
+              }}
               className="text-sm text-primary underline underline-offset-4"
             >
               {item.title}

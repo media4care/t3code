@@ -47,6 +47,12 @@ export const layer = McpToolAccess.toLayer(InsightsToolkit, {
         return yield* service.record(yield* callerId, input).pipe(Effect.mapError(failure));
       }),
   ),
+  t3_insights_evidence: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* Insights.InsightsService;
+      return yield* service.evidence(input).pipe(Effect.mapError(failure));
+    }),
+  ),
   t3_insights: McpToolAccess.either(
     (input) => ["list", "report", "recommendation"].includes(input.action),
     McpToolAccess.reads((input) =>

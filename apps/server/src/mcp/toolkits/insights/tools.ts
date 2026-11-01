@@ -1,18 +1,21 @@
 import {
+  EnvironmentId,
   InsightAttributionInput,
   InsightUpdateInput,
+  InsightsEvidenceInput,
+  InsightsEvidenceResult,
+  InsightsProject,
   InsightsReport,
   InsightsSettings,
   InsightsSnapshot,
   InsightsSubmitInput,
   InsightRecommendation,
-  ProjectId,
   ThreadId,
   OrchestratorMcpFailure,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as Insights from "../../../insights/InsightsService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -38,7 +41,11 @@ export const InsightsToolkit = Toolkit.make(
       previousReports: Schema.Array(InsightsReport),
       recommendations: Schema.Array(InsightRecommendation),
       projects: Schema.Array(
-        Schema.Struct({ projectId: ProjectId, title: Schema.String, workspaceRoot: Schema.String }),
+        Schema.Struct({
+          ...InsightsProject.fields,
+          environmentId: Schema.optionalKey(EnvironmentId),
+          environmentLabel: Schema.optionalKey(Schema.String),
+        }),
       ),
     }),
   }),
@@ -56,6 +63,14 @@ export const InsightsToolkit = Toolkit.make(
     parameters: InsightAttributionInput,
     success: Schema.Void,
   }),
+  Tool.make("t3_insights_evidence", {
+    ...common,
+    description: "This environment's evidence for a linked environment's workflow analysis.",
+    parameters: InsightsEvidenceInput,
+    success: InsightsEvidenceResult,
+  })
+    .annotate(Tool.Readonly, true)
+    .annotate(McpSchema.EnabledWhen, McpInvocationContext.onlyForLinks),
   Tool.make("t3_insights", {
     ...common,
     description:

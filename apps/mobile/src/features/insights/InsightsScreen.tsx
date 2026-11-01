@@ -18,6 +18,9 @@ import {
   matchesInsightFilter,
   insightImplementationUrl,
   defaultInsightsSettings,
+  insightsLinkedEnvironments,
+  linkedInsightsProjectIds,
+  setLinkedInsightsProject,
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
 } from "@t3tools/client-runtime/insights";
@@ -42,6 +45,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
+import { useLinkedEnvironments } from "../../state/peerLinks";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -428,7 +432,9 @@ function SettingsForm({
   disabled: boolean;
   onSaved: () => void;
 }) {
-  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const allProjects = useProjects();
+  const projects = allProjects.filter((project) => project.environmentId === environmentId);
+  const linked = useLinkedEnvironments(environmentId);
   const providers =
     useAtomValue(environmentPresentations.providersByEnvironmentAtom).get(environmentId) ?? [];
   const choices = insightsModelChoices(providers);
@@ -523,6 +529,58 @@ function SettingsForm({
             />
           </View>
         ))}
+      {insightsLinkedEnvironments(value, linked).map((environment) => {
+        const selected = linkedInsightsProjectIds(value, environment.environmentId);
+        const available = allProjects.filter(
+          (project) => project.environmentId === environment.environmentId,
+        );
+        return (
+          <View key={environment.environmentId} className="gap-2">
+            <Text className="text-sm text-foreground">Projects on {environment.label}</Text>
+            {environment.linked && available.length > 0 ? (
+              available.map((project) => (
+                <View key={project.id} className="flex-row items-center justify-between gap-2">
+                  <Text className="flex-1 text-sm text-foreground">{project.title}</Text>
+                  <Switch
+                    accessibilityLabel={`Analyze ${project.title} on ${environment.label}`}
+                    value={selected.includes(project.id)}
+                    onValueChange={(checked) =>
+                      setDraft(
+                        setLinkedInsightsProject(
+                          value,
+                          environment.environmentId,
+                          project.id,
+                          checked,
+                        ),
+                      )
+                    }
+                  />
+                </View>
+              ))
+            ) : (
+              <>
+                <Text className="text-xs text-foreground-muted">
+                  {environment.linked
+                    ? `Connect to ${environment.label} in this app to choose its projects.`
+                    : "This environment is no longer linked."}
+                  {selected.length > 0 && ` ${selected.length} selected.`}
+                </Text>
+                {selected.length > 0 && (
+                  <Button
+                    label="Remove"
+                    tone="text"
+                    onPress={() =>
+                      setDraft(
+                        setLinkedInsightsProject(value, environment.environmentId, null, false),
+                      )
+                    }
+                  />
+                )}
+              </>
+            )}
+          </View>
+        );
+      })}
       <Text className="text-xs text-foreground-muted">
         The server must be running at the scheduled time. Activity carries forward within the
         lookback window. Larger batches use more context.

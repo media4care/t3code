@@ -20,7 +20,10 @@ import {
   matchesInsightFilter,
   insightImplementationUrl,
   defaultInsightsSettings,
+  insightsLinkedEnvironments,
   insightsModelChoices,
+  linkedInsightsProjectIds,
+  setLinkedInsightsProject,
   INSIGHT_STATUS_LABELS,
 } from "@t3tools/client-runtime/insights";
 import {
@@ -29,6 +32,7 @@ import {
   useEnvironmentProviders,
 } from "../../state/environments";
 import { useProjects } from "../../state/entities";
+import { useLinkedEnvironments } from "../../state/peerLinks";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -356,7 +360,9 @@ function InsightsSettingsForm({
   disabled: boolean;
   onSaved: () => void;
 }) {
-  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const allProjects = useProjects();
+  const projects = allProjects.filter((project) => project.environmentId === environmentId);
+  const linked = useLinkedEnvironments(environmentId);
   const providers = useEnvironmentProviders().get(environmentId) ?? [];
   const choices = insightsModelChoices(providers);
   const defaults =
@@ -474,6 +480,60 @@ function InsightsSettingsForm({
           </label>
         ))}
       </fieldset>
+      {insightsLinkedEnvironments(value, linked).map((environment) => {
+        const selected = linkedInsightsProjectIds(value, environment.environmentId);
+        const available = allProjects.filter(
+          (project) => project.environmentId === environment.environmentId,
+        );
+        return (
+          <fieldset key={environment.environmentId} className="space-y-2">
+            <legend className="mb-2 text-sm font-medium">Projects on {environment.label}</legend>
+            {environment.linked && available.length > 0 ? (
+              available.map((project) => (
+                <label key={project.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(project.id)}
+                    onChange={(event) =>
+                      setDraft(
+                        setLinkedInsightsProject(
+                          value,
+                          environment.environmentId,
+                          project.id,
+                          event.target.checked,
+                        ),
+                      )
+                    }
+                  />
+                  {project.title}
+                </label>
+              ))
+            ) : (
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>
+                  {environment.linked
+                    ? `Connect to ${environment.label} in this app to choose its projects.`
+                    : "This environment is no longer linked."}
+                  {selected.length > 0 && ` ${selected.length} selected.`}
+                </span>
+                {selected.length > 0 && (
+                  <Button
+                    size="compact"
+                    variant="ghost"
+                    onClick={() =>
+                      setDraft(
+                        setLinkedInsightsProject(value, environment.environmentId, null, false),
+                      )
+                    }
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            )}
+          </fieldset>
+        );
+      })}
       <p className="text-xs text-muted-foreground">
         The server must be running at the scheduled time. Missed activity remains available for the
         next analysis within the lookback window. Larger batches use more context; remaining work

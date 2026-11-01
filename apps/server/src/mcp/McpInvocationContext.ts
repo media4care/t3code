@@ -144,6 +144,13 @@ export const hiddenWhileLinksOff = (): boolean => {
   return scope?.linkedEnvironments !== false;
 };
 
+/** `McpSchema.EnabledWhen` for tools only another environment's link may see or call. */
+export const onlyForLinks = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.client?.linked === true;
+};
+
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"
   ? PreviewAutomationUnavailableError
   : McpCapabilityUnavailableError;
