@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  InsightLoopTicket,
   InsightRecommendation,
   InsightsSettings,
   ProjectId,
@@ -152,3 +153,45 @@ export function insightImplementationUrl(reference: string | null) {
     return null;
   }
 }
+
+/** The agents-toolkit engineering loop's stages in order; Blocked, Aborted and Done sit beside them. */
+export const ENGINEERING_LOOP_STAGES = [
+  "Plan",
+  "PoC",
+  "Delivery plan",
+  "Implementation",
+  "Testing",
+  "Review",
+  "QA",
+  "Human review",
+] as const;
+
+const DAY_MS = 86_400_000;
+
+/** Tickets per stage and per-ticket rows, with ages measured when the report was gathered. */
+export function engineeringLoopBoard(tickets: readonly InsightLoopTicket[], asOf: string) {
+  const at = Date.parse(asOf);
+  const days = (iso: string) => Math.max(0, Math.floor((at - Date.parse(iso)) / DAY_MS));
+  const stages: readonly string[] = ENGINEERING_LOOP_STAGES;
+  const rows = tickets.map((ticket) => {
+    // A ticket can return to a stage after repairs; its time there starts at the latest entry.
+    const entered = ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at;
+    return {
+      ...ticket,
+      position: stages.indexOf(ticket.stage),
+      daysInStage: entered ? days(entered) : null,
+      daysSinceUpdate: days(ticket.updatedAt),
+    };
+  });
+  const count = (stage: string) => rows.filter((row) => row.stage === stage).length;
+  return {
+    stages: ENGINEERING_LOOP_STAGES.map((stage) => ({ stage, count: count(stage) })),
+    elsewhere: [...new Set(rows.filter((row) => row.position < 0).map((row) => row.stage))].map(
+      (stage) => ({ stage, count: count(stage) }),
+    ),
+    rows,
+  };
+}
+
+export const loopDaysLabel = (days: number) =>
+  days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
