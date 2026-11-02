@@ -1,4 +1,6 @@
-import type { InsightsMetrics } from "@t3tools/contracts";
+import type { InsightSkillUsage, InsightsMetrics } from "@t3tools/contracts";
+
+const MAX_REPORT_SKILLS = 30;
 
 export function emptyInsightsMetrics(): InsightsMetrics {
   return {
@@ -20,6 +22,19 @@ export function addInsightsMetrics(total: InsightsMetrics, next: InsightsMetrics
   const sum = { ...total };
   for (const key of Object.keys(sum) as Array<keyof InsightsMetrics>) sum[key] += next[key];
   return sum;
+}
+
+/** Run counts per skill across `groups`, most-loaded first. */
+export function sumInsightSkills(
+  groups: ReadonlyArray<ReadonlyArray<InsightSkillUsage> | undefined>,
+): InsightSkillUsage[] {
+  const runs = new Map<string, number>();
+  for (const usage of groups.flatMap((group) => group ?? []))
+    runs.set(usage.skill, (runs.get(usage.skill) ?? 0) + usage.runs);
+  return [...runs]
+    .map(([skill, count]) => ({ skill, runs: count }))
+    .sort((a, b) => b.runs - a.runs || a.skill.localeCompare(b.skill))
+    .slice(0, MAX_REPORT_SKILLS);
 }
 
 export function insightKey(key: string): string {

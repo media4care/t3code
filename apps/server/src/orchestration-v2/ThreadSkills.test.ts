@@ -105,6 +105,7 @@ layer("ThreadSkills", (it) => {
 
       const threadSkills = yield* ThreadSkills.ThreadSkills;
       assert.deepEqual(yield* threadSkills.list(threadId), ["code-review", "greet"]);
+      assert.deepEqual(yield* threadSkills.forRun("run-rolled-back"), ["rewound"]);
     }),
   );
 });
