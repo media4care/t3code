@@ -14,7 +14,7 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { FolderGit2Icon, GitBranchIcon } from "lucide-react";
+import { ArrowLeftIcon, FolderGit2Icon, GitBranchIcon } from "lucide-react";
 import { type CSSProperties, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
@@ -120,11 +120,13 @@ function RepositoryExplorer({
   environmentId,
   projectId,
   worktreePath,
+  submodulePath,
   repositoryPicker,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   worktreePath?: string;
+  submodulePath?: string;
   repositoryPicker: ReactNode;
 }) {
   const registry = useContext(RegistryContext);
@@ -160,7 +162,21 @@ function RepositoryExplorer({
         : !canDelete
           ? "Source-control write permission is required to delete branches."
           : null;
-  const input: GitExplorerOverviewInput = { projectId, ...(worktreePath ? { worktreePath } : {}) };
+  const input: GitExplorerOverviewInput = {
+    projectId,
+    ...(worktreePath ? { worktreePath } : {}),
+    ...(submodulePath ? { submodulePath } : {}),
+  };
+  const openRepository = (nextSubmodulePath: string | undefined) =>
+    void navigate({
+      to: "/git",
+      search: {
+        environmentId,
+        projectId,
+        ...(worktreePath ? { worktreePath } : {}),
+        ...(nextSubmodulePath ? { submodulePath: nextSubmodulePath } : {}),
+      },
+    });
   const target = { environmentId, input };
   const overviewQuery = useGitExplorerQuery(gitExplorerEnvironment.overview(target));
   const overview = overviewQuery.data;
@@ -248,7 +264,26 @@ function RepositoryExplorer({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" ref={trackWidth}>
       <GitExplorerHeader repositoryPicker={repositoryPicker}>
-        {overview ? (
+        {submodulePath ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="min-w-0 max-w-60"
+                  aria-label={`Leave submodule ${submodulePath}`}
+                  onClick={() => openRepository(undefined)}
+                />
+              }
+            >
+              <ArrowLeftIcon className="size-3.5" aria-hidden />
+              <span className="text-muted-foreground">Submodule:</span>
+              <span className="truncate">{submodulePath}</span>
+            </TooltipTrigger>
+            <TooltipPopup>Back to the parent repository</TooltipPopup>
+          </Tooltip>
+        ) : overview ? (
           <div className="min-w-0 max-w-60 flex-1">
             <Select
               value={overview.selectedWorktreePath}
@@ -419,6 +454,9 @@ function RepositoryExplorer({
                 selectedRevision={selectedRevision}
                 onSelect={selectRevision}
                 active={split || showBranches}
+                onOpenSubmodule={(path) =>
+                  openRepository(submodulePath ? `${submodulePath}/${path}` : path)
+                }
                 stashActions={{
                   unavailable: !canManageStashes
                     ? "Source-control write permission is required."
@@ -620,11 +658,12 @@ export function GitExplorerPage() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         {selectedProject ? (
           <RepositoryExplorer
-            key={projectKey(selectedProject)}
+            key={`${projectKey(selectedProject)}:${search.submodulePath ?? ""}`}
             repositoryPicker={repositoryPicker}
             environmentId={selectedProject.environmentId}
             projectId={selectedProject.id}
             {...(search.worktreePath ? { worktreePath: search.worktreePath } : {})}
+            {...(search.submodulePath ? { submodulePath: search.submodulePath } : {})}
           />
         ) : (
           <>

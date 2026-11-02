@@ -1,5 +1,6 @@
 import {
   describeGitExplorerMerge,
+  describeGitExplorerSubmodule,
   gitExplorerBranchDeletionBlock,
   gitExplorerUpstreamMergeSummary,
   formatGitExplorerSync,
@@ -12,15 +13,18 @@ import type {
   GitExplorerOverviewResult,
   GitExplorerRef,
   GitExplorerStash,
+  GitExplorerSubmodule,
 } from "@t3tools/contracts";
 import {
   ArchiveIcon,
   ArrowDownIcon,
+  ArrowRightLeftIcon,
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleHelpIcon,
   EqualIcon,
+  FolderGit2Icon,
   FolderIcon,
   FolderOpenIcon,
   GitBranchIcon,
@@ -29,9 +33,13 @@ import {
   EllipsisIcon,
   TagIcon,
   Trash2Icon,
+  TriangleAlertIcon,
+  type LucideIcon,
 } from "lucide-react";
+import * as Schema from "effect/Schema";
 import { useState } from "react";
 
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -61,6 +69,42 @@ const ROW_CLASS =
   "relative flex h-6 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/8 pointer-coarse:h-7 max-sm:h-9";
 const HEADING_CLASS =
   "flex h-6 shrink-0 items-center gap-1.5 px-2 text-2xs font-medium text-muted-foreground";
+const CollapsibleSection = Schema.Literals(["tags", "stashes", "submodules"]);
+const CollapsedSections = Schema.Array(CollapsibleSection);
+const COLLAPSED_SECTIONS_KEY = "git-explorer-collapsed-sections";
+
+function SectionHeading({
+  icon: Icon,
+  label,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  icon: LucideIcon;
+  label: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <h2>
+      <button
+        type="button"
+        className={cn(
+          HEADING_CLASS,
+          "w-full rounded-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        )}
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+      >
+        <ChevronDownIcon className={cn("size-3 shrink-0", collapsed && "-rotate-90")} aria-hidden />
+        <Icon className="size-3" aria-hidden />
+        {label}
+        <span className="ml-auto font-mono text-3xs tabular-nums">{count}</span>
+      </button>
+    </h2>
+  );
+}
 
 interface BranchActions {
   deleteUnavailable: string | null;
@@ -576,6 +620,83 @@ function StashRow({
   );
 }
 
+function SubmoduleState({ submodule }: { submodule: GitExplorerSubmodule }) {
+  if (submodule.state === "in-sync")
+    return <CheckIcon className="size-3 shrink-0 text-success-foreground" aria-hidden />;
+  if (submodule.state === "out-of-sync")
+    return <ArrowRightLeftIcon className="size-3 shrink-0 text-warning-foreground" aria-hidden />;
+  if (submodule.state === "conflicted")
+    return <TriangleAlertIcon className="size-3 shrink-0 text-destructive" aria-hidden />;
+  return <span className="shrink-0 text-3xs text-muted-foreground">Not initialized</span>;
+}
+
+function SubmoduleRow({
+  submodule,
+  onOpen,
+}: {
+  submodule: GitExplorerSubmodule;
+  onOpen: (path: string) => void;
+}) {
+  const openable = submodule.headHash !== null;
+  const description = `${submodule.path} · ${describeGitExplorerSubmodule(submodule)}${submodule.url ? ` · ${submodule.url}` : ""}`;
+  const slash = submodule.path.lastIndexOf("/");
+  const showActions = (position: { x: number; y: number }) =>
+    showGitExplorerContextMenu<"open" | "copy-path" | "copy-hash">(
+      [
+        { id: "open", label: "Open submodule", disabled: !openable },
+        { id: "copy-path", label: "Copy path", icon: "copy", separatorBefore: true },
+        ...(submodule.recordedHash
+          ? [
+              {
+                id: "copy-hash" as const,
+                label: "Copy recorded commit hash",
+                icon: "copy" as const,
+              },
+            ]
+          : []),
+      ],
+      position,
+      async (action) => {
+        if (action === "open") {
+          if (openable) onOpen(submodule.path);
+        } else if (action === "copy-path") await copyGitExplorerValue(submodule.path, "path");
+        else if (submodule.recordedHash)
+          await copyGitExplorerValue(submodule.recordedHash, "commit hash");
+      },
+    );
+  return (
+    <div
+      className="flex min-w-0 items-center"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void showActions(gitExplorerMenuPosition(event));
+      }}
+    >
+      <button
+        type="button"
+        className={cn(ROW_CLASS, "flex-1", !openable && "cursor-default")}
+        aria-disabled={!openable}
+        onClick={() => {
+          if (openable) onOpen(submodule.path);
+        }}
+        aria-label={`${openable ? "Open submodule " : ""}${description}`}
+      >
+        <FolderGit2Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
+          {slash >= 0 ? (
+            <span className="text-muted-foreground">{submodule.path.slice(0, slash + 1)}</span>
+          ) : null}
+          <span className={cn(!openable && "text-muted-foreground")}>
+            {submodule.path.slice(slash + 1)}
+          </span>
+        </GitExplorerHint>
+        <SubmoduleState submodule={submodule} />
+      </button>
+    </div>
+  );
+}
+
 export function GitExplorerBranches({
   overview,
   selectedRevision,
@@ -585,6 +706,7 @@ export function GitExplorerBranches({
   active,
   actions,
   stashActions,
+  onOpenSubmodule,
 }: {
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
@@ -594,8 +716,20 @@ export function GitExplorerBranches({
   active: boolean;
   actions: BranchActions;
   stashActions: StashActions;
+  onOpenSubmodule: (path: string) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [collapsedSections, setCollapsedSections] = useLocalStorage(
+    COLLAPSED_SECTIONS_KEY,
+    [],
+    CollapsedSections,
+  );
+  const toggleSection = (section: typeof CollapsibleSection.Type) =>
+    setCollapsedSections((current) =>
+      current.includes(section)
+        ? current.filter((value) => value !== section)
+        : [...current, section],
+    );
   const [selecting, setSelecting] = useState(false);
   const [selectedBranches, setSelectedBranches] = useState<ReadonlyMap<string, string>>(new Map());
   const selectionDisabled = actions.deleteUnavailable !== null || actions.pendingBranch !== null;
@@ -642,6 +776,9 @@ export function GitExplorerBranches({
   const tags = overview.refs
     .filter((reference) => reference.kind === "tag" && matches(reference))
     .toSorted((a, b) => a.shortName.localeCompare(b.shortName));
+  // Searching reveals matching tags the same way it expands collapsed branch folders.
+  const tagsCollapsed = !filter && collapsedSections.includes("tags");
+  const submodules = overview.submodules ?? [];
   const remoteGroups = new Map<string, GitExplorerRef[]>();
   for (const reference of overview.refs) {
     if (reference.kind !== "remote" || !matches(reference)) continue;
@@ -818,46 +955,76 @@ export function GitExplorerBranches({
           ) : null}
         </section>
         <section aria-label="Tags">
-          <h2 className={HEADING_CLASS}>
-            <TagIcon className="size-3" aria-hidden />
-            Tags
-            <span className="ml-auto font-mono text-3xs tabular-nums">{tags.length}</span>
-          </h2>
-          {tags.map((reference) => (
-            <ReferenceRow
-              key={reference.name}
-              reference={reference}
-              label={reference.shortName}
-              current={false}
-              selected={selectedRevision === reference.hash}
-              onSelect={onSelect}
-            />
-          ))}
-          {tags.length === 0 ? (
-            <p className="px-2 text-2xs text-muted-foreground">No tags</p>
-          ) : null}
+          <SectionHeading
+            icon={TagIcon}
+            label="Tags"
+            count={tags.length}
+            collapsed={tagsCollapsed}
+            onToggle={() => toggleSection("tags")}
+          />
+          {tagsCollapsed ? null : (
+            <>
+              {tags.map((reference) => (
+                <ReferenceRow
+                  key={reference.name}
+                  reference={reference}
+                  label={reference.shortName}
+                  current={false}
+                  selected={selectedRevision === reference.hash}
+                  onSelect={onSelect}
+                />
+              ))}
+              {tags.length === 0 ? (
+                <p className="px-2 text-2xs text-muted-foreground">No tags</p>
+              ) : null}
+            </>
+          )}
         </section>
         <section aria-label="Stashes">
-          <h2 className={HEADING_CLASS}>
-            <ArchiveIcon className="size-3" aria-hidden />
-            Stashes
-            <span className="ml-auto font-mono text-3xs tabular-nums">
-              {overview.stashes.length}
-            </span>
-          </h2>
-          {overview.stashes.map((stash) => (
-            <StashRow
-              key={stash.name}
-              stash={stash}
-              actions={stashActions}
-              selected={selectedRevision === stash.hash}
-              onSelect={onSelect}
-            />
-          ))}
-          {overview.stashes.length === 0 ? (
-            <p className="px-2 text-2xs text-muted-foreground">No stashes</p>
-          ) : null}
+          <SectionHeading
+            icon={ArchiveIcon}
+            label="Stashes"
+            count={overview.stashes.length}
+            collapsed={collapsedSections.includes("stashes")}
+            onToggle={() => toggleSection("stashes")}
+          />
+          {collapsedSections.includes("stashes") ? null : (
+            <>
+              {overview.stashes.map((stash) => (
+                <StashRow
+                  key={stash.name}
+                  stash={stash}
+                  actions={stashActions}
+                  selected={selectedRevision === stash.hash}
+                  onSelect={onSelect}
+                />
+              ))}
+              {overview.stashes.length === 0 ? (
+                <p className="px-2 text-2xs text-muted-foreground">No stashes</p>
+              ) : null}
+            </>
+          )}
         </section>
+        {submodules.length > 0 ? (
+          <section aria-label="Submodules">
+            <SectionHeading
+              icon={FolderGit2Icon}
+              label="Submodules"
+              count={submodules.length}
+              collapsed={collapsedSections.includes("submodules")}
+              onToggle={() => toggleSection("submodules")}
+            />
+            {collapsedSections.includes("submodules")
+              ? null
+              : submodules.map((submodule) => (
+                  <SubmoduleRow
+                    key={submodule.path}
+                    submodule={submodule}
+                    onOpen={onOpenSubmodule}
+                  />
+                ))}
+          </section>
+        ) : null}
       </div>
     </nav>
   );

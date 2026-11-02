@@ -7,6 +7,7 @@ export interface GitExplorerSearch {
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
   readonly worktreePath?: string;
+  readonly submodulePath?: string;
 }
 
 export const Route = createFileRoute("/git")({
@@ -27,6 +28,9 @@ export const Route = createFileRoute("/git")({
       : {}),
     ...(typeof raw.worktreePath === "string" && raw.worktreePath
       ? { worktreePath: raw.worktreePath }
+      : {}),
+    ...(typeof raw.submodulePath === "string" && raw.submodulePath
+      ? { submodulePath: raw.submodulePath }
       : {}),
   }),
   component: GitExplorerPage,

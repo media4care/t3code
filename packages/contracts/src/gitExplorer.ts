@@ -4,6 +4,10 @@ import { NonNegativeInt, PositiveInt, ProjectId } from "./baseSchemas.ts";
 const GitExplorerScope = {
   projectId: ProjectId,
   worktreePath: Schema.optional(Schema.String),
+  // Relative to the selected worktree; nested submodules join their paths with "/".
+  submodulePath: Schema.optional(
+    Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(4096)),
+  ),
 };
 const GitExplorerHash = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/));
 export const GitExplorerOverviewInput = Schema.Struct(GitExplorerScope);
@@ -34,6 +38,15 @@ export const GitExplorerStash = Schema.Struct({
   createdAt: Schema.String,
 });
 export type GitExplorerStash = typeof GitExplorerStash.Type;
+export const GitExplorerSubmodule = Schema.Struct({
+  name: Schema.String,
+  path: Schema.String,
+  url: Schema.NullOr(Schema.String),
+  recordedHash: Schema.NullOr(GitExplorerHash),
+  headHash: Schema.NullOr(GitExplorerHash),
+  state: Schema.Literals(["in-sync", "out-of-sync", "uninitialized", "conflicted"]),
+});
+export type GitExplorerSubmodule = typeof GitExplorerSubmodule.Type;
 export const GitExplorerOverviewResult = Schema.Struct({
   repositoryPath: Schema.String,
   selectedWorktreePath: Schema.String,
@@ -42,6 +55,8 @@ export const GitExplorerOverviewResult = Schema.Struct({
   worktrees: Schema.Array(GitExplorerWorktree),
   refs: Schema.Array(GitExplorerRef),
   stashes: Schema.Array(GitExplorerStash),
+  // Optional so clients keep working against servers that predate submodules.
+  submodules: Schema.optional(Schema.Array(GitExplorerSubmodule)),
   lastFetchAt: Schema.NullOr(Schema.String),
   snapshotId: Schema.String,
 });
@@ -224,6 +239,7 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
   reason: Schema.Literals([
     "project-not-found",
     "invalid-worktree",
+    "invalid-submodule",
     "invalid-revision",
     "invalid-path",
     "snapshot-expired",
@@ -253,6 +269,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The selected project is unavailable.";
       case "invalid-worktree":
         return "The selected worktree does not belong to this repository.";
+      case "invalid-submodule":
+        return "The selected submodule is not checked out in this worktree.";
       case "invalid-revision":
         return "The selected commit is unavailable in this repository.";
       case "invalid-path":

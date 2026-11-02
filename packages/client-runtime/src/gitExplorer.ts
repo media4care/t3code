@@ -1,4 +1,8 @@
-import type { GitExplorerRef, GitExplorerBranchStatus } from "@t3tools/contracts";
+import type {
+  GitExplorerRef,
+  GitExplorerBranchStatus,
+  GitExplorerSubmodule,
+} from "@t3tools/contracts";
 
 export interface GitGraphLine {
   readonly from: number;
@@ -95,6 +99,22 @@ export function formatGitExplorerSync(
   if (ref.ahead > 0) return `${ref.ahead} ahead`;
   if (ref.behind > 0) return `${ref.behind} behind`;
   return "Synchronized";
+}
+
+export function describeGitExplorerSubmodule(
+  submodule: Pick<GitExplorerSubmodule, "state" | "headHash" | "recordedHash">,
+): string {
+  const short = (hash: string | null) => hash?.slice(0, 7) ?? "unknown";
+  switch (submodule.state) {
+    case "in-sync":
+      return `Checked out at the recorded commit ${short(submodule.headHash)}`;
+    case "out-of-sync":
+      return `Checked out ${short(submodule.headHash)}; this worktree records ${short(submodule.recordedHash)}`;
+    case "uninitialized":
+      return "Not initialized. Run git submodule update --init to check it out.";
+    case "conflicted":
+      return "The recorded submodule commit has a merge conflict";
+  }
 }
 
 export function gitExplorerEmphasizedRefs(

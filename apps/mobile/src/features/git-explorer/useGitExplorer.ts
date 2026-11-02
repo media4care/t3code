@@ -11,6 +11,7 @@ export type GitExplorerParams = {
   readonly environmentId: string;
   readonly projectId: string;
   readonly worktreePath?: string;
+  readonly submodulePath?: string;
 };
 
 interface HistoryPage {
@@ -25,6 +26,7 @@ export function gitExplorerTarget(params: GitExplorerParams) {
     input: {
       projectId: ProjectId.make(params.projectId),
       ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
+      ...(params.submodulePath ? { submodulePath: params.submodulePath } : {}),
     },
   };
 }
@@ -60,13 +62,13 @@ export function useGitExplorer(params: GitExplorerParams) {
   const loadMore = () => {
     if (canLoadMore) setPagination({ scope, cursor: nextCursor, pages });
   };
-  const { environmentId, projectId, worktreePath } = params;
+  const { environmentId, projectId, worktreePath, submodulePath } = params;
   const refreshRepository = useCallback(() => {
     gitExplorerEnvironment.refresh(
       registry,
-      gitExplorerTarget({ environmentId, projectId, worktreePath }),
+      gitExplorerTarget({ environmentId, projectId, worktreePath, submodulePath }),
     );
-  }, [registry, environmentId, projectId, worktreePath]);
+  }, [registry, environmentId, projectId, worktreePath, submodulePath]);
   const refresh = () => {
     refreshRepository();
     if (historyAtom) registry.refresh(historyAtom);

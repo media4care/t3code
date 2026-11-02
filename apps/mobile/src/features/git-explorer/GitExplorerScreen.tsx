@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { FlatList, Platform, Pressable, View } from "react-native";
-import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -131,11 +131,24 @@ function GitExplorerRepository(props: {
       (ref.name === overview.headBranch || ref.shortName === overview.headBranch),
   );
   const worktreeName = overview?.selectedWorktreePath.split("/").at(-1);
+  const openSubmodule = (path: string) =>
+    navigation.dispatch(
+      StackActions.push("GitExplorer", {
+        environmentId: params.environmentId,
+        projectId: params.projectId,
+        ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
+        submodulePath: params.submodulePath ? `${params.submodulePath}/${path}` : path,
+      }),
+    );
   return (
     <>
       <AppBar
         title="Git Explorer"
-        subtitle={project?.title ?? "Repository"}
+        subtitle={
+          params.submodulePath
+            ? `${project?.title ?? "Repository"} › ${params.submodulePath}`
+            : (project?.title ?? "Repository")
+        }
         onBack={() => navigation.goBack()}
         actions={[
           {
@@ -146,7 +159,8 @@ function GitExplorerRepository(props: {
           },
         ]}
         menus={
-          overview
+          // Submodule worktrees are not selectable; the parent worktree stays fixed.
+          overview && !params.submodulePath
             ? [
                 {
                   title: "Review worktree",
@@ -244,6 +258,7 @@ function GitExplorerRepository(props: {
                     onRefresh={explorer.refresh}
                     selectedRevision={selectedRevision}
                     tablet={split}
+                    onOpenSubmodule={openSubmodule}
                     onSelect={(hash) => {
                       selectRevision(hash);
                       setBranchesVisible(false);
@@ -261,6 +276,7 @@ function GitExplorerRepository(props: {
                       onRefresh={explorer.refresh}
                       selectedRevision={selectedRevision}
                       tablet
+                      onOpenSubmodule={openSubmodule}
                       onSelect={selectRevision}
                     />
                   </View>

@@ -845,6 +845,88 @@ it.layer(layer)("GitExplorer", (it) => {
     }),
   );
 
+  it.effect("lists submodule states and opens checked-out submodules as repositories", () =>
+    Effect.gen(function* () {
+      const { explorer, git, fs, path, cwd } = yield* fixture;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const gitIn = (directory: string, args: readonly string[]) =>
+        driver
+          .execute({
+            operation: "GitExplorer.test",
+            cwd: directory,
+            args: ["-c", "protocol.file.allow=always", ...args],
+          })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      const library = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-explorer-library-" });
+      yield* gitIn(library, ["init", "--initial-branch=main"]);
+      yield* gitIn(library, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "library",
+      ]);
+      const recorded = yield* gitIn(library, ["rev-parse", "HEAD"]);
+      yield* git(["-c", "protocol.file.allow=always", "submodule", "add", library, "libs/lib"]);
+      yield* git(["-c", "protocol.file.allow=always", "submodule", "add", library, "other"]);
+      yield* git(["commit", "-m", "add submodules"]);
+      const checkout = path.join(cwd, "libs", "lib");
+      yield* gitIn(checkout, ["submodule", "add", library, "inner"]);
+      yield* gitIn(checkout, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "nest",
+      ]);
+      const moved = yield* gitIn(checkout, ["rev-parse", "HEAD"]);
+      yield* git(["submodule", "deinit", "other"]);
+
+      assert.deepEqual(
+        (yield* explorer.overview(scope)).submodules?.map(({ path, state, headHash }) => ({
+          path,
+          state,
+          headHash,
+        })),
+        [
+          { path: "libs/lib", state: "out-of-sync", headHash: moved },
+          { path: "other", state: "uninitialized", headHash: null },
+        ],
+      );
+      const submodule = yield* explorer.overview({ ...scope, submodulePath: "libs/lib" });
+      assert.equal(submodule.selectedWorktreePath, yield* fs.realPath(checkout));
+      assert.equal(submodule.headHash, moved);
+      assert.deepEqual(
+        submodule.submodules?.map(({ path, state }) => ({ path, state })),
+        [{ path: "inner", state: "in-sync" }],
+      );
+      const history = yield* explorer.history({
+        ...scope,
+        submodulePath: "libs/lib",
+        snapshotId: submodule.snapshotId,
+      });
+      assert.deepEqual(
+        history.commits.map((commit) => commit.hash),
+        [moved, recorded],
+      );
+      assert.equal(
+        (yield* explorer.overview({ ...scope, submodulePath: "libs/lib/inner" })).headHash,
+        recorded,
+      );
+      for (const submodulePath of ["other", "libs", "hello.txt", "../outside", "."]) {
+        assert.equal(
+          (yield* explorer.overview({ ...scope, submodulePath }).pipe(Effect.flip)).reason,
+          "invalid-submodule",
+        );
+      }
+    }),
+  );
+
   it.effect("keeps conflicted paths unique and renders the working file against ours", () =>
     Effect.gen(function* () {
       const { explorer, git, write, cwd } = yield* fixture;

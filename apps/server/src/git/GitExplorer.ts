@@ -20,6 +20,7 @@ import {
   type GitExplorerPatchResult,
   type GitExplorerRef,
   type GitExplorerStash,
+  type GitExplorerSubmodule,
   type GitExplorerWorktree,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -75,6 +76,7 @@ const DIFF_OPTIONS = [
 ];
 const MAX_FILES = 2_000;
 const MAX_STASHES = 200;
+const MAX_SUBMODULES = 256;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_ANCESTORS = 25_000;
 const MAX_MERGE_COMMITS = 4_000;
@@ -277,26 +279,53 @@ const make = Effect.gen(function* () {
         ),
       );
   });
-  const resolve = Effect.fn("GitExplorer.resolve")(function* (input: GitExplorerOverviewInput) {
-    const project = yield* projects
-      .get(input.projectId)
-      .pipe(
-        Effect.mapError(
-          (cause) => new GitExplorerError({ operation: "project", reason: "read-failed", cause }),
-        ),
-      );
-    if (Option.isNone(project))
-      return yield* new GitExplorerError({ operation: "project", reason: "project-not-found" });
-    const workspace = yield* canonical(project.value.workspaceRoot);
-    const root = yield* canonical(
-      (yield* run(workspace, ["rev-parse", "--show-toplevel"])).stdout.trim(),
+  const resolveSubmodule = Effect.fn("GitExplorer.resolveSubmodule")(function* (
+    worktree: string,
+    submodulePath: string,
+  ) {
+    const invalid = () =>
+      new GitExplorerError({ operation: "submodule", reason: "invalid-submodule" });
+    const target = yield* canonical(path.join(worktree, submodulePath)).pipe(
+      Effect.mapError(invalid),
     );
+    if ((yield* fs.stat(target).pipe(Effect.mapError(invalid))).type !== "Directory")
+      return yield* invalid();
+    // Walk superprojects so nested submodules resolve, but only within the selected worktree.
+    let current = target;
+    for (let depth = 0; depth < 8; depth++) {
+      if (!current.startsWith(`${worktree}${path.sep}`)) return yield* invalid();
+      const result = yield* run(
+        current,
+        ["rev-parse", "--show-toplevel", "--show-superproject-working-tree"],
+        { allowNonZero: true },
+      ).pipe(Effect.mapError(invalid));
+      const [toplevel, superproject] = result.stdout.trim().split("\n");
+      if (result.exitCode !== 0 || !toplevel || !superproject) return yield* invalid();
+      if ((yield* canonical(toplevel).pipe(Effect.mapError(invalid))) !== current)
+        return yield* invalid();
+      current = yield* canonical(superproject).pipe(Effect.mapError(invalid));
+      if (current === worktree) return target;
+    }
+    return yield* invalid();
+  });
+  const resolveRepository = Effect.fn("GitExplorer.resolveRepository")(function* (
+    root: string,
+    worktreePath: string | undefined,
+  ) {
     const commonDirectory = yield* canonical(
       (yield* run(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(),
     );
     const worktreeOutput = (yield* run(root, ["worktree", "list", "--porcelain", "-z"])).stdout;
     const worktrees = parseWorktrees(worktreeOutput);
-    const cwd = input.worktreePath === undefined ? root : yield* canonical(input.worktreePath);
+    // A submodule's main worktree is listed at its administrative directory, not its checkout.
+    const main = worktrees[0];
+    if (
+      main &&
+      !main.bare &&
+      (yield* canonical(main.path).pipe(Effect.orElseSucceed(() => null))) === commonDirectory
+    )
+      worktrees[0] = { ...main, path: root };
+    const cwd = worktreePath === undefined ? root : yield* canonical(worktreePath);
     const selected = yield* Effect.findFirst(worktrees, (worktree) =>
       canonical(worktree.path).pipe(
         Effect.map((value) => value === cwd),
@@ -312,6 +341,27 @@ const make = Effect.gen(function* () {
     if (actualCommon !== commonDirectory)
       return yield* new GitExplorerError({ operation: "worktree", reason: "invalid-worktree" });
     return { cwd, root, commonDirectory, worktrees, worktreeOutput, selected: selected.value };
+  });
+  const resolve = Effect.fn("GitExplorer.resolve")(function* (input: GitExplorerOverviewInput) {
+    const project = yield* projects
+      .get(input.projectId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new GitExplorerError({ operation: "project", reason: "read-failed", cause }),
+        ),
+      );
+    if (Option.isNone(project))
+      return yield* new GitExplorerError({ operation: "project", reason: "project-not-found" });
+    const workspace = yield* canonical(project.value.workspaceRoot);
+    const root = yield* canonical(
+      (yield* run(workspace, ["rev-parse", "--show-toplevel"])).stdout.trim(),
+    );
+    const repository = yield* resolveRepository(root, input.worktreePath);
+    if (input.submodulePath === undefined) return repository;
+    return yield* resolveRepository(
+      yield* resolveSubmodule(repository.cwd, input.submodulePath),
+      undefined,
+    );
   });
   const readShallowBoundary = Effect.fn("GitExplorer.readShallowBoundary")(function* (
     commonDirectory: string,
@@ -353,6 +403,93 @@ const make = Effect.gen(function* () {
     if (stashes.length > MAX_STASHES)
       return yield* new GitExplorerError({ operation: "stashes", reason: "too-large" });
     return { stashes, signature: output.stdout };
+  });
+  const readSubmoduleHead = Effect.fn("GitExplorer.readSubmoduleHead")(function* (
+    checkout: string,
+  ) {
+    if (!(yield* fs.exists(path.join(checkout, ".git")))) return null;
+    const result = yield* run(checkout, ["rev-parse", "--show-toplevel", "HEAD"], {
+      allowNonZero: true,
+    });
+    const [toplevel, hash] = result.stdout.trim().split("\n");
+    // An empty checkout resolves to the superproject, which must not count as initialized.
+    if (result.exitCode !== 0 || !toplevel || !hash || !HASH.test(hash)) return null;
+    return (yield* canonical(toplevel)) === (yield* canonical(checkout)) ? hash : null;
+  });
+  const readSubmodules = Effect.fn("GitExplorer.readSubmodules")(function* (cwd: string) {
+    if (!(yield* fs.exists(path.join(cwd, ".gitmodules")).pipe(Effect.orElseSucceed(() => false))))
+      return [];
+    const config = yield* run(
+      cwd,
+      [
+        "config",
+        "--file",
+        ".gitmodules",
+        "--null",
+        "--get-regexp",
+        "^submodule\\..*\\.(path|url)$",
+      ],
+      { allowNonZero: true, maxBytes: 256 * 1024 },
+    );
+    // A malformed .gitmodules should not hide the rest of the repository.
+    if (config.exitCode !== 0) return [];
+    const modules = new Map<string, { name: string; path?: string; url?: string }>();
+    for (const record of config.stdout.split("\0")) {
+      const split = record.indexOf("\n");
+      const match = split < 0 ? null : /^submodule\.(.*)\.(path|url)$/.exec(record.slice(0, split));
+      if (!match) continue;
+      const module = modules.get(match[1]!) ?? { name: match[1]! };
+      module[match[2] as "path" | "url"] = record.slice(split + 1);
+      modules.set(match[1]!, module);
+    }
+    const byPath = new Map(
+      [...modules.values()].flatMap((module) => (module.path ? [[module.path, module]] : [])),
+    );
+    const paths = [...byPath.keys()].toSorted().slice(0, MAX_SUBMODULES);
+    if (paths.length === 0) return [];
+    const recorded = new Map<string, string | null>();
+    for (const entry of (yield* run(cwd, [
+      "ls-files",
+      "--stage",
+      "-z",
+      "--",
+      ...paths,
+    ])).stdout.split("\0")) {
+      const tab = entry.indexOf("\t");
+      const [mode, hash, stage] = entry.slice(0, tab).split(" ");
+      const entryPath = entry.slice(tab + 1);
+      if (tab < 0 || mode !== "160000" || !hash || !HASH.test(hash) || !byPath.has(entryPath))
+        continue;
+      // Conflicted gitlinks have no single recorded commit.
+      recorded.set(entryPath, stage === "0" && !recorded.has(entryPath) ? hash : null);
+    }
+    return yield* Effect.forEach(
+      [...recorded],
+      ([submodulePath, recordedHash]) =>
+        Effect.gen(function* () {
+          const headHash = yield* readSubmoduleHead(path.join(cwd, submodulePath)).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const module = byPath.get(submodulePath)!;
+          const submodule: GitExplorerSubmodule = {
+            name: module.name,
+            path: submodulePath,
+            url: module.url ?? null,
+            recordedHash,
+            headHash,
+            state:
+              recordedHash === null
+                ? "conflicted"
+                : headHash === null
+                  ? "uninitialized"
+                  : headHash === recordedHash
+                    ? "in-sync"
+                    : "out-of-sync",
+          };
+          return submodule;
+        }),
+      { concurrency: 4 },
+    );
   });
   const findStash = Effect.fn("GitExplorer.findStash")(function* (
     cwd: string,
@@ -483,6 +620,7 @@ const make = Effect.gen(function* () {
         ];
       });
       const { stashes, signature: stashSignature } = yield* readStashes(cwd);
+      const submodules = yield* readSubmodules(cwd);
       if (refs.length > 2048)
         return yield* new GitExplorerError({ operation: "refs", reason: "too-large" });
       const fetchPath = (yield* run(cwd, [
@@ -516,6 +654,18 @@ const make = Effect.gen(function* () {
         output.stdout,
         shallowBoundary,
         stashSignature,
+        submodules
+          .map((submodule) =>
+            [
+              submodule.name,
+              submodule.path,
+              submodule.url,
+              submodule.recordedHash,
+              submodule.headHash,
+              submodule.state,
+            ].join("\0"),
+          )
+          .join("\n"),
         mergeConfig.signature,
       ]
         .map((value) => `${value.length}:${value}`)
@@ -569,6 +719,7 @@ const make = Effect.gen(function* () {
         worktrees,
         refs: resolvedRefs,
         stashes,
+        submodules,
         lastFetchAt,
         snapshotId,
       };

@@ -21,7 +21,14 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
 ) {
   const revisions = Atom.family((_key: string) => Atom.make(0));
   const refreshTrigger = ({ environmentId, input }: ExplorerTarget) =>
-    revisions(JSON.stringify([environmentId, input.projectId, input.worktreePath ?? null]));
+    revisions(
+      JSON.stringify([
+        environmentId,
+        input.projectId,
+        input.worktreePath ?? null,
+        input.submodulePath ?? null,
+      ]),
+    );
 
   const overview = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:git-explorer:overview",
