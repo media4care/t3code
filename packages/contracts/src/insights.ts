@@ -132,6 +132,24 @@ export const InsightSkillUsage = Schema.Struct({
 });
 export type InsightSkillUsage = typeof InsightSkillUsage.Type;
 
+/** A ticket's engineering-loop worksheet, `.agent-work/<ticket>/engineering-loop.md`, as last written. */
+export const InsightLoopTicket = Schema.Struct({
+  ticket: ShortText,
+  title: Schema.String.check(Schema.isMaxLength(300)),
+  stage: ShortText,
+  next: Schema.String.check(Schema.isMaxLength(600)),
+  updatedAt: IsoDateTime,
+  /** Timestamped stage changes in recorded order; empty for worksheets that predate them. */
+  stageChanges: Schema.Array(Schema.Struct({ stage: ShortText, at: IsoDateTime })).check(
+    Schema.isMaxLength(40),
+  ),
+  projectId: ProjectId,
+  threadId: Schema.NullOr(ThreadId),
+  /** Set when the worksheet lives in a linked environment rather than the report's own. */
+  environmentId: Schema.optionalKey(EnvironmentId),
+});
+export type InsightLoopTicket = typeof InsightLoopTicket.Type;
+
 export const InsightsProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
@@ -154,6 +172,8 @@ export const InsightsEvidenceResult = Schema.Struct({
   metrics: InsightsMetrics,
   /** Absent from environments that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
+  /** Absent from environments that predate engineering-loop worksheets. */
+  engineeringLoop: Schema.optionalKey(Schema.Array(InsightLoopTicket)),
   evidence: Schema.Array(InsightEvidence),
   throughSequence: NonNegativeInt,
   hasMore: Schema.Boolean,
@@ -172,6 +192,8 @@ export const InsightsReport = Schema.Struct({
   metrics: InsightsMetrics,
   /** Most-loaded first; absent from reports that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
+  /** Tickets in the engineering loop when the report was gathered, most recently updated first. */
+  engineeringLoop: Schema.optionalKey(Schema.Array(InsightLoopTicket)),
   evidence: Schema.Array(InsightEvidence),
   recommendationIds: Schema.Array(Schema.String),
   scopeKey: Schema.String,

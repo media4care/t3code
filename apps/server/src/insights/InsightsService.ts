@@ -47,6 +47,7 @@ import {
   insightKey,
   sumInsightSkills,
 } from "./insightsEvidence.ts";
+import { MAX_LOOP_TICKETS, makeLoopWorksheetReader } from "./engineeringLoop.ts";
 import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
 
 const TASK_ID = ScheduledTaskId.make("insights:daily");
@@ -117,6 +118,7 @@ const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const crypto = yield* Crypto.Crypto;
   const threadSkills = yield* ThreadSkills.ThreadSkills;
+  const readLoopWorksheets = yield* makeLoopWorksheetReader;
   const updates = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -167,7 +169,7 @@ const make = Effect.gen(function* () {
       ORDER BY r.requested_at DESC, r.ordinal DESC LIMIT 1`;
     const reports = yield* sql<{
       payload_json: string;
-    }>`SELECT json_set(payload_json, '$.evidence', json('[]')) AS payload_json FROM insights_reports ORDER BY created_at DESC LIMIT 30`;
+    }>`SELECT json_remove(json_set(payload_json, '$.evidence', json('[]')), '$.engineeringLoop') AS payload_json FROM insights_reports ORDER BY created_at DESC LIMIT 30`;
     const recs = yield* sql<{
       payload_json: string;
     }>`SELECT json_set(payload_json, '$.evidence', json('[]'), '$.history', json('[]'), '$.assessments', json(COALESCE((SELECT json_group_array(json_set(value, '$.evidence', json('[]'))) FROM json_each(json_extract(payload_json, '$.assessments'))), '[]'))) AS payload_json FROM insights_recommendations ORDER BY updated_at DESC LIMIT 251`;
@@ -330,6 +332,64 @@ const make = Effect.gen(function* () {
     sql<InsightsProject>`SELECT project_id AS projectId, title, workspace_root AS workspaceRoot
       FROM projection_projects WHERE deleted_at IS NULL AND ${projectIds.length ? sql.in("project_id", projectIds) : sql`1 = 1`}`;
 
+  /** Engineering-loop worksheets in the projects' checkouts and their threads' recent worktrees. */
+  const loopTickets = Effect.fn("InsightsService.loopTickets")(function* (input: {
+    readonly projectIds: ReadonlyArray<ProjectId>;
+    readonly projects: ReadonlyArray<InsightsProject>;
+    readonly since: string;
+    readonly excludeThreadId: ThreadId | null;
+  }) {
+    const inScope = input.projectIds.length ? sql.in("t.project_id", input.projectIds) : sql`1 = 1`;
+    const worktrees = yield* sql<{
+      thread_id: ThreadId;
+      project_id: ProjectId;
+      root: string;
+    }>`SELECT t.thread_id, t.project_id, json_extract(t.payload_json, '$.worktreePath') AS root
+      FROM orchestration_v2_projection_threads t
+      WHERE t.deleted_at IS NULL AND ${inScope} AND t.updated_at >= ${input.since}
+        AND json_extract(t.payload_json, '$.worktreePath') IS NOT NULL
+      ORDER BY t.updated_at DESC LIMIT 100`;
+    const worktreeOf = new Map<string, { threadId: ThreadId; projectId: ProjectId }>();
+    for (const row of worktrees)
+      if (!worktreeOf.has(row.root))
+        worktreeOf.set(row.root, { threadId: row.thread_id, projectId: row.project_id });
+    const worksheets = yield* readLoopWorksheets(
+      [
+        ...input.projects.map((project) => ({
+          root: project.workspaceRoot,
+          projectId: project.projectId,
+        })),
+        ...[...worktreeOf].map(([root, { projectId }]) => ({ root, projectId })),
+      ],
+      input.since,
+    );
+    if (!worksheets.length) return [];
+    // Outside a worktree, the thread that last wrote a `Stage:` into the worksheet ran the loop.
+    const writes = yield* sql<{
+      thread_id: ThreadId;
+      around: string;
+    }>`SELECT i.thread_id,
+      substr(i.payload_json, MAX(1, instr(i.payload_json, '/engineering-loop.md') - 200), 220) AS around
+      FROM orchestration_v2_projection_turn_items i
+      JOIN orchestration_v2_projection_threads t ON t.thread_id = i.thread_id
+      WHERE t.deleted_at IS NULL AND ${inScope} AND i.updated_at >= ${input.since}
+        AND ${input.excludeThreadId === null ? sql`1 = 1` : sql`i.thread_id <> ${input.excludeThreadId}`}
+        AND i.type IN ('file_change', 'command_execution', 'dynamic_tool')
+        AND instr(i.payload_json, '/engineering-loop.md') > 0 AND instr(i.payload_json, 'Stage: ') > 0
+      ORDER BY i.updated_at DESC LIMIT 500`;
+    const writer = new Map<string, ThreadId>();
+    for (const row of writes) {
+      const ticket = [
+        ...row.around.matchAll(/\.agent-work\/([^/"\\\s]+)\/engineering-loop\.md/g),
+      ].at(-1)?.[1];
+      if (ticket && !writer.has(ticket)) writer.set(ticket, row.thread_id);
+    }
+    return worksheets.map(({ root, ...ticket }) => ({
+      ...ticket,
+      threadId: worktreeOf.get(root)?.threadId ?? writer.get(ticket.ticket) ?? null,
+    }));
+  });
+
   /** Activity in `projectIds` (all when empty) after `fromSequence`, as bounded evidence. */
   const gather = Effect.fn("InsightsService.gather")(function* (
     input: InsightsEvidenceInput & { readonly excludeThreadId: ThreadId | null },
@@ -472,10 +532,12 @@ const make = Effect.gen(function* () {
           ),
         });
     }
+    const projects = yield* projectsIn(input.projectIds);
     return {
-      projects: yield* projectsIn(input.projectIds),
+      projects,
       metrics,
       skills: sumInsightSkills([skillUsage]),
+      engineeringLoop: yield* loopTickets({ ...input, projects, since }),
       evidence: yield* Effect.forEach(evidence, (entry) =>
         boundedId(entry.id).pipe(Effect.map((id) => ({ ...entry, id }))),
       ),
@@ -606,6 +668,17 @@ const make = Effect.gen(function* () {
         local.skills,
         ...reached.map((entry) => entry.result.skills),
       ]);
+      const engineeringLoop = [
+        ...local.engineeringLoop,
+        ...reached.flatMap((entry) =>
+          (entry.result.engineeringLoop ?? []).map((ticket) => ({
+            ...ticket,
+            environmentId: entry.environmentId,
+          })),
+        ),
+      ]
+        .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, MAX_LOOP_TICKETS);
       const hasMore = local.hasMore || reached.some((entry) => entry.result.hasMore);
       const createdAt = local.createdAt;
       const actualRows = yield* sql<{
@@ -643,6 +716,7 @@ const make = Effect.gen(function* () {
         ],
         metrics,
         skills,
+        engineeringLoop,
         evidence: [...local.evidence, ...linkedEvidence],
         recommendationIds: [],
         scopeKey,
