@@ -103,6 +103,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.insightsRecommendation]: "insights",
   [WS_METHODS.insightsUpdate]: "insights",
   [WS_METHODS.insightsImplement]: "insights",
+  [WS_METHODS.threadSkillsList]: "orchestration",
   [WS_METHODS.scheduledTasksSubscribe]: "scheduledTasks",
   [WS_METHODS.scheduledTasksUpsert]: "scheduledTasks",
   [WS_METHODS.scheduledTasksSetEnabled]: "scheduledTasks",
