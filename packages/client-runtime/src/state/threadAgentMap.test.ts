@@ -14,6 +14,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
@@ -25,6 +26,7 @@ import {
   deriveThreadAgentMap,
   resolveAgentMapConversation,
 } from "./threadAgentMap.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
 import { threadKey } from "./entities.ts";
 import { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
@@ -111,7 +113,18 @@ function setup() {
     requested,
     threadsAtom,
     environmentIdsAtom,
-    maps: createThreadAgentMapAtoms({ details, threadsAtom, environmentIdsAtom }),
+    maps: createThreadAgentMapAtoms({
+      runtime: Atom.runtime(
+        Layer.succeed(
+          EnvironmentRegistry.EnvironmentRegistry,
+          {} as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"],
+        ),
+      ),
+      details,
+      threadsAtom,
+      threadIndexAtom: () => Atom.make(new Map()),
+      environmentIdsAtom,
+    }),
     set(
       ref: ScopedThreadRef,
       projection: OrchestrationV2ThreadProjection | null,

@@ -1,5 +1,6 @@
 import * as Qa from "./qa/QaService.ts";
 import * as Insights from "./insights/InsightsService.ts";
+import * as ThreadSkills from "./orchestration-v2/ThreadSkills.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -1401,6 +1402,7 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const qa = yield* Qa.QaService;
       const insights = yield* Insights.InsightsService;
+      const threadSkills = yield* ThreadSkills.ThreadSkills;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2295,6 +2297,18 @@ export const layerWsRpc = (
         [WS_METHODS.insightsRecommendation]: (input) => insights.recommendation(input.id),
         [WS_METHODS.insightsUpdate]: (input) => insights.update(input),
         [WS_METHODS.insightsImplement]: (input) => insights.implement(input.id),
+        [WS_METHODS.threadSkillsList]: (input) =>
+          threadSkills.list(input.threadId).pipe(
+            Effect.map((skills) => ({ skills })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: "Failed to load thread skills",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
           scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) => scheduledTasks.upsert(input),

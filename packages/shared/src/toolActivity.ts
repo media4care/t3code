@@ -24,6 +24,16 @@ export function claudeSkillInvocation(
   return name === undefined ? undefined : { name, args: asTrimmedString(record?.args) };
 }
 
+/** The skill an agent loaded through Claude's `Skill` tool or OpenCode's `skill` tool. */
+export function skillToolInvocationName(
+  toolName: string | null | undefined,
+  input: unknown,
+): string | undefined {
+  return toolName === "skill"
+    ? asTrimmedString(asRecord(input)?.name)
+    : claudeSkillInvocation(toolName, input)?.name;
+}
+
 export function isJavaScriptReplTool(toolName: string | null | undefined): boolean {
   return toolName === "js" || toolName === "cua_repl.js" || toolName === "node_repl.js";
 }

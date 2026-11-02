@@ -20,11 +20,13 @@ import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { Chip } from "../../components/ui/Chip";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useServerConfigs } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
@@ -36,6 +38,23 @@ const STATUS_CLASSES = {
   failed: "text-danger",
   stopped: "text-foreground-muted",
 };
+const ROW_SKILL_LIMIT = 3;
+
+function useThreadSkills(target: ScopedThreadRef | null) {
+  return useEnvironmentQuery(target === null ? null : threadAgentMaps.skillsAtom(target));
+}
+
+function AgentSkills({ skills }: { skills: ReadonlyArray<string> }) {
+  const hidden = skills.length - ROW_SKILL_LIMIT;
+  return (
+    <View className="flex-row flex-wrap gap-1.5">
+      {skills.slice(0, ROW_SKILL_LIMIT).map((skill) => (
+        <Chip key={skill} label={skill} />
+      ))}
+      {hidden > 0 ? <Chip label={`+${hidden}`} /> : null}
+    </View>
+  );
+}
 
 export function ThreadAgentMap(props: {
   target: ScopedThreadRef;
@@ -49,6 +68,7 @@ export function ThreadAgentMap(props: {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [limit, setLimit] = useState(24);
   const nodes = useAtomValue(threadAgentMaps.nodesAtom(props.target));
+  const rootSkills = useThreadSkills(props.target).data?.skills ?? [];
   const children = new Map<string | null, ThreadAgentMapNode[]>();
   for (const node of nodes) {
     const siblings = children.get(node.parentId) ?? [];
@@ -70,6 +90,11 @@ export function ThreadAgentMap(props: {
         <Text className="mt-1 text-xs text-foreground-muted">
           {nodes.length} agents across this thread
         </Text>
+        {rootSkills.length > 0 ? (
+          <View className="mt-3">
+            <AgentSkills skills={rootSkills} />
+          </View>
+        ) : null}
       </View>
       {rows.length === 0 ? (
         <Text className="py-4 text-center text-sm text-foreground-muted">
@@ -134,6 +159,7 @@ function AgentMapRow(props: {
     );
   const metadata = agentMapMetadata(node, provider);
   const status = agentMapStatus(node);
+  const skills = useThreadSkills(node.target).data?.skills ?? [];
 
   const driver = provider?.driver ?? node.source?.driver;
   return (
@@ -165,6 +191,7 @@ function AgentMapRow(props: {
             {subagentDetailPreview(node.agent) ?? agentMapEmptyDetail(node)}
           </Text>
         </View>
+        {skills.length > 0 ? <AgentSkills skills={skills} /> : null}
         <View className="flex-row flex-wrap items-center justify-between gap-2">
           <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
             {status.label}
@@ -219,6 +246,7 @@ function AgentInspector(props: {
   const { presentationById } = useEnvironments();
   const metadata = agentMapMetadata(node, props.provider);
   const output = agentMapOutput(node);
+  const skills = useThreadSkills(node.target);
   const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && presentationById.has(node.target.environmentId);
   const workflow =
@@ -267,6 +295,16 @@ function AgentInspector(props: {
           {node.agent.phaseTitle ? (
             <Text className="text-xs text-foreground-muted">Phase: {node.agent.phaseTitle}</Text>
           ) : null}
+          <Text className="text-xs text-foreground-muted">
+            Skills:{" "}
+            {skills.data?.skills.length
+              ? skills.data.skills.join(", ")
+              : skills.data
+                ? "None reported"
+                : skills.isPending
+                  ? "Loading…"
+                  : "Not reported"}
+          </Text>
           {node.agent.usage ? (
             <Text className="text-xs text-foreground-muted">
               Tokens: {node.agent.usage.totalTokens.toLocaleString()}

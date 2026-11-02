@@ -54,8 +54,10 @@ export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   pendingRequestsAtom: environmentThreadDetails.pendingRequestsAtom,
 });
 export const threadAgentMaps = createThreadAgentMapAtoms({
+  runtime: connectionAtomRuntime,
   details: environmentThreadDetails,
   threadsAtom: environmentThreadShells.environmentThreadsAtom,
+  threadIndexAtom: environmentThreadShells.environmentThreadIndexAtom,
   environmentIdsAtom: Atom.make((get) => [
     ...enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom)),
   ]),

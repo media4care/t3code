@@ -2,6 +2,7 @@ import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretReso
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Qa from "./qa/QaService.ts";
 import * as Insights from "./insights/InsightsService.ts";
+import * as ThreadSkills from "./orchestration-v2/ThreadSkills.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -712,6 +713,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ScheduledTasks.ScheduledTaskService)({}),
   Layer.mock(Qa.QaService)({}),
   Layer.mock(Insights.InsightsService)({}),
+  Layer.mock(ThreadSkills.ThreadSkills)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(SecretResolver.SecretResolver)({}),
   Layer.mock(GuestShareService.GuestShareService)({}),

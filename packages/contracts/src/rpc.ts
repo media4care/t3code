@@ -599,6 +599,7 @@ export const WS_METHODS = {
   insightsRecommendation: "insights.recommendation",
   insightsUpdate: "insights.update",
   insightsImplement: "insights.implement",
+  threadSkillsList: "threadSkills.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
@@ -2086,6 +2087,12 @@ const WsInsightsImplementRpc = Rpc.make(WS_METHODS.insightsImplement, {
   error: Schema.Union([InsightsError, EnvironmentAuthorizationError]),
 });
 
+const WsThreadSkillsListRpc = Rpc.make(WS_METHODS.threadSkillsList, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Struct({ skills: Schema.Array(TrimmedNonEmptyString) }),
+  error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2247,6 +2254,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsInsightsRecommendationRpc,
   WsInsightsUpdateRpc,
   WsInsightsImplementRpc,
+  WsThreadSkillsListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,
