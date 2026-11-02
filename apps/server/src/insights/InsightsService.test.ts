@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   type InsightsEvidenceResult,
@@ -16,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -142,7 +144,7 @@ const layerWith = (
         NodeCrypto.layer,
       ),
     ),
-    Layer.provideMerge(Sqlite.layerMemory),
+    Layer.provideMerge(Layer.merge(Sqlite.layerMemory, NodeServices.layer)),
   );
 const layer = layerWith(
   Layer.mergeAll(
@@ -403,6 +405,82 @@ it.effect("counts dynamic tools and nonzero exits, and keeps failure evidence in
 );
 
 it.effect(
+  "shows engineering-loop worksheets from checkouts and worktrees with the thread that ran each",
+  () =>
+    Effect.gen(function* () {
+      yield* seed();
+      const sql = yield* SqlClient.SqlClient;
+      const fs = yield* FileSystem.FileSystem;
+      const temp = yield* fs.makeTempDirectoryScoped({ prefix: "t3-insights-loop-" });
+      const root = `${temp}/app`;
+      const worktree = `${temp}/worktree`;
+      yield* sql`UPDATE projection_projects SET workspace_root = ${root}`;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES ('loop-worktree', 'project', 'NG-3', 'codex', 'full-access', 'default', ${timestamp}, ${timestamp}, ${JSON.stringify({ worktreePath: worktree })})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+        VALUES ('stage-write', 'work', 'run-1', 2, 'file_change', 'completed', ${timestamp}, ${JSON.stringify({ fileName: `${root}/.agent-work/NG-1/engineering-loop.md`, diffStr: "-Stage: Testing\n+Stage: Review" })})`;
+      const worksheet = Effect.fn("test.insights.worksheet")(function* (
+        checkout: string,
+        ticket: string,
+        text: string,
+        modifiedAt?: string,
+      ) {
+        const file = `${checkout}/.agent-work/${ticket}/engineering-loop.md`;
+        yield* fs.makeDirectory(`${checkout}/.agent-work/${ticket}`, { recursive: true });
+        yield* fs.writeFileString(file, text);
+        if (modifiedAt) {
+          const seconds = Date.parse(modifiedAt) / 1000;
+          yield* fs.utimes(file, seconds, seconds);
+        }
+      });
+      const old = "2026-09-01T00:00:00.000Z";
+      yield* worksheet(
+        root,
+        "NG-1",
+        "# NG-1 Staff see the inventory\n\nStage: Review\nNext: Close the repair review.\n\n## Timestamps\n- 2026-10-28T09:00:00Z Stage: Plan\n- 2026-10-29T14:30Z Stage: Implementation\n- yesterday Stage: QA\n",
+        old,
+      );
+      yield* worksheet(root, "NG-2", "# NG-2 Shipped\nStage: Done\n", old);
+      yield* worksheet(root, "NG-4", "| id | subtask | status | commit | log |\n");
+      yield* fs.makeDirectory(`${root}/.agent-work/notes`, { recursive: true });
+      yield* worksheet(worktree, "NG-3", "# NG-3\nStage: Human review\nNext: Review the PR.\n");
+
+      const service = yield* Insights.InsightsService;
+      const packet = yield* service.collect(analyst);
+      const loop = packet.report.engineeringLoop ?? [];
+      assert.deepEqual(
+        loop.map(({ updatedAt: _updatedAt, ...ticket }) => ticket),
+        [
+          {
+            ticket: "NG-3",
+            title: "",
+            stage: "Human review",
+            next: "Review the PR.",
+            stageChanges: [],
+            projectId: ProjectId.make("project"),
+            threadId: ThreadId.make("loop-worktree"),
+          },
+          {
+            ticket: "NG-1",
+            title: "Staff see the inventory",
+            stage: "Review",
+            next: "Close the repair review.",
+            stageChanges: [
+              { stage: "Plan", at: "2026-10-28T09:00:00.000Z" },
+              { stage: "Implementation", at: "2026-10-29T14:30:00.000Z" },
+            ],
+            projectId: ProjectId.make("project"),
+            threadId: ThreadId.make("work"),
+          },
+        ],
+      );
+      assert.equal(loop[1]?.updatedAt, old);
+      assert.deepEqual((yield* service.report(packet.report.id)).engineeringLoop, loop);
+      assert.isUndefined((yield* service.snapshot()).reports[0]?.engineeringLoop);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
   "rejects improvement claims using pre-change evidence, then accepts later observations",
   () =>
     Effect.gen(function* () {
@@ -450,7 +528,7 @@ it.effect(
 );
 
 it.effect(
-  "merges a linked environment and its skill usage into one report, keeping its own cursor when it cannot be reached",
+  "merges a linked environment, its skill usage and loop tickets into one report, keeping its own cursor when it cannot be reached",
   () => {
     const remote: InsightsEvidenceResult = {
       projects: [
@@ -460,6 +538,18 @@ it.effect(
       skills: [
         { skill: "review", runs: 1 },
         { skill: "deploy", runs: 1 },
+      ],
+      engineeringLoop: [
+        {
+          ticket: "GH-9",
+          title: "Remote ticket",
+          stage: "Testing",
+          next: "",
+          updatedAt: timestamp,
+          stageChanges: [],
+          projectId: ProjectId.make("app2"),
+          threadId: ThreadId.make("remote-work"),
+        },
       ],
       evidence: [
         {
@@ -504,6 +594,9 @@ it.effect(
       assert.deepEqual(packet.report.skills, [
         { skill: "deploy", runs: 2 },
         { skill: "review", runs: 1 },
+      ]);
+      assert.deepEqual(packet.report.engineeringLoop, [
+        { ...remote.engineeringLoop![0]!, environmentId: studio },
       ]);
       assert.include(
         packet.report.evidence.find((e) => e.id === "run:run-1")?.text,

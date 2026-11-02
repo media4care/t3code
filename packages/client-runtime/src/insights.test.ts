@@ -8,6 +8,7 @@ import {
   type InsightsSettings,
 } from "@t3tools/contracts";
 import {
+  engineeringLoopBoard,
   insightsLinkedEnvironments,
   setLinkedInsightsProject,
   insightImplementationStatus,
@@ -93,6 +94,35 @@ describe("linked projects", () => {
     expect(insightsLinkedEnvironments(selected, new Map([[studio, "Mac Studio"]]))).toEqual([
       { environmentId: studio, label: "Mac Studio", linked: true },
       { environmentId: gone, label: "gone", linked: false },
+    ]);
+  });
+});
+
+describe("engineering loop", () => {
+  it("counts tickets per stage and times a re-entered stage from its latest entry", () => {
+    const ticket = {
+      ticket: "NG-1",
+      title: "Inventory",
+      stage: "Review",
+      next: "",
+      updatedAt: "2026-11-02T08:00:00.000Z",
+      stageChanges: [
+        { stage: "Review", at: "2026-10-20T08:00:00.000Z" },
+        { stage: "Implementation", at: "2026-10-25T08:00:00.000Z" },
+        { stage: "Review", at: "2026-10-30T08:00:00.000Z" },
+      ],
+      projectId: ProjectId.make("app"),
+      threadId: null,
+    };
+    const board = engineeringLoopBoard(
+      [ticket, { ...ticket, ticket: "NG-2", stage: "Blocked", stageChanges: [] }],
+      "2026-11-02T09:00:00.000Z",
+    );
+    expect(board.stages.find((entry) => entry.stage === "Review")?.count).toBe(1);
+    expect(board.elsewhere).toEqual([{ stage: "Blocked", count: 1 }]);
+    expect(board.rows.map((row) => [row.position, row.daysInStage, row.daysSinceUpdate])).toEqual([
+      [5, 3, 0],
+      [-1, null, 0],
     ]);
   });
 });
