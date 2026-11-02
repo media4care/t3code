@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import {
   ActivityIcon,
   ArrowRightIcon,
+  BoxIcon,
   ChartNoAxesColumnIncreasingIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -324,6 +325,44 @@ export function InsightsDashboard({
           </p>
         </section>
       </div>
+
+      {report.skills && metrics.runs > 0 && (
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-center gap-2">
+            <BoxIcon className="size-4 text-primary" aria-hidden />
+            <h3 className="text-sm font-semibold">Skills used</h3>
+          </div>
+          {report.skills.length ? (
+            <dl className="mt-3 grid gap-x-6 gap-y-1 lg:grid-cols-2">
+              {report.skills.map((entry) => (
+                <div key={entry.skill} className="flex items-center gap-3 px-1 py-2 text-xs">
+                  <dt className="w-40 break-words font-medium">{entry.skill}</dt>
+                  <dd className="flex flex-1 items-center gap-3">
+                    <span
+                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+                      aria-hidden
+                    >
+                      <span
+                        className="block h-full rounded-full bg-primary"
+                        style={{ width: `${(entry.runs / metrics.runs) * 100}%` }}
+                      />
+                    </span>
+                    <span className="w-20 text-right tabular-nums text-muted-foreground">
+                      {entry.runs}/{metrics.runs} runs
+                    </span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="py-4 text-sm text-muted-foreground">No skills loaded in these runs.</p>
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            Counted from Claude and OpenCode skill tool calls. Other providers don't report skill
+            loads.
+          </p>
+        </section>
+      )}
 
       {recent.length > 1 && (
         <section className="rounded-xl border border-border bg-card p-5">

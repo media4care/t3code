@@ -125,6 +125,13 @@ export const InsightsMetrics = Schema.Struct({
 });
 export type InsightsMetrics = typeof InsightsMetrics.Type;
 
+/** A skill agents loaded through their provider's skill tool, and in how many runs. */
+export const InsightSkillUsage = Schema.Struct({
+  skill: TrimmedNonEmptyString,
+  runs: NonNegativeInt,
+});
+export type InsightSkillUsage = typeof InsightSkillUsage.Type;
+
 export const InsightsProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
@@ -145,6 +152,8 @@ export type InsightsEvidenceInput = typeof InsightsEvidenceInput.Type;
 export const InsightsEvidenceResult = Schema.Struct({
   projects: Schema.Array(InsightsProject),
   metrics: InsightsMetrics,
+  /** Absent from environments that predate skill usage. */
+  skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
   evidence: Schema.Array(InsightEvidence),
   throughSequence: NonNegativeInt,
   hasMore: Schema.Boolean,
@@ -161,6 +170,8 @@ export const InsightsReport = Schema.Struct({
   wins: Schema.Array(Schema.Struct({ text: Text, evidenceIds: Schema.Array(ShortText) })),
   limitations: Schema.Array(Text),
   metrics: InsightsMetrics,
+  /** Most-loaded first; absent from reports that predate skill usage. */
+  skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
   evidence: Schema.Array(InsightEvidence),
   recommendationIds: Schema.Array(Schema.String),
   scopeKey: Schema.String,

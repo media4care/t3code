@@ -383,6 +383,7 @@ export const layerProduction = Layer.mergeAll(
         layerScheduledTaskProvided,
         layerThreadLaunchProvided,
         layerOrchestratorProvided,
+        ThreadSkills.layer,
         // The same instances server.ts gives Settings and /mcp, by layer memoization.
         PeerMcpClient.layer.pipe(Layer.provideMerge(PeerLinks.layer)),
       ),

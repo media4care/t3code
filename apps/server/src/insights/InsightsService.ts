@@ -16,6 +16,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   type InsightEvidence,
+  type InsightSkillUsage,
   type InsightsProject,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
@@ -35,6 +36,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadSkills from "../orchestration-v2/ThreadSkills.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -43,6 +45,7 @@ import {
   emptyInsightsMetrics,
   evidenceExcerpt,
   insightKey,
+  sumInsightSkills,
 } from "./insightsEvidence.ts";
 import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
 
@@ -113,6 +116,7 @@ const make = Effect.gen(function* () {
   const links = yield* PeerLinks.PeerLinks;
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const crypto = yield* Crypto.Crypto;
+  const threadSkills = yield* ThreadSkills.ThreadSkills;
   const updates = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -366,6 +370,7 @@ const make = Effect.gen(function* () {
     const throughSequence = hasMore ? runs.at(-1)!.sequence : upper;
     const metrics = { ...emptyInsightsMetrics() };
     const evidence: InsightEvidence[] = [];
+    const skillUsage: InsightSkillUsage[] = [];
     const excerptLimit = Math.max(
       160,
       Math.min(2200, Math.floor(input.characterBudget / Math.max(1, runs.length) / 32)),
@@ -403,12 +408,14 @@ const make = Effect.gen(function* () {
         WHERE a.run_id = ${run.run_id}`;
       metrics.tokens += usage[0]?.tokens ?? 0;
       if ((usage[0]?.samples ?? 0) > 0) metrics.runsWithTokenUsage++;
+      const skills = yield* threadSkills.forRun(run.run_id);
+      skillUsage.push(...skills.map((skill) => ({ skill, runs: 1 })));
       evidence.push({
         ...identity,
         id: `run:${run.run_id}`,
         itemId: null,
         kind: "run",
-        text: `Status: ${run.status}; model selection: ${run.selection}; started: ${run.started_at}; ended: ${run.completed_at}; tool failures: ${counts[0]?.failures ?? 0}; user/approval requests: ${counts[0]?.requests ?? 0}; recorded tokens: ${usage[0]?.tokens ?? "unknown"}. Completion is not verified task success.`,
+        text: `Status: ${run.status}; model selection: ${run.selection}; started: ${run.started_at}; ended: ${run.completed_at}; tool failures: ${counts[0]?.failures ?? 0}; user/approval requests: ${counts[0]?.requests ?? 0}; recorded tokens: ${usage[0]?.tokens ?? "unknown"}${skills.length ? `; skills loaded: ${skills.join(", ")}` : ""}. Completion is not verified task success.`,
       });
       const items = yield* sql<{
         id: string;
@@ -468,6 +475,7 @@ const make = Effect.gen(function* () {
     return {
       projects: yield* projectsIn(input.projectIds),
       metrics,
+      skills: sumInsightSkills([skillUsage]),
       evidence: yield* Effect.forEach(evidence, (entry) =>
         boundedId(entry.id).pipe(Effect.map((id) => ({ ...entry, id }))),
       ),
@@ -594,6 +602,10 @@ const make = Effect.gen(function* () {
         (total, entry) => addInsightsMetrics(total, entry.result.metrics),
         local.metrics,
       );
+      const skills = sumInsightSkills([
+        local.skills,
+        ...reached.map((entry) => entry.result.skills),
+      ]);
       const hasMore = local.hasMore || reached.some((entry) => entry.result.hasMore);
       const createdAt = local.createdAt;
       const actualRows = yield* sql<{
@@ -612,6 +624,7 @@ const make = Effect.gen(function* () {
         limitations: [
           "Evidence is sampled: up to 8 timeline items and 12 delegations per run. Inspect source threads before drawing conclusions.",
           "Timings include waiting; tokens are shown only where recorded for the main agent of each run. Native child sessions may be missing; workflow totals are not added again. Agent-reported attribution is not independent verification.",
+          "Skills count only loads through Claude's and OpenCode's skill tools; other providers, and skills read as plain files, are not counted.",
           ...(hasMore
             ? ["More activity remains for the next analysis; the checkpoint has not skipped it."]
             : []),
@@ -629,6 +642,7 @@ const make = Effect.gen(function* () {
           ),
         ],
         metrics,
+        skills,
         evidence: [...local.evidence, ...linkedEvidence],
         recommendationIds: [],
         scopeKey,

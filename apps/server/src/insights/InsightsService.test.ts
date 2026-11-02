@@ -26,6 +26,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadSkills from "../orchestration-v2/ThreadSkills.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -120,6 +121,7 @@ const layerWith = (
         }),
         peers,
         Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.empty }),
+        ThreadSkills.layer,
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed([
             ServerProvider.make({
@@ -448,13 +450,17 @@ it.effect(
 );
 
 it.effect(
-  "merges a linked environment into one report, keeping its own cursor when it cannot be reached",
+  "merges a linked environment and its skill usage into one report, keeping its own cursor when it cannot be reached",
   () => {
     const remote: InsightsEvidenceResult = {
       projects: [
         { projectId: ProjectId.make("app2"), title: "app2", workspaceRoot: "/studio/app2" },
       ],
       metrics: { ...emptyRemoteMetrics, runs: 1, completed: 1 },
+      skills: [
+        { skill: "review", runs: 1 },
+        { skill: "deploy", runs: 1 },
+      ],
       evidence: [
         {
           id: "run:remote-run",
@@ -478,6 +484,9 @@ it.effect(
     ]);
     return Effect.gen(function* () {
       yield* seed();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+        VALUES ('skill', 'work', 'run-1', 2, 'dynamic_tool', 'completed', ${timestamp}, '{"toolName":"Skill","input":{"skill":"deploy"}}')`;
       const service = yield* Insights.InsightsService;
       yield* service.configure({
         ...config,
@@ -492,6 +501,14 @@ it.effect(
         fromSequence: 0,
       });
       assert.equal(packet.report.metrics.runs, 2);
+      assert.deepEqual(packet.report.skills, [
+        { skill: "deploy", runs: 2 },
+        { skill: "review", runs: 1 },
+      ]);
+      assert.include(
+        packet.report.evidence.find((e) => e.id === "run:run-1")?.text,
+        "skills loaded: deploy",
+      );
       const linkedEvidence = packet.report.evidence.find((e) => e.environmentId === studio);
       assert.equal(linkedEvidence?.id, "studio/run:remote-run");
       assert.deepEqual(
