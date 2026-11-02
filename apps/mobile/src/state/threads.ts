@@ -47,8 +47,10 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   snapshotAtom: threadEnvironment.snapshotAtom,
 });
 export const threadAgentMaps = createThreadAgentMapAtoms({
+  runtime: connectionAtomRuntime,
   details: environmentThreadDetails,
   threadsAtom: environmentThreadShells.environmentThreadsAtom,
+  threadIndexAtom: environmentThreadShells.environmentThreadIndexAtom,
   environmentIdsAtom: Atom.make((get) => [
     ...enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom)),
   ]),

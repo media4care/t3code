@@ -12,11 +12,16 @@ import { useState } from "react";
 import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useQuietThreadProjection } from "../../state/entities";
 import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { Button } from "../ui/button";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
-import { AgentMapCard, AgentMapStatus, ThreadAgentMap } from "./ThreadAgentMap";
+import { AgentMapCard, AgentMapSkills, AgentMapStatus, ThreadAgentMap } from "./ThreadAgentMap";
 import { AgentElapsed } from "./AgentElapsed";
+
+function useThreadSkills(target: ScopedThreadRef | null) {
+  return useEnvironmentQuery(target === null ? null : threadAgentMaps.skillsAtom(target));
+}
 
 export function ThreadAgentMapControl({ threadRef }: { threadRef: ScopedThreadRef }) {
   const subagents = useAtomValue(
@@ -55,6 +60,7 @@ function AgentMapContent({
   useThreadFamily(threadRef.environmentId, threadRef.threadId);
   const projection = useQuietThreadProjection(threadRef)?.projection;
   const nodes = useAtomValue(threadAgentMaps.nodesAtom(threadRef));
+  const rootSkills = useThreadSkills(threadRef).data?.skills;
   const providers = useEnvironmentProviders();
   const providerFor = (node: ThreadAgentMapNode) =>
     providers
@@ -71,6 +77,7 @@ function AgentMapContent({
   return (
     <ThreadAgentMap
       title={projection?.thread.title ?? "Thread"}
+      {...(rootSkills === undefined ? {} : { skills: rootSkills })}
       nodes={nodes}
       providerFor={providerFor}
       renderCard={(node, selected, onSelect) => (
@@ -103,10 +110,12 @@ function ResolvedAgentMapCard(props: {
   onSelect: () => void;
 }) {
   const node = useAtomValue(threadAgentMaps.nodeAtom(props.threadRef, props.node.id)) ?? props.node;
+  const skills = useThreadSkills(node.target).data?.skills;
   return (
     <AgentMapCard
       node={node}
       provider={props.providerFor(node)}
+      {...(skills === undefined ? {} : { skills })}
       selected={props.selected}
       onSelect={props.onSelect}
     />
@@ -125,6 +134,7 @@ function AgentMapInspector(props: {
   const navigate = useNavigate();
   const metadata = agentMapMetadata(node, props.providerFor(node));
   const output = agentMapOutput(node);
+  const skills = useThreadSkills(node.target);
   const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && environment !== null;
   return (
@@ -219,6 +229,18 @@ function AgentMapInspector(props: {
                 <dd>{node.agent.phaseTitle}</dd>
               </>
             ) : null}
+            <dt className="text-muted-foreground">Skills</dt>
+            <dd>
+              {skills.data?.skills.length ? (
+                <AgentMapSkills skills={skills.data.skills} />
+              ) : skills.data ? (
+                "None reported"
+              ) : skills.isPending ? (
+                "Loading…"
+              ) : (
+                "Not reported"
+              )}
+            </dd>
             {node.agent.usage ? (
               <>
                 <dt className="text-muted-foreground">Tokens</dt>

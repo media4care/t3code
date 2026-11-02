@@ -53,14 +53,44 @@ export function AgentMapStatus({ node }: { node: ThreadAgentMapNode }) {
   );
 }
 
+const CARD_SKILL_LIMIT = 3;
+
+export function AgentMapSkills({
+  skills,
+  limit,
+}: {
+  skills: ReadonlyArray<string>;
+  limit?: number;
+}) {
+  if (skills.length === 0) return null;
+  const shown = limit === undefined ? skills : skills.slice(0, limit);
+  const hidden = skills.slice(shown.length);
+  return (
+    <span className="flex min-w-0 flex-wrap gap-1">
+      {shown.map((skill) => (
+        <Badge key={skill} variant="outline" size="sm">
+          {skill}
+        </Badge>
+      ))}
+      {hidden.length > 0 ? (
+        <Badge variant="outline" size="sm" title={hidden.join(", ")}>
+          +{hidden.length}
+        </Badge>
+      ) : null}
+    </span>
+  );
+}
+
 export function AgentMapCard({
   node,
   provider,
+  skills = [],
   selected,
   onSelect,
 }: {
   node: ThreadAgentMapNode;
   provider: ServerProvider | undefined;
+  skills?: ReadonlyArray<string>;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -103,6 +133,11 @@ export function AgentMapCard({
       <span className="mt-1 block min-h-8 text-2xs leading-relaxed text-muted-foreground">
         <span className="line-clamp-2 break-words">{preview ?? agentMapEmptyDetail(node)}</span>
       </span>
+      {skills.length > 0 ? (
+        <span className="mt-2 block">
+          <AgentMapSkills skills={skills} limit={CARD_SKILL_LIMIT} />
+        </span>
+      ) : null}
       <span className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <AgentMapStatus node={node} />
         <span className="text-2xs text-muted-foreground">{node.kind}</span>
@@ -118,6 +153,7 @@ export function AgentMapCard({
 
 export function ThreadAgentMap(props: {
   readonly title: string;
+  readonly skills?: ReadonlyArray<string>;
   readonly nodes: ReadonlyArray<ThreadAgentMapNode>;
   readonly providerFor: (node: ThreadAgentMapNode) => ServerProvider | undefined;
   readonly renderCard?: (
@@ -295,6 +331,11 @@ export function ThreadAgentMap(props: {
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{props.title}</div>
             <div className="text-2xs text-muted-foreground">This thread</div>
+            {props.skills?.length ? (
+              <div className="mt-1.5">
+                <AgentMapSkills skills={props.skills} limit={CARD_SKILL_LIMIT} />
+              </div>
+            ) : null}
           </div>
         </div>
         {props.nodes.length === 0 ? (

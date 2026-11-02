@@ -7,6 +7,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
   type ServerProvider,
+  WS_METHODS,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -19,7 +20,9 @@ import {
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "./subagentRuntime.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
+import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 import type { EnvironmentThread } from "./models.ts";
 import type { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 
@@ -427,7 +430,8 @@ export function resolveAgentMapConversation(
   };
 }
 
-export function createThreadAgentMapAtoms(input: {
+export function createThreadAgentMapAtoms<R, ER>(input: {
+  readonly runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>;
   readonly details: Pick<
     ReturnType<typeof createEnvironmentThreadDetailAtoms>,
     "quietThreadAtom" | "stateAtom" | "statusAtom" | "errorAtom"
@@ -435,8 +439,19 @@ export function createThreadAgentMapAtoms(input: {
   readonly threadsAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<OrchestrationV2ThreadShell>>;
+  readonly threadIndexAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyMap<ThreadId, OrchestrationV2ThreadShell>>;
   readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
 }) {
+  const skills = createEnvironmentRpcQueryAtomFamily(input.runtime, {
+    label: "environment-data:thread-agent-map:skills",
+    tag: WS_METHODS.threadSkillsList,
+    staleTimeMs: 0,
+    // Any new turn item may be a skill call.
+    refreshTrigger: ({ environmentId, input: { threadId } }) =>
+      Atom.make((get) => get(input.threadIndexAtom(environmentId)).get(threadId)?.itemCount),
+  });
   const nodes = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     return Atom.make((get) =>
@@ -511,5 +526,7 @@ export function createThreadAgentMapAtoms(input: {
   return {
     nodesAtom: (ref: ScopedThreadRef) => nodes(threadKey(ref)),
     nodeAtom: (ref: ScopedThreadRef, id: string) => resolved(JSON.stringify([threadKey(ref), id])),
+    skillsAtom: (ref: ScopedThreadRef) =>
+      skills({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
   };
 }
