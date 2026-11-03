@@ -4,6 +4,7 @@ import {
   BlocksIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  CircleAlertIcon,
   CircleDashedIcon,
   Clock3Icon,
   FlaskConicalIcon,
@@ -15,7 +16,7 @@ import {
   SquareIcon,
   TerminalIcon,
 } from "lucide-react";
-import type { QaRun, QaTestKind } from "@t3tools/contracts";
+import type { DevicePoolEntry, QaDeviceSelection, QaRun, QaTestKind } from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
   qaRunDuration,
@@ -26,8 +27,18 @@ import {
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
 import type { qaDashboard } from "@t3tools/client-runtime/qa";
+import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { QaSuiteDevices } from "./QaSuiteDevices";
+
+export interface QaSuiteDeviceChoices {
+  /** Null while the device pool loads. */
+  readonly pool: ReadonlyArray<DevicePoolEntry> | null;
+  readonly selections: ReadonlyArray<QaDeviceSelection>;
+  readonly canChoose: boolean;
+  readonly onChoose: (suiteId: string, requirement: string, deviceKey: string | null) => void;
+}
 
 const KIND_STYLES = {
   unit: { icon: FlaskConicalIcon, color: "bg-success/10 text-success-foreground" },
@@ -184,6 +195,7 @@ export function QaSuiteGroup({
   label,
   entries,
   showComponent,
+  devices,
   canRun,
   canCancel,
   onRun,
@@ -193,6 +205,7 @@ export function QaSuiteGroup({
   label: string;
   entries: readonly QaDashboardEntry[];
   showComponent: boolean;
+  devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
   onRun: (suiteId: string) => void;
@@ -227,6 +240,7 @@ export function QaSuiteGroup({
             key={entry.suite.id}
             entry={entry}
             showComponent={showComponent}
+            devices={devices}
             canRun={canRun}
             canCancel={canCancel}
             onRun={onRun}
@@ -242,6 +256,7 @@ export function QaSuiteGroup({
 function SuiteCard({
   entry: { suite, run, component, kind, freshness },
   showComponent,
+  devices,
   canRun,
   canCancel,
   onRun,
@@ -250,25 +265,42 @@ function SuiteCard({
 }: {
   entry: QaDashboardEntry;
   showComponent: boolean;
+  devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
   onRun: (suiteId: string) => void;
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
+  const assignments = suite.devices?.length
+    ? devices.pool && qaDeviceAssignments(suite, devices.pool, devices.selections)
+    : undefined;
+  const blocked = assignments?.some((assignment) => !assignment.device) ?? false;
   return (
     <section
       aria-label={suite.name}
-      className="flex min-w-0 flex-col rounded-xl border border-border bg-card p-4 sm:p-5"
+      className="@container/suite flex min-w-0 flex-col rounded-xl border border-border bg-card p-4 sm:p-5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <TestKind kind={kind} />
         {showComponent ? <span className="text-xs text-muted-foreground">{component}</span> : null}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1.5">
+          {blocked ? (
+            <Badge variant="warning">
+              <CircleAlertIcon /> Blocked
+            </Badge>
+          ) : null}
           <QaRunBadge run={run} />
         </div>
       </div>
       <h4 className="mt-3 font-semibold leading-snug">{suite.name}</h4>
+      {assignments !== undefined ? (
+        <QaSuiteDevices
+          assignments={assignments}
+          canChoose={devices.canChoose}
+          onChoose={(requirement, deviceKey) => devices.onChoose(suite.id, requirement, deviceKey)}
+        />
+      ) : null}
       {run?.outputTail ? (
         <div className="mt-3 rounded-lg border border-error/20 bg-error/5 p-3">
           <p className="text-xs font-medium text-destructive-foreground">
@@ -339,6 +371,9 @@ function SuiteCard({
           )}
         </span>
         {run ? <span>{qaRunDuration(run)}</span> : null}
+        {run?.devices?.length ? (
+          <span>On {run.devices.map((device) => device.name).join(", ")}</span>
+        ) : null}
         {run?.repositoryFile ? <span>{qaRunSource(run)}</span> : null}
       </div>
       {run?.summary ? (
@@ -393,7 +428,12 @@ function SuiteCard({
             <SquareIcon /> Cancel
           </Button>
         ) : (
-          <Button variant="outline" size="sm" disabled={!canRun} onClick={() => onRun(suite.id)}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!canRun || blocked}
+            onClick={() => onRun(suite.id)}
+          >
             <PlayIcon /> Run
           </Button>
         )}

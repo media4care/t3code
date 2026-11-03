@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { IsoDateTime, ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
@@ -179,6 +179,48 @@ export const DeviceSummary = Schema.Struct({
   physical: Schema.Boolean,
 });
 export type DeviceSummary = typeof DeviceSummary.Type;
+
+export const DeviceFormFactor = Schema.Literals(["phone", "tablet", "tv", "watch", "other"]);
+export type DeviceFormFactor = typeof DeviceFormFactor.Type;
+
+export const DevicePoolKey = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
+export type DevicePoolKey = typeof DevicePoolKey.Type;
+
+/**
+ * A device a host lists now, or a physical device it listed before. Physical
+ * devices are remembered across restarts, so an unplugged one stays `offline`
+ * until it reconnects or is forgotten.
+ */
+export const DevicePoolEntry = Schema.Struct({
+  key: DevicePoolKey,
+  hostId: DeviceHostId,
+  deviceId: DeviceId,
+  platform: DevicePlatform,
+  name: TrimmedNonEmptyString,
+  version: Schema.String,
+  physical: Schema.Boolean,
+  formFactor: DeviceFormFactor,
+  state: Schema.Literals(["running", "connected", "stopped", "starting", "offline"]),
+  /** Open in a thread's Device panel. */
+  inUse: Schema.Boolean,
+  /** When a physical device was last listed; null for simulators and emulators. */
+  lastSeenAt: Schema.NullOr(IsoDateTime),
+});
+export type DevicePoolEntry = typeof DevicePoolEntry.Type;
+
+export const DevicePool = Schema.Struct({ entries: Schema.Array(DevicePoolEntry) });
+export type DevicePool = typeof DevicePool.Type;
+
+export const DeviceForgetInput = Schema.Struct({ key: DevicePoolKey });
+export type DeviceForgetInput = typeof DeviceForgetInput.Type;
+
+export class DevicePoolError extends Schema.TaggedError<DevicePoolError>()("DevicePoolError", {
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return "Could not save the remembered devices.";
+  }
+}
 
 export const DevicePlatformAvailability = Schema.Struct({
   platform: DevicePlatform,

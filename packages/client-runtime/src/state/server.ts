@@ -1370,6 +1370,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:qa:schedule",
       tag: WS_METHODS.qaSetSchedule,
     }),
+    setQaDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:device",
+      tag: WS_METHODS.qaSetDevice,
+    }),
     importQaReport: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:import",
       tag: WS_METHODS.qaImport,

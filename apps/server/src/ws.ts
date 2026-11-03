@@ -193,6 +193,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as DevicePool from "./device/DevicePool.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -1409,6 +1410,7 @@ export const layerWsRpc = (
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
+      const devicePool = yield* DevicePool.DevicePool;
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
@@ -2289,6 +2291,7 @@ export const layerWsRpc = (
         [WS_METHODS.qaDetails]: (input) => qa.details(input),
         [WS_METHODS.qaTests]: (input) => qa.tests(input),
         [WS_METHODS.qaSetSchedule]: (input) => qa.setSchedule(input),
+        [WS_METHODS.qaSetDevice]: (input) => qa.setDevice(input),
         [WS_METHODS.qaImport]: (input) => qa.importReport(input),
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
         [WS_METHODS.insightsConfigure]: (input) => insights.configure(input),
@@ -3225,7 +3228,9 @@ export const layerWsRpc = (
         [WS_METHODS.deviceShutdown]: (input) => deviceService.shutdown(input),
         [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
         [WS_METHODS.deviceAction]: (input) => deviceService.action(input),
+        [WS_METHODS.deviceForget]: (input) => devicePool.forget(input),
         [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
+        [WS_METHODS.subscribeDevicePool]: (_input) => devicePool.stream,
         [WS_METHODS.previewStopLocalServer]: (input) => portDiscovery.stopServer(input),
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           Stream.callback<DiscoveredLocalServerList>((queue) =>

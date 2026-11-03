@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { DeviceFormFactor, DevicePlatform, DevicePoolKey } from "./device.ts";
 import { RecurringSchedule } from "./scheduledTask.ts";
 
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
@@ -20,6 +21,30 @@ export const QaTestKind = Schema.Literals([
 ]);
 export type QaTestKind = typeof QaTestKind.Type;
 
+export const QaDeviceType = Schema.Literals(["any", "virtual", "physical"]);
+export type QaDeviceType = typeof QaDeviceType.Type;
+
+/** A device a suite runs on. QA picks one from the device pool; people can choose another. */
+export const QaDeviceRequirement = Schema.Struct({
+  /** Names this device in `T3_QA_DEVICE_<ID>`; also keeps a chosen device when the list is reordered. */
+  id: Schema.optionalKey(
+    TrimmedNonEmptyString.check(
+      Schema.isMaxLength(40),
+      Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]*$/),
+    ),
+  ),
+  platform: DevicePlatform,
+  formFactor: Schema.optionalKey(DeviceFormFactor),
+  type: Schema.optionalKey(QaDeviceType),
+  /** The name of the device to use when nobody chose one, such as an AVD name. */
+  defaultDevice: Schema.optionalKey(ShortText),
+});
+export type QaDeviceRequirement = typeof QaDeviceRequirement.Type;
+
+/** How a suite's device choices are stored: its `id`, or its position for one without. */
+export const qaDeviceRequirementKey = (requirement: QaDeviceRequirement, index: number) =>
+  requirement.id ?? String(index);
+
 export const QaSuite = Schema.Struct({
   id: ShortText.check(Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)),
   name: ShortText,
@@ -37,6 +62,15 @@ export const QaSuite = Schema.Struct({
   ),
   environment: Schema.optionalKey(Schema.Literals(["workspace", "external"])),
   environmentFile: Schema.optionalKey(InputPath),
+  devices: Schema.optionalKey(
+    Schema.Array(QaDeviceRequirement).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(4),
+      Schema.makeFilter(
+        (devices) => new Set(devices.map(qaDeviceRequirementKey)).size === devices.length,
+      ),
+    ),
+  ),
 });
 export type QaSuite = typeof QaSuite.Type;
 
@@ -77,6 +111,17 @@ const QaCiSource = Schema.Struct({
 
 export const QA_OUTPUT_TAIL_LIMIT = 2000;
 
+/** The device a run used for one of its suite's device requirements. */
+export const QaRunDevice = Schema.Struct({
+  requirement: ShortText,
+  deviceId: Schema.String,
+  name: Schema.String,
+  platform: DevicePlatform,
+  physical: Schema.Boolean,
+  version: Schema.String,
+});
+export type QaRunDevice = typeof QaRunDevice.Type;
+
 export const QaRun = Schema.Struct({
   id: ShortText,
   projectId: ProjectId,
@@ -96,6 +141,7 @@ export const QaRun = Schema.Struct({
     Schema.Union([Schema.Struct({ type: Schema.Literal("schedule") }), QaCiSource]),
   ),
   repositoryFile: Schema.optionalKey(InputPath),
+  devices: Schema.optionalKey(Schema.Array(QaRunDevice)),
 });
 export type QaRun = typeof QaRun.Type;
 
@@ -113,6 +159,22 @@ export const QaStartInput = Schema.Struct({ projectId: ProjectId, suiteId: Short
 export type QaStartInput = typeof QaStartInput.Type;
 export const QaRunInput = Schema.Struct({ projectId: ProjectId, runId: ShortText });
 export type QaRunInput = typeof QaRunInput.Type;
+
+/** A device someone chose for a suite's requirement, by device pool key. */
+export const QaDeviceSelection = Schema.Struct({
+  suiteId: ShortText,
+  requirement: ShortText,
+  deviceKey: DevicePoolKey,
+});
+export type QaDeviceSelection = typeof QaDeviceSelection.Type;
+/** A null `deviceKey` goes back to the device QA picks. */
+export const QaSetDeviceInput = Schema.Struct({
+  projectId: ProjectId,
+  suiteId: ShortText,
+  requirement: ShortText,
+  deviceKey: Schema.NullOr(DevicePoolKey),
+});
+export type QaSetDeviceInput = typeof QaSetDeviceInput.Type;
 
 export const QaTestStatus = Schema.Literals(["passed", "failed", "skipped"]);
 export type QaTestStatus = typeof QaTestStatus.Type;
@@ -225,6 +287,7 @@ export const QaSnapshot = Schema.Struct({
   sharedResults: Schema.optionalKey(
     Schema.Struct({ enabled: Schema.Boolean, warning: Schema.NullOr(Schema.String) }),
   ),
+  deviceSelections: Schema.optionalKey(Schema.Array(QaDeviceSelection)),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 

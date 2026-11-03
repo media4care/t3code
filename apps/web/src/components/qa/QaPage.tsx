@@ -22,6 +22,7 @@ import {
   type QaGrouping,
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
+import { deviceEnvironment } from "../../state/device";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
@@ -35,6 +36,7 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
+import { QaDevicePool } from "./QaDevicePool";
 import { QaTestList } from "./QaTestList";
 
 export function QaPage() {
@@ -123,6 +125,9 @@ function ProjectQa({
   const cancelAffected = useAtomCommand(serverEnvironment.cancelAffectedQa);
   const cancel = useAtomCommand(serverEnvironment.cancelQa);
   const canRun = useAtomValue(serverEnvironment.startQa.permissionAtom(environmentId));
+  const pool = useEnvironmentQuery(deviceEnvironment.pool({ environmentId, input: {} }));
+  const setDevice = useAtomCommand(serverEnvironment.setQaDevice);
+  const canSetDevice = useAtomValue(serverEnvironment.setQaDevice.permissionAtom(environmentId));
   const canRunAffected = useAtomValue(
     serverEnvironment.startAffectedQa.permissionAtom(environmentId),
   );
@@ -232,6 +237,9 @@ function ProjectQa({
           connected={connected}
           onView={setSelectedRun}
         />
+      ) : null}
+      {connected ? (
+        <QaDevicePool environmentId={environmentId} environmentLabel={environmentLabel} />
       ) : null}
       {snapshot?.freshness && counts.total > 0 ? (
         <section
@@ -382,6 +390,17 @@ function ProjectQa({
                 label={group.label}
                 entries={group.entries}
                 showComponent={grouping !== "component"}
+                devices={{
+                  pool: pool.data?.entries ?? null,
+                  selections: snapshot?.deviceSelections ?? [],
+                  canChoose: connected && canSetDevice,
+                  onChoose: (suiteId, requirement, deviceKey) => {
+                    void setDevice({
+                      environmentId,
+                      input: { projectId, suiteId, requirement, deviceKey },
+                    });
+                  },
+                }}
                 canRun={connected && canRun && !busy && !running && !snapshot?.batchRunning}
                 canCancel={connected && canRun && !busy}
                 onRun={(suiteId) => {
@@ -519,6 +538,17 @@ function RunDetails({
             </span>
           </div>
           <p className="mt-3 text-sm text-muted-foreground">{qaRunSource(data.run)}</p>
+          {data.run.devices?.length ? (
+            <p className="mt-2 text-sm">
+              On{" "}
+              {data.run.devices
+                .map(
+                  (device) =>
+                    `${device.name} (${device.physical ? "physical" : device.platform === "ios" ? "simulator" : "emulator"}, ${device.deviceId})`,
+                )
+                .join(", ")}
+            </p>
+          ) : null}
           {data.run.repositoryFile ? (
             <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
               {data.run.repositoryFile}

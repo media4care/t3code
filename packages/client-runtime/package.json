@@ -31,6 +31,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./device/pool": {
+      "types": "./src/device/pool.ts",
+      "default": "./src/device/pool.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

@@ -1,6 +1,7 @@
 import {
   QaError,
   QaSetScheduleInput,
+  QaSetDeviceInput,
   QaImportInput,
   QaProjectInput,
   QaStartInput,
@@ -336,6 +337,9 @@ import {
   SshDeviceHostConfig,
   DeviceEasAccount,
   DeviceEasAccountError,
+  DeviceForgetInput,
+  DevicePool,
+  DevicePoolError,
   DeviceEasAccountInput,
   DeviceSimlockIdentity,
   DeviceSimlockIdentityError,
@@ -539,6 +543,7 @@ export const WS_METHODS = {
   deviceShutdown: "device.shutdown",
   deviceDetail: "device.detail",
   deviceAction: "device.action",
+  deviceForget: "device.forget",
 
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
@@ -591,6 +596,7 @@ export const WS_METHODS = {
   qaDetails: "qa.details",
   qaTests: "qa.tests",
   qaSetSchedule: "qa.setSchedule",
+  qaSetDevice: "qa.setDevice",
   qaImport: "qa.import",
   insightsSubscribe: "insights.subscribe",
   insightsConfigure: "insights.configure",
@@ -670,6 +676,7 @@ export const WS_METHODS = {
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
   subscribeDeviceState: "subscribeDeviceState",
+  subscribeDevicePool: "subscribeDevicePool",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
@@ -1823,6 +1830,18 @@ const WsSubscribeDeviceStateRpc = Rpc.make(WS_METHODS.subscribeDeviceState, {
   stream: true,
 });
 
+const WsSubscribeDevicePoolRpc = Rpc.make(WS_METHODS.subscribeDevicePool, {
+  payload: Schema.Struct({}),
+  success: DevicePool,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsDeviceForgetRpc = Rpc.make(WS_METHODS.deviceForget, {
+  payload: DeviceForgetInput,
+  error: Schema.Union([DevicePoolError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2DispatchCommandRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
   payload: OrchestrationV2RpcSchemas.dispatchCommand.input,
   success: OrchestrationV2RpcSchemas.dispatchCommand.output,
@@ -2031,6 +2050,11 @@ const WsQaCancelRpc = Rpc.make(WS_METHODS.qaCancel, {
 });
 const WsQaSetScheduleRpc = Rpc.make(WS_METHODS.qaSetSchedule, {
   payload: QaSetScheduleInput,
+  success: Schema.Void,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
+const WsQaSetDeviceRpc = Rpc.make(WS_METHODS.qaSetDevice, {
+  payload: QaSetDeviceInput,
   success: Schema.Void,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
@@ -2246,6 +2270,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsQaDetailsRpc,
   WsQaTestsRpc,
   WsQaSetScheduleRpc,
+  WsQaSetDeviceRpc,
   WsQaImportRpc,
   WsInsightsSubscribeRpc,
   WsInsightsConfigureRpc,
@@ -2392,7 +2417,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceShutdownRpc,
   WsDeviceDetailRpc,
   WsDeviceActionRpc,
+  WsDeviceForgetRpc,
   WsSubscribeDeviceStateRpc,
+  WsSubscribeDevicePoolRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,

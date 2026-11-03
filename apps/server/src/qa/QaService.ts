@@ -2,11 +2,14 @@ import {
   QaError,
   QaConfiguration,
   QaRun,
+  QaRunDevice,
   QaSchedule,
   QA_TEST_PAGE_SIZE,
   QA_OUTPUT_TAIL_LIMIT,
   ProjectId,
+  qaDeviceRequirementKey,
   type QaSetScheduleInput,
+  type QaSetDeviceInput,
   type QaImportInput,
   type QaProjectInput,
   type QaStartInput,
@@ -17,6 +20,11 @@ import {
   type QaTestResults,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  qaDeviceAssignments,
+  qaDeviceRequirementLabel,
+  qaDeviceUnavailableReason,
+} from "@t3tools/shared/qaDevices";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -38,6 +46,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeUtil from "node:util";
 
+import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { parseJunitReport } from "./junit.ts";
@@ -48,6 +57,7 @@ import {
   changedInputs,
   SHARED_RESULTS_DIRECTORY,
 } from "./inputs.ts";
+import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
@@ -68,9 +78,33 @@ const decodeEvidence = Schema.decodeEffect(Schema.fromJsonString(InputEvidence))
 const decodeSchedule = Schema.decodeEffect(Schema.fromJsonString(QaSchedule));
 const encodeSchedule = Schema.encodeEffect(Schema.fromJsonString(QaSchedule));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeDevices = Schema.encodeSync(Schema.fromJsonString(Schema.Array(QaRunDevice)));
 const isQaError = Schema.is(QaError);
 const storageError = (cause: unknown) =>
   isQaError(cause) ? cause : new QaError({ reason: "storage", cause });
+
+/**
+ * What a command needs to reach its devices. The first device is also `T3_QA_DEVICE_ID`, and the
+ * first Android device `ANDROID_SERIAL`, which adb and Android test runners read.
+ */
+function deviceEnvironment(suite: QaRun["suite"], devices: ReadonlyArray<QaRunDevice>) {
+  const [first] = devices;
+  if (!first) return {};
+  const android = devices.find((device) => device.platform === "android");
+  return {
+    ...Object.fromEntries(
+      devices.flatMap((device, index) => {
+        const id = suite.devices?.[index]?.id;
+        return id ? [[`T3_QA_DEVICE_ID_${id.toUpperCase()}`, device.deviceId]] : [];
+      }),
+    ),
+    T3_QA_DEVICE_ID: first.deviceId,
+    T3_QA_DEVICE_NAME: first.name,
+    T3_QA_DEVICE_PLATFORM: first.platform,
+    ...(android ? { ANDROID_SERIAL: android.deviceId } : {}),
+    T3_QA_DEVICES: encodeDevices(devices),
+  };
+}
 
 function withOutputTail(run: QaRun, output: string): QaRun {
   if (run.status !== "failed" && run.status !== "incomplete") return run;
@@ -90,6 +124,7 @@ export class QaService extends Context.Service<
     readonly details: (input: QaRunInput) => Effect.Effect<QaRunDetails, QaError>;
     readonly tests: (input: QaTestsInput) => Effect.Effect<QaTestResults, QaError>;
     readonly setSchedule: (input: QaSetScheduleInput) => Effect.Effect<void, QaError>;
+    readonly setDevice: (input: QaSetDeviceInput) => Effect.Effect<void, QaError>;
     readonly importReport: (input: QaImportInput) => Effect.Effect<QaRun, QaError>;
   }
 >()("t3/qa/QaService") {}
@@ -111,6 +146,8 @@ const make = Effect.gen(function* () {
   const lock = yield* Semaphore.make(1);
   const captureInputs = yield* makeInputCapture;
   const sharedResults = yield* makeSharedResults;
+  const deviceSelections = yield* makeDeviceSelections;
+  const devicePool = yield* DevicePool.DevicePool;
   const batches = new Map<
     string,
     {
@@ -123,17 +160,15 @@ const make = Effect.gen(function* () {
   >();
   const batchErrors = new Map<string, string>();
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-  const active = new Map<
-    string,
-    {
-      details: QaRunDetails;
-      cancelled: boolean;
-      root: string;
-      evidence: InputEvidence;
-      shareResult: boolean;
-      fiber?: Fiber.Fiber<void, QaError>;
-    }
-  >();
+  interface ActiveRun {
+    details: QaRunDetails;
+    cancelled: boolean;
+    root: string;
+    evidence: InputEvidence;
+    shareResult: boolean;
+    fiber?: Fiber.Fiber<void, QaError>;
+  }
+  const active = new Map<string, ActiveRun>();
 
   const recoveredAt = yield* now;
   yield* sql`UPDATE qa_runs SET status = 'interrupted', run_json = json_set(run_json,
@@ -275,6 +310,7 @@ const make = Effect.gen(function* () {
       latestCiRuns: yield* Effect.forEach(ci, (row) => decodeRun(row.run_json)),
       branch: yield* git(root, ["branch", "--show-current"]),
       testResultsAvailable: true,
+      deviceSelections: deviceSelections.forProject(input.projectId),
     };
   }, Effect.mapError(storageError));
 
@@ -380,8 +416,64 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => null),
   );
 
+  const appendOutput = (entry: ActiveRun, text: string) => {
+    const output = entry.details.output + text;
+    entry.details = {
+      ...entry.details,
+      output: output.slice(-MAX_OUTPUT),
+      outputTruncated: entry.details.outputTruncated || output.length > MAX_OUTPUT,
+    };
+  };
+
+  /** Starts the run's devices; none when it cannot get them, which leaves the run incomplete. */
+  const prepareDevices = Effect.fn("QaService.prepareDevices")(function* (entry: ActiveRun) {
+    const suite = entry.details.run.suite;
+    if (!suite.devices?.length) return {};
+    const stop = (note: string) => {
+      appendOutput(entry, `[T3 QA] ${note}\n`);
+      entry.details = {
+        ...entry.details,
+        run: { ...entry.details.run, status: "incomplete", note },
+      };
+      return null;
+    };
+    const pool = yield* devicePool.refresh;
+    const assignments = qaDeviceAssignments(
+      suite,
+      pool.entries,
+      deviceSelections.forProject(entry.details.run.projectId),
+    );
+    const blocked = assignments.find((assignment) => !assignment.device);
+    if (blocked) return stop(`Not run. ${qaDeviceUnavailableReason(blocked)}`);
+    const devices: Array<QaRunDevice> = [];
+    for (const assignment of assignments) {
+      if (!assignment.device) continue;
+      const label = qaDeviceRequirementLabel(assignment.requirement);
+      if (assignment.device.state !== "running" && assignment.device.state !== "connected")
+        appendOutput(entry, `[T3 QA] Starting ${assignment.device.name} for ${label}…\n`);
+      const prepared = yield* devicePool
+        .prepare(assignment.device, { workspaceRoot: entry.root })
+        .pipe(Effect.result);
+      if (prepared._tag === "Failure") return stop(prepared.failure.message);
+      const device = prepared.success;
+      appendOutput(entry, `[T3 QA] ${label}: ${device.name} (${device.id})\n`);
+      devices.push({
+        requirement: assignment.key,
+        deviceId: device.id,
+        name: device.name,
+        platform: device.platform,
+        physical: device.physical,
+        version: device.version,
+      });
+    }
+    entry.details = { ...entry.details, run: { ...entry.details.run, devices } };
+    return deviceEnvironment(suite, devices);
+  });
+
   const execute = Effect.fn("QaService.execute")(
-    function* (entry: NonNullable<ReturnType<typeof active.get>>) {
+    function* (entry: ActiveRun) {
+      const devices = yield* prepareDevices(entry);
+      if (!devices) return;
       const run = entry.details.run;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-" });
       const reportPath = path.join(directory, "report.xml");
@@ -393,7 +485,7 @@ const make = Effect.gen(function* () {
             cwd: run.cwd,
             shell: platform === "win32",
             stdin: "ignore",
-            env: { T3_QA_REPORT_PATH: reportPath, CI: "1", FORCE_COLOR: "0" },
+            env: { ...devices, T3_QA_REPORT_PATH: reportPath, CI: "1", FORCE_COLOR: "0" },
             extendEnv: true,
             forceKillAfter: "2 seconds",
           },
@@ -403,16 +495,7 @@ const make = Effect.gen(function* () {
       const collect = (stream: typeof child.stdout) =>
         stream.pipe(
           Stream.decodeText(),
-          Stream.runForEach((chunk) =>
-            Effect.sync(() => {
-              const output = entry.details.output + chunk;
-              entry.details = {
-                ...entry.details,
-                output: output.slice(-MAX_OUTPUT),
-                outputTruncated: entry.details.outputTruncated || output.length > MAX_OUTPUT,
-              };
-            }),
-          ),
+          Stream.runForEach((chunk) => Effect.sync(() => appendOutput(entry, chunk))),
         );
       const [exitCode] = yield* Effect.all(
         [child.exitCode, collect(child.stdout), collect(child.stderr)],
@@ -478,12 +561,7 @@ const make = Effect.gen(function* () {
                 const diagnostic = Cause.prettyErrors(exit.cause)
                   .map((error) => error.message)
                   .join("\n");
-                const output = `${entry.details.output}\n${diagnostic}`;
-                entry.details = {
-                  ...entry.details,
-                  output: output.slice(-MAX_OUTPUT),
-                  outputTruncated: entry.details.outputTruncated || output.length > MAX_OUTPUT,
-                };
+                appendOutput(entry, `\n${diagnostic}`);
               }
               entry.details = {
                 ...entry.details,
@@ -589,7 +667,7 @@ const make = Effect.gen(function* () {
         yield* sql`INSERT INTO qa_run_inputs VALUES (${run.id}, ${yield* encodeEvidence(evidence)})`;
       }),
     );
-    const entry: NonNullable<ReturnType<typeof active.get>> = {
+    const entry: ActiveRun = {
       details: { run, output: "", outputTruncated: false, reportXml: null },
       cancelled: false,
       root,
@@ -749,6 +827,19 @@ const make = Effect.gen(function* () {
     Effect.uninterruptible,
     Effect.mapError(storageError),
   );
+
+  const setDevice = Effect.fn("QaService.setDevice")(function* (input: QaSetDeviceInput) {
+    const root = yield* workspace(input);
+    const suite = (yield* catalog(root)).suites.find((candidate) => candidate.id === input.suiteId);
+    if (
+      !suite?.devices?.some(
+        (requirement, index) => qaDeviceRequirementKey(requirement, index) === input.requirement,
+      )
+    )
+      return yield* new QaError({ reason: "suite-not-found" });
+    yield* deviceSelections.set(input);
+    yield* PubSub.publish(updates, input.projectId);
+  }, Effect.mapError(storageError));
 
   const updateScheduleRun = Effect.fn("QaService.updateScheduleRun")(
     function* (input: QaProjectInput, value: QaSchedule, completed = false) {
@@ -960,6 +1051,7 @@ const make = Effect.gen(function* () {
     details,
     tests,
     setSchedule,
+    setDevice,
     importReport,
     subscribe: (input) =>
       Stream.unwrap(

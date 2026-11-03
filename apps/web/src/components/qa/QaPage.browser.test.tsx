@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   ProjectId,
+  type DevicePoolEntry,
   type QaRun,
   type QaSnapshot,
   type QaSuite,
@@ -21,6 +22,7 @@ const state = vi.hoisted(() => ({
   snapshots: {} as Record<string, QaSnapshot>,
   runs: {} as Record<string, QaRun>,
   tests: {} as Record<string, QaTestCase[]>,
+  pool: [] as DevicePoolEntry[],
   allowed: true,
 }));
 
@@ -51,9 +53,13 @@ vi.mock("../../state/server", async () => {
       startAffectedQa: { kind: "startAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelAffectedQa: { kind: "cancelAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelQa: { kind: "cancel" },
+      setQaDevice: { kind: "setDevice", permissionAtom: () => Atom.make(state.allowed) },
     },
   };
 });
+vi.mock("../../state/device", () => ({
+  deviceEnvironment: { pool: (input: unknown) => ({ kind: "pool", target: input }) },
+}));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: {
     kind: string;
@@ -80,34 +86,38 @@ vi.mock("../../state/query", () => ({
     const offset = query.target.input.offset ?? 0;
     return {
       data:
-        query.kind === "snapshot"
-          ? state.snapshots[query.target.input.projectId]
-          : query.kind === "tests"
-            ? {
-                run,
-                tests: matches.slice(offset, offset + 50),
-                total: allTests?.length ?? 0,
-                matched: matches.length,
-                offset,
-                nextOffset: offset + 50 < matches.length ? offset + 50 : null,
-                unavailableReason: allTests
-                  ? null
-                  : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
-              }
-            : run
+        query.kind === "pool"
+          ? { entries: state.pool }
+          : query.kind === "snapshot"
+            ? state.snapshots[query.target.input.projectId]
+            : query.kind === "tests"
               ? {
                   run,
-                  output: `${run.id}: ${run.suite.name}: captured output`,
-                  outputTruncated: false,
-                  reportXml: null,
+                  tests: matches.slice(offset, offset + 50),
+                  total: allTests?.length ?? 0,
+                  matched: matches.length,
+                  offset,
+                  nextOffset: offset + 50 < matches.length ? offset + 50 : null,
+                  unavailableReason: allTests
+                    ? null
+                    : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
                 }
-              : null,
+              : run
+                ? {
+                    run,
+                    output: `${run.id}: ${run.suite.name}: captured output`,
+                    outputTruncated: false,
+                    reportXml: null,
+                  }
+                : null,
       error: null,
       isPending: false,
       refresh: () => {},
     };
   },
 }));
+// The device pool reads device state of its own; these tests cover suites and runs.
+vi.mock("./QaDevicePool", () => ({ QaDevicePool: () => null }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand:
     (command: { kind: string }) =>
@@ -121,6 +131,22 @@ vi.mock("../../state/use-atom-command", () => ({
       };
     }) => {
       const snapshot = state.snapshots[target.input.projectId]!;
+      if (command.kind === "setDevice") {
+        const { suiteId, requirement, deviceKey } = target.input as typeof target.input & {
+          requirement: string;
+          deviceKey: string | null;
+        };
+        state.snapshots[target.input.projectId] = {
+          ...snapshot,
+          deviceSelections: [
+            ...(snapshot.deviceSelections ?? []).filter(
+              (selection) => selection.suiteId !== suiteId || selection.requirement !== requirement,
+            ),
+            ...(deviceKey ? [{ suiteId, requirement, deviceKey }] : []),
+          ],
+        };
+        return { _tag: "Success", value: undefined };
+      }
       if (command.kind === "setSchedule") {
         state.snapshots[target.input.projectId] = {
           ...snapshot,
@@ -190,6 +216,7 @@ function setup() {
   state.allowed = true;
   state.runs = {};
   state.tests = {};
+  state.pool = [];
   state.snapshots = Object.fromEntries(
     ["alpha", "beta"].map((id) => [
       id,
@@ -646,4 +673,87 @@ it("lists individual results with paging, search, result filters, and failure de
   await screen.getByRole("button", { name: "View run", exact: true }).click();
   await expect.element(screen.getByText("t3.qa-results/api.json", { exact: true })).toBeVisible();
   await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
+});
+
+it("picks a device for each suite, lets people choose another, and blocks suites without one", async () => {
+  setup();
+  const device = (value: Pick<DevicePoolEntry, "key" | "name"> & Partial<DevicePoolEntry>) => ({
+    hostId: "local",
+    deviceId: value.key,
+    platform: "android" as const,
+    version: "Android",
+    physical: false,
+    formFactor: "tablet" as const,
+    state: "stopped" as const,
+    inUse: false,
+    lastSeenAt: null,
+    ...value,
+  });
+  state.pool = [
+    device({ key: "avd", name: "Pixel_Tablet" }),
+    device({ key: "samsung", name: "samsung SM-T515", physical: true, state: "connected" }),
+    device({ key: "phone", name: "Medium_Phone", formFactor: "phone" }),
+    device({
+      key: "pixel",
+      name: "Pixel 8",
+      formFactor: "phone",
+      physical: true,
+      state: "offline",
+    }),
+  ];
+  state.snapshots.alpha = {
+    ...state.snapshots.alpha!,
+    suites: [
+      {
+        id: "tablet",
+        name: "Tablet flows",
+        command: "maestro test flows",
+        devices: [{ platform: "android", formFactor: "tablet" }],
+      },
+      {
+        id: "phone",
+        name: "Phone flows",
+        command: "maestro test phone",
+        devices: [{ id: "phone", platform: "android", formFactor: "phone" }],
+      },
+      {
+        id: "tv",
+        name: "TV playback",
+        command: "maestro test tv",
+        devices: [{ platform: "android", formFactor: "tv" }],
+      },
+    ],
+    deviceSelections: [{ suiteId: "phone", requirement: "phone", deviceKey: "pixel" }],
+  };
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  const tablet = screen.getByRole("region", { name: "Tablet flows" });
+  const picker = tablet.getByRole("combobox", { name: "Device for Android tablet" });
+  // Emulators come first, and a stopped one starts with the run.
+  await expect.element(picker).toHaveTextContent("Pixel_TabletAuto");
+  await expect.element(tablet.getByText("Starts when the suite runs.")).toBeVisible();
+  await picker.click();
+  await page.getByRole("option", { name: /samsung SM-T515/ }).click();
+  await expect
+    .poll(() => state.snapshots.alpha?.deviceSelections)
+    .toContainEqual({ suiteId: "tablet", requirement: "0", deviceKey: "samsung" });
+
+  // A chosen device that went offline stays chosen; runs use another until it is back.
+  const phone = screen.getByRole("region", { name: "Phone flows" });
+  await expect
+    .element(phone.getByRole("combobox", { name: "Device for Android phone" }))
+    .toHaveTextContent("Medium_PhoneAuto");
+  await expect
+    .element(phone.getByText("Pixel 8 is offline. Runs use Medium_Phone until it is available."))
+    .toBeVisible();
+
+  const tv = screen.getByRole("region", { name: "TV playback" });
+  await expect.element(tv.getByText("Blocked", { exact: true })).toBeVisible();
+  await expect.element(tv.getByText(/^No Android TV is available\./)).toBeVisible();
+  await expect.element(tv.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  await expect.element(tablet.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
 });

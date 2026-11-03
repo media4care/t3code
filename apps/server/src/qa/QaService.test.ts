@@ -2,8 +2,11 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  LOCAL_DEVICE_HOST_ID,
   ProjectId,
   QaRun,
+  type DevicePoolEntry,
+  type DeviceSummary,
   type QaSuite,
   type QaCiReport,
   type QaScheduleConfiguration,
@@ -19,6 +22,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcessSpawner } from "effect/process";
+import * as ServerConfig from "../config.ts";
+import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -59,10 +64,26 @@ const suite: QaSuite = {
   report: "junit",
 };
 
+/** Pool devices start as listed, under the id they are listed by once running. */
+const startDevice = (entry: DevicePoolEntry): Effect.Effect<DeviceSummary> =>
+  Effect.succeed({
+    hostId: entry.hostId,
+    id: entry.deviceId,
+    platform: entry.platform,
+    name: entry.name,
+    version: entry.version,
+    booted: true,
+    physical: entry.physical,
+  });
+
 const fixture = Effect.fn("Qa.test.fixture")(function* (
   script: string,
   suites: readonly QaSuite[] = [suite],
   options: { sharedResults?: boolean } = {},
+  devices: {
+    readonly pool?: ReadonlyArray<DevicePoolEntry>;
+    readonly prepare?: DevicePool.DevicePool["Service"]["prepare"];
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -70,6 +91,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
   yield* sql`DELETE FROM qa_runs`;
   yield* sql`DELETE FROM qa_schedules`;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-test-" });
+  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-state-" });
   const processes = yield* ProcessRunner.ProcessRunner;
   const git = (args: readonly string[]) => processes.run({ command: "git", args, cwd: root });
   yield* git(["init", "-q"]);
@@ -114,7 +136,16 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
       }),
     }),
   );
-  const serviceLayer = Qa.layer.pipe(Layer.provide(projectLayer), Layer.provide(schedulerLayer));
+  const devicePoolLayer = Layer.mock(DevicePool.DevicePool)({
+    refresh: Effect.succeed({ entries: devices.pool ?? [] }),
+    prepare: devices.prepare ?? startDevice,
+  });
+  const serviceLayer = Qa.layer.pipe(
+    Layer.provide(projectLayer),
+    Layer.provide(schedulerLayer),
+    Layer.provide(devicePoolLayer),
+    Layer.provide(ServerConfig.layerTest(root, stateDir)),
+  );
   const context = yield* Layer.build(Layer.fresh(serviceLayer));
   return {
     service: Context.get(context, Qa.QaService),
@@ -1184,5 +1215,162 @@ describe("QA runs", () => {
         assert.deepEqual((yield* service.snapshot({ projectId })).suites, []);
         assert.equal((yield* service.snapshot({ projectId })).recentRuns.length, 1);
       }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+});
+
+describe("QA devices", () => {
+  const poolDevice = (
+    value: Pick<DevicePoolEntry, "key" | "deviceId" | "name"> & Partial<DevicePoolEntry>,
+  ): DevicePoolEntry => ({
+    hostId: LOCAL_DEVICE_HOST_ID,
+    platform: "android",
+    version: "Android",
+    physical: false,
+    formFactor: "tablet",
+    state: "stopped",
+    inUse: false,
+    lastSeenAt: null,
+    ...value,
+  });
+  const emulator = poolDevice({ key: "avd", deviceId: "Pixel_Tablet", name: "Pixel_Tablet" });
+  const tablet = poolDevice({
+    key: "samsung",
+    deviceId: "R52N51B9Y0L",
+    name: "samsung SM-T515",
+    version: "Android 11.0",
+    physical: true,
+    state: "connected",
+  });
+  const flows: QaSuite = {
+    id: "flows",
+    name: "Tablet flows",
+    kind: "maestro",
+    command: "node run.cjs",
+    devices: [{ id: "tablet", platform: "android", formFactor: "tablet" }],
+  };
+  const script =
+    "console.log(['ANDROID_SERIAL', 'T3_QA_DEVICE_ID', 'T3_QA_DEVICE_ID_TABLET', 'T3_QA_DEVICE_NAME'].map((name) => name + '=' + process.env[name]).join(' '));";
+
+  it.live("starts the device QA picks, passes it to the command, and keeps a chosen device", () =>
+    Effect.gen(function* () {
+      const prepared: Array<string> = [];
+      const { service, serviceLayer } = yield* fixture(
+        script,
+        [flows],
+        {},
+        {
+          pool: [tablet, emulator],
+          prepare: (entry) =>
+            startDevice(entry).pipe(
+              Effect.tap(() => Effect.sync(() => prepared.push(entry.name))),
+              // An AVD is listed by its emulator serial once it runs.
+              Effect.map((device) =>
+                device.physical ? device : { ...device, id: "emulator-5554" },
+              ),
+            ),
+        },
+      );
+      const first = yield* completed(
+        service,
+        (yield* service.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(first.run.status, "passed");
+      assert.include(
+        first.output,
+        "ANDROID_SERIAL=emulator-5554 T3_QA_DEVICE_ID=emulator-5554 T3_QA_DEVICE_ID_TABLET=emulator-5554 T3_QA_DEVICE_NAME=Pixel_Tablet",
+      );
+      assert.include(first.output, "Starting Pixel_Tablet for Android tablet…");
+      assert.deepEqual(first.run.devices, [
+        {
+          requirement: "tablet",
+          deviceId: "emulator-5554",
+          name: "Pixel_Tablet",
+          platform: "android",
+          physical: false,
+          version: "Android",
+        },
+      ]);
+
+      yield* service.setDevice({
+        projectId,
+        suiteId: flows.id,
+        requirement: "tablet",
+        deviceKey: tablet.key,
+      });
+      // The choice belongs to this environment and outlives a restart.
+      const restarted = Context.get(yield* Layer.build(Layer.fresh(serviceLayer)), Qa.QaService);
+      assert.deepEqual((yield* restarted.snapshot({ projectId })).deviceSelections, [
+        { suiteId: flows.id, requirement: "tablet", deviceKey: tablet.key },
+      ]);
+      const second = yield* completed(
+        restarted,
+        (yield* restarted.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.include(second.output, "ANDROID_SERIAL=R52N51B9Y0L");
+      assert.notInclude(second.output, "Starting");
+      assert.deepEqual(prepared, ["Pixel_Tablet", "samsung SM-T515"]);
+
+      yield* restarted.setDevice({
+        projectId,
+        suiteId: flows.id,
+        requirement: "tablet",
+        deviceKey: null,
+      });
+      assert.deepEqual((yield* restarted.snapshot({ projectId })).deviceSelections, []);
+      assert.equal(
+        (yield* restarted
+          .setDevice({ projectId, suiteId: flows.id, requirement: "phone", deviceKey: tablet.key })
+          .pipe(Effect.flip)).reason,
+        "suite-not-found",
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("records a run as not run when no device fits or the device cannot start", () =>
+    Effect.gen(function* () {
+      const ran = "require('node:fs').writeFileSync('ran.txt', '')";
+      const offline = { ...tablet, state: "offline" as const };
+      const phone = {
+        ...emulator,
+        key: "phone",
+        name: "Medium_Phone",
+        formFactor: "phone" as const,
+      };
+      const blocked = yield* fixture(ran, [flows], {}, { pool: [offline, phone] });
+      const notRun = yield* completed(
+        blocked.service,
+        (yield* blocked.service.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(notRun.run.status, "incomplete");
+      assert.isNull(notRun.run.exitCode);
+      assert.equal(
+        notRun.run.note,
+        "Not run. No Android tablet is available. samsung SM-T515 is offline. Connect one with USB debugging on, or create an emulator in Android Studio.",
+      );
+      assert.isFalse(yield* blocked.fs.exists(blocked.path.join(blocked.root, "ran.txt")));
+
+      const failing = yield* fixture(
+        ran,
+        [flows],
+        {},
+        {
+          pool: [emulator],
+          prepare: (entry) =>
+            Effect.fail(
+              new DevicePool.DevicePrepareError({
+                device: entry.name,
+                detail: "The disk is full.",
+              }),
+            ),
+        },
+      );
+      const failed = yield* completed(
+        failing.service,
+        (yield* failing.service.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(failed.run.status, "incomplete");
+      assert.equal(failed.run.note, "Could not start Pixel_Tablet. The disk is full.");
+      assert.isFalse(yield* failing.fs.exists(failing.path.join(failing.root, "ran.txt")));
+    }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

@@ -40,6 +40,10 @@ export function createDeviceEnvironmentAtoms<R, E>(
       label: "environment-data:device:state",
       tag: WS_METHODS.subscribeDeviceState,
     }),
+    pool: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:device:pool",
+      tag: WS_METHODS.subscribeDevicePool,
+    }),
     configure: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:configure",
       tag: WS_METHODS.deviceConfigure,
@@ -87,6 +91,12 @@ export function createDeviceEnvironmentAtoms<R, E>(
     action: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:action",
       tag: WS_METHODS.deviceAction,
+      scheduler,
+      concurrency,
+    }),
+    forget: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:forget",
+      tag: WS_METHODS.deviceForget,
       scheduler,
       concurrency,
     }),

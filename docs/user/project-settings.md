@@ -188,6 +188,41 @@ Use `environment: "workspace"` only when the test builds and controls its target
 from the current checkout. Unchanged inputs are guidance about the declared files,
 not a guarantee about untracked external state or complete test coverage.
 
+QA also shows the environment's **Device pool**: the iOS simulators and Android
+emulators it can start and the Android devices connected over ADB. Turn on device
+support there to list them. A physical device that has connected before stays listed
+as offline, with the time it was last seen, until you forget it.
+
+When a suite needs a device, list it under `devices`:
+
+```json
+{
+  "id": "tablet-flows",
+  "name": "Tablet flows",
+  "kind": "maestro",
+  "command": "maestro --device \"$T3_QA_DEVICE_ID\" test flows/tablet",
+  "devices": [{ "platform": "android", "formFactor": "tablet" }]
+}
+```
+
+Each device has a `platform`, `ios` or `android`. Optionally set a `formFactor`
+(`phone`, `tablet`, `tv`, `watch` or `other`), a `type` (`virtual`, `physical`, or the
+default `any`), a `defaultDevice` name such as an AVD name, and an `id`. Up to four
+devices can be listed; each gets a different device. QA picks a running emulator or
+simulator first, then one it can start, then a connected physical device. Choose
+another on the suite to keep using it on this environment. If a chosen device is
+offline, runs use QA's pick until it is back. A suite with no device available shows
+**Blocked**. A blocked suite that runs anyway, for example on a schedule, is recorded
+as incomplete without starting its command.
+
+Before the command starts, QA starts a stopped emulator or simulator and waits until
+it has finished booting; devices keep running afterwards. The command receives
+`T3_QA_DEVICE_ID`, `T3_QA_DEVICE_NAME` and `T3_QA_DEVICE_PLATFORM` for the first
+device, `ANDROID_SERIAL` for the first Android device, `T3_QA_DEVICE_ID_<ID>` for each
+device with an `id`, and `T3_QA_DEVICES` as JSON describing them all. Run details
+record the devices used. Commands run on the environment's machine, so only its own
+devices can be used.
+
 **Run affected suites** rechecks freshness and runs changed, expired, unknown,
 untested, and unsuccessful suites sequentially on the selected environment.
 Closing the client leaves the queue running. **Stop queued run** cancels the active
