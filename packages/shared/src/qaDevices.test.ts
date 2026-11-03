@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { LOCAL_DEVICE_HOST_ID, type DevicePoolEntry, type QaSuite } from "@t3tools/contracts";
+import {
+  LOCAL_DEVICE_HOST_ID,
+  ProjectId,
+  type DevicePoolEntry,
+  type QaSuite,
+} from "@t3tools/contracts";
 
 import {
   qaDeviceAssignments,
@@ -87,6 +92,29 @@ describe("qaDeviceAssignments", () => {
       "samsung SM-T515",
       null,
     ]);
+  });
+  it("skips devices another suite's run holds, and waits for a chosen one or the only fit", () => {
+    const b2c = { projectId: ProjectId.make("senior"), suiteId: "b2c", suiteName: "Senior B2C" };
+    const held = { ...runningAvd, qaRun: b2c };
+    const tablets = suite([{ id: "tablet", platform: "android", formFactor: "tablet" }]);
+    const [other] = qaDeviceAssignments(tablets, [held, stoppedAvd], [], "family");
+    expect(other).toMatchObject({ device: stoppedAvd, busy: null });
+
+    const chosen = [{ suiteId: "flows", requirement: "tablet", deviceKey: held.key }];
+    const [waiting] = qaDeviceAssignments(tablets, [held, stoppedAvd], chosen, "family");
+    expect(waiting).toMatchObject({ device: null, busy: held, automatic: stoppedAvd });
+    const [onlyFit] = qaDeviceAssignments(tablets, [held], [], "family");
+    expect(onlyFit).toMatchObject({ device: null, busy: held });
+
+    // While its own run holds the device, the suite still shows it as its device.
+    const own = {
+      ...runningAvd,
+      qaRun: { ...b2c, projectId: ProjectId.make("family"), suiteId: "flows" },
+    };
+    expect(qaDeviceAssignments(tablets, [own], [], "family")[0]).toMatchObject({
+      device: own,
+      busy: null,
+    });
   });
 });
 

@@ -62,7 +62,7 @@ function DeviceRequirement({
   canChoose: boolean;
   onChoose: (deviceKey: string | null) => void;
 }) {
-  const { requirement, candidates, device, automatic, chosenKey } = assignment;
+  const { requirement, candidates, device, automatic, busy, chosenKey } = assignment;
   const label = qaDeviceRequirementLabel(requirement);
   const Icon = requirement.formFactor
     ? DEVICE_FORM_FACTOR_ICONS[requirement.formFactor]
@@ -98,6 +98,11 @@ function DeviceRequirement({
                     <span className="shrink-0 text-muted-foreground">Auto</span>
                   )}
                 </span>
+              ) : busy ? (
+                <span className="flex min-w-0 items-center gap-2">
+                  <StateDot entry={busy} />
+                  <span className="truncate">Waiting for {busy.name}</span>
+                </span>
               ) : (
                 <span className="text-muted-foreground">No device available</span>
               )}
@@ -108,7 +113,11 @@ function DeviceRequirement({
               <span className="flex min-w-0 flex-col">
                 <span>Automatic</span>
                 <span className="text-xs text-muted-foreground">
-                  {automatic ? `Currently ${automatic.name}` : "No device available"}
+                  {automatic
+                    ? `Currently ${automatic.name}`
+                    : busy && !chosen
+                      ? `Waits for ${busy.name}`
+                      : "No device available"}
                 </span>
               </span>
             </SelectItem>
@@ -129,6 +138,7 @@ function DeviceRequirement({
                           {[
                             entry.version,
                             devicePoolKind(entry),
+                            entry.qaRun ? `In use by ${entry.qaRun.suiteName}` : null,
                             entry.inUse ? "In use" : null,
                             entry.state === "starting" ? DEVICE_POOL_STATE_LABELS.starting : null,
                           ]
@@ -144,7 +154,12 @@ function DeviceRequirement({
           </SelectPopup>
         </Select>
       </div>
-      {!device ? (
+      {!device && busy ? (
+        <p className="w-full text-xs text-muted-foreground">
+          {busy.name} is in use by {busy.qaRun?.suiteName ?? "another suite"}. A run here starts
+          when it finishes.
+        </p>
+      ) : !device ? (
         <p className="flex w-full items-start gap-1.5 text-xs text-warning-foreground">
           <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
           {qaDeviceUnavailableReason(assignment)}

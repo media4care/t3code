@@ -12,10 +12,12 @@ export interface QaDeviceAssignment {
   readonly requirement: QaDeviceRequirement;
   /** Every pool device that fits, usable ones first in the order QA prefers them. */
   readonly candidates: ReadonlyArray<DevicePoolEntry>;
-  /** The device a run uses; none blocks the suite. */
+  /** The device a run uses; none blocks the suite, unless a run waits for `busy`. */
   readonly device: DevicePoolEntry | null;
   /** The device QA picks when nobody chose one. */
   readonly automatic: DevicePoolEntry | null;
+  /** Held by another suite's run, and this suite waits for it: chosen, or the only one that fits. */
+  readonly busy: DevicePoolEntry | null;
   /** The device someone chose, which can be offline or gone; the run then uses `automatic`. */
   readonly chosenKey: string | null;
 }
@@ -69,26 +71,40 @@ const preference = (a: DevicePoolEntry, b: DevicePoolEntry) =>
   b.version.localeCompare(a.version, undefined, { numeric: true }) ||
   a.name.localeCompare(b.name);
 
+/** `projectId` names the suite's own run, whose devices stay its own while it runs. */
 export function qaDeviceAssignments(
   suite: QaSuite,
   entries: ReadonlyArray<DevicePoolEntry>,
   selections: ReadonlyArray<QaDeviceSelection> = [],
+  projectId?: string,
 ): ReadonlyArray<QaDeviceAssignment> {
+  const heldByOther = ({ qaRun }: DevicePoolEntry) =>
+    !!qaRun && (qaRun.projectId !== projectId || qaRun.suiteId !== suite.id);
   // A suite that needs two devices gets two different ones.
   const taken = new Set<string>();
   return (suite.devices ?? []).map((requirement, index) => {
     const key = qaDeviceRequirementKey(requirement, index);
     const candidates = entries.filter((entry) => qaDeviceFits(requirement, entry)).sort(preference);
-    const free = candidates.filter((entry) => entry.state !== "offline" && !taken.has(entry.key));
+    const usable = candidates.filter((entry) => entry.state !== "offline" && !taken.has(entry.key));
+    const free = usable.filter((entry) => !heldByOther(entry));
     const automatic =
       free.find((entry) => entry.name === requirement.defaultDevice) ?? free[0] ?? null;
     const chosenKey =
       selections.find(
         (selection) => selection.suiteId === suite.id && selection.requirement === key,
       )?.deviceKey ?? null;
-    const device = free.find((entry) => entry.key === chosenKey) ?? automatic;
-    if (device) taken.add(device.key);
-    return { key, requirement, candidates, device, automatic, chosenKey };
+    // Someone chose this device, so a run waits for it; an offline or missing one falls back.
+    const chosen = usable.find((entry) => entry.key === chosenKey);
+    const device = chosen ? (heldByOther(chosen) ? null : chosen) : automatic;
+    const busy = device
+      ? null
+      : (chosen ??
+        usable.find((entry) => entry.name === requirement.defaultDevice) ??
+        usable[0] ??
+        null);
+    const used = device ?? busy;
+    if (used) taken.add(used.key);
+    return { key, requirement, candidates, device, automatic, busy, chosenKey };
   });
 }
 

@@ -33,6 +33,8 @@ import { Button } from "../ui/button";
 import { QaSuiteDevices } from "./QaSuiteDevices";
 
 export interface QaSuiteDeviceChoices {
+  /** The project whose suites these are; its runs keep the devices they hold. */
+  readonly projectId: string;
   /** Null while the device pool loads. */
   readonly pool: ReadonlyArray<DevicePoolEntry> | null;
   readonly selections: ReadonlyArray<QaDeviceSelection>;
@@ -273,9 +275,12 @@ function SuiteCard({
   onView: (runId: string) => void;
 }) {
   const assignments = suite.devices?.length
-    ? devices.pool && qaDeviceAssignments(suite, devices.pool, devices.selections)
+    ? devices.pool &&
+      qaDeviceAssignments(suite, devices.pool, devices.selections, devices.projectId)
     : undefined;
-  const blocked = assignments?.some((assignment) => !assignment.device) ?? false;
+  // A suite waiting for a busy device can still run; it starts when the device is free.
+  const blocked =
+    assignments?.some((assignment) => !assignment.device && !assignment.busy) ?? false;
   return (
     <section
       aria-label={suite.name}

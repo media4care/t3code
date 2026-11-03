@@ -5,6 +5,7 @@ import {
   LOCAL_DEVICE_HOST_ID,
   ProjectId,
   QaRun,
+  type DevicePool as DevicePoolSnapshot,
   type DevicePoolEntry,
   type DeviceSummary,
   type QaSuite,
@@ -20,6 +21,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
@@ -136,9 +138,35 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
       }),
     }),
   );
+  // Holds claims like the real pool, so a test can hold a device for another suite and free it.
+  const pool = yield* SubscriptionRef.make<DevicePoolSnapshot>({ entries: devices.pool ?? [] });
+  const holding = (keys: ReadonlySet<string>, qaRun: DevicePoolEntry["qaRun"]) =>
+    SubscriptionRef.update(pool, ({ entries }) => ({
+      entries: entries.map((entry) => {
+        if (!keys.has(entry.key)) return entry;
+        const { qaRun: _previous, ...rest } = entry;
+        return qaRun ? { ...rest, qaRun } : rest;
+      }),
+    }));
+  /** Done once a run has listed the devices it picks from. */
+  const listed = yield* Deferred.make<void>();
   const devicePoolLayer = Layer.mock(DevicePool.DevicePool)({
-    refresh: Effect.succeed({ entries: devices.pool ?? [] }),
+    stream: SubscriptionRef.changes(pool),
+    refresh: SubscriptionRef.get(pool).pipe(Effect.tap(() => Deferred.succeed(listed, undefined))),
     prepare: devices.prepare ?? startDevice,
+    claim: (entries, run) => {
+      const keys = new Set(entries.map((entry) => entry.key));
+      return Effect.acquireRelease(
+        SubscriptionRef.get(pool).pipe(
+          Effect.flatMap((current) =>
+            current.entries.some((entry) => keys.has(entry.key) && entry.qaRun)
+              ? Effect.succeed(false)
+              : holding(keys, run).pipe(Effect.as(true)),
+          ),
+        ),
+        (claimed) => (claimed ? holding(keys, undefined) : Effect.void),
+      );
+    },
   });
   const serviceLayer = Qa.layer.pipe(
     Layer.provide(projectLayer),
@@ -155,6 +183,9 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     path,
     sql,
     git,
+    pool,
+    holding,
+    listed,
     tick: yield* Deferred.await(registered),
   };
 });
@@ -1324,6 +1355,51 @@ describe("QA devices", () => {
         "suite-not-found",
       );
     }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live(
+    "waits for a device another suite's run holds, then holds it until its own run ends",
+    () =>
+      Effect.gen(function* () {
+        const other = {
+          projectId: ProjectId.make("qa-other"),
+          suiteId: "b2c",
+          suiteName: "Senior B2C",
+        };
+        const holders: Array<string | undefined> = [];
+        const { service, pool, holding, listed } = yield* fixture(
+          script,
+          [flows],
+          {},
+          {
+            pool: [{ ...tablet, qaRun: other }],
+            prepare: (entry: DevicePoolEntry): Effect.Effect<DeviceSummary> =>
+              SubscriptionRef.get(pool).pipe(
+                Effect.tap(({ entries }: DevicePoolSnapshot) =>
+                  Effect.sync(() =>
+                    holders.push(entries.find(({ key }) => key === entry.key)?.qaRun?.suiteName),
+                  ),
+                ),
+                Effect.andThen(startDevice(entry)),
+              ),
+          },
+        );
+        const { id } = yield* service.start({ projectId, suiteId: flows.id });
+        // The run listed the device while it was held, so it waits until it is given back.
+        yield* Deferred.await(listed);
+        assert.deepEqual(holders, []);
+        yield* holding(new Set([tablet.key]), undefined);
+        const finished = yield* completed(service, id);
+        assert.equal(finished.run.status, "passed");
+        assert.include(
+          finished.output,
+          "[T3 QA] Waiting for samsung SM-T515, which Senior B2C is using…",
+        );
+        assert.include(finished.output, "ANDROID_SERIAL=R52N51B9Y0L");
+        // Held before it was started, and given back when the run ended.
+        assert.deepEqual(holders, ["Tablet flows"]);
+        assert.isUndefined((yield* SubscriptionRef.get(pool)).entries[0]?.qaRun);
+      }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
   it.live("records a run as not run when no device fits or the device cannot start", () =>

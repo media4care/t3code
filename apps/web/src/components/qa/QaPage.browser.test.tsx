@@ -675,7 +675,7 @@ it("lists individual results with paging, search, result filters, and failure de
   await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
 });
 
-it("picks a device for each suite, lets people choose another, and blocks suites without one", async () => {
+it("picks a device for each suite, lets people choose another, waits for busy ones, and blocks suites without one", async () => {
   setup();
   const device = (value: Pick<DevicePoolEntry, "key" | "name"> & Partial<DevicePoolEntry>) => ({
     hostId: "local",
@@ -690,6 +690,12 @@ it("picks a device for each suite, lets people choose another, and blocks suites
     ...value,
   });
   state.pool = [
+    device({
+      key: "tablet7",
+      name: "Tablet_7",
+      state: "running",
+      qaRun: { projectId: ProjectId.make("beta"), suiteId: "b2c", suiteName: "Senior B2C" },
+    }),
     device({ key: "avd", name: "Pixel_Tablet" }),
     device({ key: "samsung", name: "samsung SM-T515", physical: true, state: "connected" }),
     device({ key: "phone", name: "Medium_Phone", formFactor: "phone" }),
@@ -722,8 +728,17 @@ it("picks a device for each suite, lets people choose another, and blocks suites
         command: "maestro test tv",
         devices: [{ platform: "android", formFactor: "tv" }],
       },
+      {
+        id: "pairing",
+        name: "Tablet pairing",
+        command: "maestro test pairing",
+        devices: [{ platform: "android", formFactor: "tablet" }],
+      },
     ],
-    deviceSelections: [{ suiteId: "phone", requirement: "phone", deviceKey: "pixel" }],
+    deviceSelections: [
+      { suiteId: "phone", requirement: "phone", deviceKey: "pixel" },
+      { suiteId: "pairing", requirement: "0", deviceKey: "tablet7" },
+    ],
   };
   await using screen = await render(
     <SidebarProvider>
@@ -733,10 +748,13 @@ it("picks a device for each suite, lets people choose another, and blocks suites
   );
   const tablet = screen.getByRole("region", { name: "Tablet flows" });
   const picker = tablet.getByRole("combobox", { name: "Device for Android tablet" });
-  // Emulators come first, and a stopped one starts with the run.
+  // Emulators come first, and a stopped one starts with the run; one another run holds is skipped.
   await expect.element(picker).toHaveTextContent("Pixel_TabletAuto");
   await expect.element(tablet.getByText("Starts when the suite runs.")).toBeVisible();
   await picker.click();
+  await expect
+    .element(page.getByRole("option", { name: /Tablet_7/ }))
+    .toMatchTextContent(/In use by Senior B2C/);
   await page.getByRole("option", { name: /samsung SM-T515/ }).click();
   await expect
     .poll(() => state.snapshots.alpha?.deviceSelections)
@@ -756,4 +774,17 @@ it("picks a device for each suite, lets people choose another, and blocks suites
   await expect.element(tv.getByText(/^No Android TV is available\./)).toBeVisible();
   await expect.element(tv.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
   await expect.element(tablet.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
+
+  // A chosen device another suite's run holds is waited for, so the suite is not blocked.
+  const pairing = screen.getByRole("region", { name: "Tablet pairing" });
+  await expect
+    .element(pairing.getByRole("combobox", { name: "Device for Android tablet" }))
+    .toHaveTextContent("Waiting for Tablet_7");
+  await expect
+    .element(
+      pairing.getByText("Tablet_7 is in use by Senior B2C. A run here starts when it finishes."),
+    )
+    .toBeVisible();
+  await expect.element(pairing.getByText("Blocked", { exact: true })).not.toBeInTheDocument();
+  await expect.element(pairing.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
 });

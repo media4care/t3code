@@ -2,7 +2,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { IsoDateTime, ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TrimmedString,
+} from "./baseSchemas.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
@@ -191,6 +197,14 @@ export type DevicePoolKey = typeof DevicePoolKey.Type;
  * devices are remembered across restarts, so an unplugged one stays `offline`
  * until it reconnects or is forgotten.
  */
+/** The QA run holding a pool device until it finishes; other runs wait for it or use another. */
+export const DevicePoolQaRun = Schema.Struct({
+  projectId: ProjectId,
+  suiteId: TrimmedNonEmptyString,
+  suiteName: TrimmedNonEmptyString,
+});
+export type DevicePoolQaRun = typeof DevicePoolQaRun.Type;
+
 export const DevicePoolEntry = Schema.Struct({
   key: DevicePoolKey,
   hostId: DeviceHostId,
@@ -203,6 +217,7 @@ export const DevicePoolEntry = Schema.Struct({
   state: Schema.Literals(["running", "connected", "stopped", "starting", "offline"]),
   /** Open in a thread's Device panel. */
   inUse: Schema.Boolean,
+  qaRun: Schema.optionalKey(DevicePoolQaRun),
   /** When a physical device was last listed; null for simulators and emulators. */
   lastSeenAt: Schema.NullOr(IsoDateTime),
 });

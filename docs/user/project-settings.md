@@ -191,7 +191,10 @@ not a guarantee about untracked external state or complete test coverage.
 QA also shows the environment's **Device pool**: the iOS simulators and Android
 emulators it can start and the Android devices connected over ADB. Turn on device
 support there to list them. A physical device that has connected before stays listed
-as offline, with the time it was last seen, until you forget it.
+as offline, with the time it was last seen, until you forget it. The pool also lists the
+devices of every other connected environment with devices turned on, each under its
+own heading. A device open in a Device panel shows **In use**; one a QA run holds shows
+which suite holds it.
 
 When a suite needs a device, list it under `devices`:
 
@@ -214,6 +217,13 @@ another on the suite to keep using it on this environment. If a chosen device is
 offline, runs use QA's pick until it is back. A suite with no device available shows
 **Blocked**. A blocked suite that runs anyway, for example on a schedule, is recorded
 as incomplete without starting its command.
+
+A run holds its devices from before they start until it ends, so two suites never use
+the same device at once. QA's pick skips a device another suite's run holds. When the
+chosen device, or the only one that fits, is held, the suite shows **Waiting for** the
+device, and a run waits up to 30 minutes for it before it is recorded as not run.
+Devices open in a Device panel are not held: a run can still use them, and the suite
+says so.
 
 Before the command starts, QA starts a stopped emulator or simulator and waits until
 it has finished booting; devices keep running afterwards. The command receives

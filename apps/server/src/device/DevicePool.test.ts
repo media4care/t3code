@@ -1,6 +1,7 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import {
   LOCAL_DEVICE_HOST_ID,
+  ProjectId,
   ThreadId,
   type DevicePoolEntry,
   type DeviceServiceState,
@@ -10,10 +11,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -190,6 +193,26 @@ describe("DevicePool", () => {
       });
       // Emulators report only `emulator`, so their form factor comes from the AVD name.
       expect(commands).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("holds a device for one QA run at a time, through its start, until the run ends", () =>
+    Effect.gen(function* () {
+      const { start, emit } = yield* fixture();
+      const pool = yield* start;
+      yield* emit(deviceState([stoppedAvd]));
+      const [stopped] = yield* waitFor(pool, (entries) => entries[0]?.state === "stopped");
+      const family = { projectId: ProjectId.make("app"), suiteId: "family", suiteName: "Family" };
+      const run = yield* Scope.make();
+      assert.isTrue(yield* pool.claim([stopped!], family).pipe(Scope.provide(run)));
+      assert.isFalse(
+        yield* pool.claim([stopped!], { ...family, suiteId: "b2c" }).pipe(Effect.scoped),
+      );
+      yield* emit(deviceState([{ ...stoppedAvd, id: "emulator-5554", booted: true }]));
+      const [running] = yield* waitFor(pool, (entries) => entries[0]?.state === "running");
+      expect(running?.qaRun).toEqual(family);
+      yield* Scope.close(run, Exit.void);
+      yield* waitFor(pool, (entries) => entries[0]?.qaRun === undefined);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

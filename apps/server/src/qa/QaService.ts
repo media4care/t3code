@@ -22,15 +22,18 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   qaDeviceAssignments,
+  type QaDeviceAssignment,
   qaDeviceRequirementLabel,
   qaDeviceUnavailableReason,
 } from "@t3tools/shared/qaDevices";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -68,6 +71,10 @@ import {
 
 const MAX_OUTPUT = 128 * 1024;
 const MAX_REPORT = 2 * 1024 * 1024;
+// A run waits this long for a device another suite's run holds, then is not run.
+const DEVICE_WAIT = Duration.minutes(30);
+// A run that ends wakes the waiting ones; this also notices a device that came back on its own.
+const DEVICE_RECHECK = Duration.seconds(30);
 const decodeConfig = Schema.decodeEffect(
   fromLenientJson(Schema.Struct({ qa: Schema.optionalKey(QaConfiguration) })),
 );
@@ -437,14 +444,44 @@ const make = Effect.gen(function* () {
       };
       return null;
     };
-    const pool = yield* devicePool.refresh;
-    const assignments = qaDeviceAssignments(
-      suite,
-      pool.entries,
-      deviceSelections.forProject(entry.details.run.projectId),
-    );
-    const blocked = assignments.find((assignment) => !assignment.device);
-    if (blocked) return stop(`Not run. ${qaDeviceUnavailableReason(blocked)}`);
+    const { projectId } = entry.details.run;
+    const holder = { projectId, suiteId: suite.id, suiteName: suite.name };
+    const giveUpAt = (yield* Clock.currentTimeMillis) + Duration.toMillis(DEVICE_WAIT);
+    let pool = yield* devicePool.refresh;
+    let waitingFor: string | null = null;
+    let assignments: ReadonlyArray<QaDeviceAssignment>;
+    // Claimed before starting any of them, so two runs never start or use the same device.
+    while (true) {
+      assignments = qaDeviceAssignments(
+        suite,
+        pool.entries,
+        deviceSelections.forProject(projectId),
+        projectId,
+      );
+      const blocked = assignments.find((assignment) => !assignment.device && !assignment.busy);
+      if (blocked) return stop(`Not run. ${qaDeviceUnavailableReason(blocked)}`);
+      const busy = assignments.find((assignment) => !assignment.device)?.busy;
+      if (!busy) {
+        const wanted = assignments.flatMap(({ device }) => (device ? [device] : []));
+        if (yield* devicePool.claim(wanted, holder)) break;
+        // Another run claimed one first; the pool it published shows which.
+      } else {
+        const user = busy.qaRun?.suiteName ?? "another run";
+        if (busy.key !== waitingFor) {
+          waitingFor = busy.key;
+          appendOutput(entry, `[T3 QA] Waiting for ${busy.name}, which ${user} is using…\n`);
+        }
+        if ((yield* Clock.currentTimeMillis) >= giveUpAt)
+          return stop(`Not run. ${busy.name} was still in use by ${user} after 30 minutes.`);
+      }
+      const previous = pool;
+      pool = yield* devicePool.stream.pipe(
+        Stream.filter((next) => next !== previous),
+        Stream.runHead,
+        Effect.map(Option.getOrElse(() => previous)),
+        Effect.timeoutOrElse({ duration: DEVICE_RECHECK, orElse: () => devicePool.refresh }),
+      );
+    }
     const devices: Array<QaRunDevice> = [];
     for (const assignment of assignments) {
       if (!assignment.device) continue;

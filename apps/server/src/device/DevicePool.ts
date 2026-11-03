@@ -4,6 +4,7 @@ import {
   type DeviceFormFactor,
   type DeviceForgetInput,
   type DevicePool as DevicePoolSnapshot,
+  type DevicePoolQaRun,
   type DeviceServiceState,
   type DeviceSummary,
 } from "@t3tools/contracts";
@@ -17,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -73,6 +75,14 @@ export class DevicePool extends Context.Service<
       entry: DevicePoolEntry,
       context?: DeviceHost.DeviceOpenContext,
     ) => Effect.Effect<DeviceSummary, DevicePrepareError>;
+    /**
+     * Holds devices for a QA run until the scope closes. False, holding none, when another run
+     * holds one of them; check them and claim in one step, since another run can take one between.
+     */
+    readonly claim: (
+      entries: ReadonlyArray<DevicePoolEntry>,
+      run: DevicePoolQaRun,
+    ) => Effect.Effect<boolean, never, Scope.Scope>;
     readonly forget: (input: DeviceForgetInput) => Effect.Effect<void, DevicePoolError>;
   }
 >()("t3/device/DevicePool") {}
@@ -120,10 +130,16 @@ const formFactorFromCharacteristics = (output: string): DeviceFormFactor | null 
   return "phone";
 };
 
+const qaRunOf = (claims: ReadonlyMap<string, DevicePoolQaRun>, entryKey: string) => {
+  const qaRun = claims.get(entryKey);
+  return qaRun ? { qaRun } : {};
+};
+
 const snapshot = (
   state: DeviceServiceState,
   remembered: ReadonlyMap<string, RememberedDevice>,
   preparing: ReadonlySet<string>,
+  claims: ReadonlyMap<string, DevicePoolQaRun>,
 ): DevicePoolSnapshot => {
   const entries: Array<DevicePoolEntry> = [];
   const listed = new Set<string>();
@@ -154,13 +170,20 @@ const snapshot = (
       inUse: state.sessions.some(
         (session) => session.hostId === device.hostId && session.deviceId === device.id,
       ),
+      ...qaRunOf(claims, entryKey),
       lastSeenAt: known?.lastSeenAt ?? null,
     });
   }
   const hosts = new Set(state.hosts.map((host) => host.id));
   for (const device of remembered.values()) {
     if (listed.has(device.key) || !hosts.has(device.hostId)) continue;
-    entries.push({ ...device, physical: true, state: "offline", inUse: false });
+    entries.push({
+      ...device,
+      physical: true,
+      state: "offline",
+      inUse: false,
+      ...qaRunOf(claims, device.key),
+    });
   }
   return { entries };
 };
@@ -188,12 +211,14 @@ const make = Effect.gen(function* () {
   const asked = new Set<string>();
   /** Devices QA is starting, which the device service does not report as booting. */
   const preparing = new Set<string>();
+  /** Devices QA runs hold, by pool key, which stays the same while an emulator starts. */
+  const claims = new Map<string, DevicePoolQaRun>();
   const lock = yield* Semaphore.make(1);
   // One start at a time: an AVD cannot run twice, and starts compete for the same machine.
   const prepareLock = yield* Semaphore.make(1);
   let latest = yield* deviceService.state;
   let listedDevices: DeviceServiceState["devices"] | null = null;
-  const pool = yield* SubscriptionRef.make(snapshot(latest, remembered, preparing));
+  const pool = yield* SubscriptionRef.make(snapshot(latest, remembered, preparing, claims));
 
   const persist = (devices: ReadonlyArray<RememberedDevice>) =>
     encodePoolFile({ version: 1, devices }).pipe(
@@ -207,7 +232,7 @@ const make = Effect.gen(function* () {
   );
 
   const publish = Effect.gen(function* () {
-    const next = snapshot(latest, remembered, preparing);
+    const next = snapshot(latest, remembered, preparing, claims);
     if (!Equal.equals(next, yield* SubscriptionRef.get(pool)))
       yield* SubscriptionRef.set(pool, next);
   });
@@ -357,12 +382,38 @@ const make = Effect.gen(function* () {
     return device;
   }, prepareLock.withPermit);
 
+  const claim: DevicePool["Service"]["claim"] = (entries, run) =>
+    Effect.acquireRelease(
+      lock.withPermit(
+        Effect.suspend(() => {
+          if (entries.some((entry) => claims.has(entry.key))) return Effect.succeed(false);
+          for (const entry of entries) claims.set(entry.key, run);
+          return publish.pipe(Effect.as(true));
+        }),
+      ),
+      (claimed) =>
+        claimed
+          ? lock.withPermit(
+              Effect.suspend(() => {
+                for (const entry of entries) claims.delete(entry.key);
+                return publish;
+              }),
+            )
+          : Effect.void,
+    );
+
   yield* DeviceService.stateStream(deviceService).pipe(
     Stream.runForEach(observe),
     Effect.forkScoped,
   );
 
-  return DevicePool.of({ stream: SubscriptionRef.changes(pool), refresh, prepare, forget });
+  return DevicePool.of({
+    stream: SubscriptionRef.changes(pool),
+    refresh,
+    prepare,
+    claim,
+    forget,
+  });
 });
 
 export const layer = Layer.effect(DevicePool, make);

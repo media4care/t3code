@@ -391,6 +391,7 @@ function ProjectQa({
                 entries={group.entries}
                 showComponent={grouping !== "component"}
                 devices={{
+                  projectId,
                   pool: pool.data?.entries ?? null,
                   selections: snapshot?.deviceSelections ?? [],
                   canChoose: connected && canSetDevice,
