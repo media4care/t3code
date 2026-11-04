@@ -48,6 +48,8 @@ export class ReleasesService extends Context.Service<
       input: ReleasesProjectInput,
     ) => Stream.Stream<ReleasesSnapshot, ReleasesError>;
     readonly refresh: (input: ReleasesRefreshInput) => Effect.Effect<void, ReleasesError>;
+    /** The snapshot, after running the command first when the document is stale. */
+    readonly read: (input: ReleasesProjectInput) => Effect.Effect<ReleasesSnapshot, ReleasesError>;
   }
 >()("t3/releases/ReleasesService") {}
 
@@ -119,7 +121,8 @@ const make = Effect.gen(function* () {
     Effect.mapError((error) => (typeof error === "string" ? error : tail(error.message))),
   );
 
-  const refresh = Effect.fn("ReleasesService.refresh")(function* (input: ReleasesRefreshInput) {
+  /** Marks the project running and returns the run, or nothing to do while the document is fresh. */
+  const start = Effect.fn("ReleasesService.start")(function* (input: ReleasesRefreshInput) {
     const root = yield* workspace(input.projectId);
     const config = yield* configuration(root).pipe(
       Effect.mapError((cause) => new ReleasesError({ reason: "not-configured", cause })),
@@ -134,11 +137,11 @@ const make = Effect.gen(function* () {
         state.lastRun &&
         now - Date.parse(state.lastRun.finishedAt) < minutes * 60_000)
     )
-      return;
+      return Effect.void;
     states.set(input.projectId, { ...state, running: true });
     yield* PubSub.publish(updates, input.projectId);
     const startedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* run(root, config).pipe(
+    return run(root, config).pipe(
       Effect.result,
       Effect.flatMap((outcome) =>
         Effect.gen(function* () {
@@ -156,12 +159,17 @@ const make = Effect.gen(function* () {
           yield* PubSub.publish(updates, input.projectId);
         }),
       ),
-      Effect.forkIn(scope),
     );
   });
 
   return ReleasesService.of({
-    refresh,
+    refresh: Effect.fn("ReleasesService.refresh")(function* (input) {
+      yield* Effect.forkIn(yield* start(input), scope);
+    }),
+    read: Effect.fn("ReleasesService.read")(function* (input) {
+      yield* yield* start(input);
+      return yield* snapshot(input.projectId);
+    }),
     subscribe: (input) =>
       Stream.unwrap(
         Effect.gen(function* () {

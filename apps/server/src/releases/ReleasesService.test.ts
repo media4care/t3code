@@ -88,12 +88,13 @@ describe("ReleasesService", () => {
         fs.appendFileSync("runs.txt", "x");
         console.log(JSON.stringify(${encodeJson(document)}));`,
       );
-      yield* service.refresh({ projectId });
-      const snapshot = yield* finishedAfter(service, null);
+      // An agent's read waits for the run a stale document needs.
+      const snapshot = yield* service.read({ projectId });
       assert.deepStrictEqual(snapshot.document, document);
       assert.strictEqual(snapshot.lastRun?.error, null);
 
       yield* service.refresh({ projectId });
+      assert.deepStrictEqual((yield* service.read({ projectId })).lastRun, snapshot.lastRun);
       assert.strictEqual(yield* fs.readFileString(path.join(root, "runs.txt")), "x");
 
       yield* service.refresh({ projectId, force: true });

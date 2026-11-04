@@ -315,7 +315,8 @@ internal or testing track, paused store rollouts, and OTA updates whose runtime
 no public build has. An OTA update only reaches installs of a binary with the
 same runtime, so an update live at 100% on a runtime that is only in TestFlight
 reaches testers only. Releases is read-only: approve, promote, or roll back in
-your pipeline, store console, or release tooling.
+your pipeline, store console, or release tooling. Agents can read the same
+status with the `t3_releases` tool.
 
 ## Worktree branch names
 
