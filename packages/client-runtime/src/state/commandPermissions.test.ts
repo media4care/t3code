@@ -77,6 +77,7 @@ describe("command permissions", () => {
     [WS_METHODS.qaStartAffected, AuthTerminalOperateScope],
     [WS_METHODS.qaCancelAffected, AuthTerminalOperateScope],
     [WS_METHODS.qaCancel, AuthTerminalOperateScope],
+    [WS_METHODS.releasesRefresh, AuthTerminalOperateScope],
   ] as const)("requires the destination grant for %s", ([method, required]) =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -3,6 +3,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { QaConfiguration } from "./qa.ts";
+import { ReleasesConfiguration } from "./releases.ts";
 import { ProjectScriptIcon } from "./project.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
 
@@ -72,6 +73,7 @@ export type T3ProjectFileScript = typeof T3ProjectFileScript.Type;
 
 export const T3ProjectFile = Schema.Struct({
   qa: Schema.optionalKey(QaConfiguration),
+  releases: Schema.optionalKey(ReleasesConfiguration),
   $schema: Schema.optionalKey(
     Schema.String.annotate({
       description: `URL of the JSON Schema for this file, typically "${T3_PROJECT_FILE_SCHEMA_URL}".`,

@@ -61,6 +61,7 @@ function createWorkspaceTabsModel() {
     usage: 0,
     insights: 0,
     qa: 0,
+    releases: 0,
     settings: 0,
   };
   return {

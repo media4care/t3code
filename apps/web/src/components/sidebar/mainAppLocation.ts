@@ -14,7 +14,8 @@ export function isSidebarUtilityPage(pathname: string) {
     pathname === "/pull-requests" ||
     pathname === "/git" ||
     pathname === "/insights" ||
-    pathname === "/qa"
+    pathname === "/qa" ||
+    pathname === "/releases"
   );
 }
 

@@ -70,6 +70,7 @@ import {
   RotateCcwIcon,
   SettingsIcon,
   MonitorIcon,
+  PackageIcon,
   PinIcon,
   PinOffIcon,
   SquarePenIcon,
@@ -1599,6 +1600,17 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "qa.open",
     run: async () => {
       await navigate({ to: "/qa" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:releases",
+    searchTerms: ["releases", "deploy", "rollout", "ota", "store", "app store", "play store"],
+    title: "Open Releases",
+    icon: <PackageIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "releases.open",
+    run: async () => {
+      await navigate({ to: "/releases" });
     },
   });
   actionItems.push({

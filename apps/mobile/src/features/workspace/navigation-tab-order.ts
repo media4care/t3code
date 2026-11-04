@@ -5,6 +5,7 @@ export const NAVIGATION_TAB_ORDER = [
   "insights",
   "usage",
   "qa",
+  "releases",
 ] as const;
 export type NavigationTab = (typeof NAVIGATION_TAB_ORDER)[number];
 
@@ -21,6 +22,7 @@ export const NAVIGATION_TAB_LABELS: Readonly<Record<NavigationTab, string>> = {
   usage: "Usage",
   insights: "Insights",
   qa: "QA",
+  releases: "Releases",
 };
 
 function isNavigationTab(value: unknown): value is NavigationTab {

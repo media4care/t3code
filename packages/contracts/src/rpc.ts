@@ -12,6 +12,12 @@ import {
   QaTestResults,
   QaSnapshot,
 } from "./qa.ts";
+import {
+  ReleasesError,
+  ReleasesProjectInput,
+  ReleasesRefreshInput,
+  ReleasesSnapshot,
+} from "./releases.ts";
 import { ThreadId } from "./baseSchemas.ts";
 import {
   InsightsSettings,
@@ -598,6 +604,8 @@ export const WS_METHODS = {
   qaSetSchedule: "qa.setSchedule",
   qaSetDevice: "qa.setDevice",
   qaImport: "qa.import",
+  releasesSubscribe: "releases.subscribe",
+  releasesRefresh: "releases.refresh",
   insightsSubscribe: "insights.subscribe",
   insightsConfigure: "insights.configure",
   insightsRunNow: "insights.runNow",
@@ -2074,6 +2082,18 @@ const WsQaTestsRpc = Rpc.make(WS_METHODS.qaTests, {
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
 
+const WsReleasesSubscribeRpc = Rpc.make(WS_METHODS.releasesSubscribe, {
+  payload: ReleasesProjectInput,
+  success: ReleasesSnapshot,
+  error: Schema.Union([ReleasesError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsReleasesRefreshRpc = Rpc.make(WS_METHODS.releasesRefresh, {
+  payload: ReleasesRefreshInput,
+  success: Schema.Void,
+  error: Schema.Union([ReleasesError, EnvironmentAuthorizationError]),
+});
+
 const WsInsightsSubscribeRpc = Rpc.make(WS_METHODS.insightsSubscribe, {
   payload: Schema.Struct({}),
   success: InsightsSnapshot,
@@ -2269,6 +2289,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsQaCancelRpc,
   WsQaDetailsRpc,
   WsQaTestsRpc,
+  WsReleasesSubscribeRpc,
+  WsReleasesRefreshRpc,
   WsQaSetScheduleRpc,
   WsQaSetDeviceRpc,
   WsQaImportRpc,

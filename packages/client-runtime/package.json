@@ -542,6 +542,10 @@
     "./qa": {
       "types": "./src/qa.ts",
       "default": "./src/qa.ts"
+    },
+    "./releases": {
+      "types": "./src/releases.ts",
+      "default": "./src/releases.ts"
     }
   },
   "scripts": {

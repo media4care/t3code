@@ -92,6 +92,7 @@ import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Qa from "./qa/QaService.ts";
 import * as QaHttp from "./qa/http.ts";
+import * as Releases from "./releases/ReleasesService.ts";
 import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as GitExplorer from "./git/GitExplorer.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -814,6 +815,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(Qa.layer.pipe(Layer.provide(ProjectStore.layer), Layer.provide(Scheduler.layer))),
+  Layer.provide(Releases.layer.pipe(Layer.provide(ProjectStore.layer))),
   Layer.provide(PreviewBrowser.layer),
   // Links to other environments, shared by Settings (WebSocket) and agents (/mcp).
   Layer.provide(

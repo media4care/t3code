@@ -25,6 +25,7 @@ export const NAVIGATION_TAB_ICONS = {
   usage: "chart.bar.xaxis",
   insights: "lightbulb",
   qa: "checkmark.circle",
+  releases: "cube",
 } as const satisfies Readonly<Record<NavigationTab, AppSymbolName>>;
 
 export function useNavigationTabOrder() {

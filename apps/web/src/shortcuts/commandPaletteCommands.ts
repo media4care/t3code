@@ -92,6 +92,11 @@ export function installCommandPaletteCommands(
         dispatchCommandPalette({ _tag: "SetOpen", open: false });
         void router.navigate({ to: "/qa" });
       },
+      "releases.open": (event) => {
+        consume(event);
+        dispatchCommandPalette({ _tag: "SetOpen", open: false });
+        void router.navigate({ to: "/releases" });
+      },
       "insights.open": (event) => {
         consume(event);
         dispatchCommandPalette({ _tag: "SetOpen", open: false });

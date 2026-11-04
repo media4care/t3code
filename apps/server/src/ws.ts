@@ -1,4 +1,5 @@
 import * as Qa from "./qa/QaService.ts";
+import * as Releases from "./releases/ReleasesService.ts";
 import * as Insights from "./insights/InsightsService.ts";
 import * as ThreadSkills from "./orchestration-v2/ThreadSkills.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
@@ -1402,6 +1403,7 @@ export const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const qa = yield* Qa.QaService;
+      const releases = yield* Releases.ReleasesService;
       const insights = yield* Insights.InsightsService;
       const threadSkills = yield* ThreadSkills.ThreadSkills;
       const secretRequests = yield* SecretRequests.SecretRequests;
@@ -2293,6 +2295,8 @@ export const layerWsRpc = (
         [WS_METHODS.qaSetSchedule]: (input) => qa.setSchedule(input),
         [WS_METHODS.qaSetDevice]: (input) => qa.setDevice(input),
         [WS_METHODS.qaImport]: (input) => qa.importReport(input),
+        [WS_METHODS.releasesSubscribe]: (input) => releases.subscribe(input),
+        [WS_METHODS.releasesRefresh]: (input) => releases.refresh(input),
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
         [WS_METHODS.insightsConfigure]: (input) => insights.configure(input),
         [WS_METHODS.insightsRunNow]: () => insights.runNow(),
@@ -3466,6 +3470,7 @@ export const WS_RPC_SERVER_OPTIONS = {
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const qa = yield* Qa.QaService;
+    const releases = yield* Releases.ReleasesService;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const npmRelease = yield* NpmRelease.NpmRelease;
@@ -3544,6 +3549,7 @@ export const layer = Layer.unwrap(
               readSettingsClient(url.value),
             ).pipe(
               Layer.provide(Layer.succeed(Qa.QaService, qa)),
+              Layer.provide(Layer.succeed(Releases.ReleasesService, releases)),
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),

@@ -57,7 +57,8 @@ export function WorkspaceToolbar(props: {
       selectedTab === "usage" ||
       selectedTab === "gitExplorer" ||
       selectedTab === "insights" ||
-      selectedTab === "qa"
+      selectedTab === "qa" ||
+      selectedTab === "releases"
         ? "threads"
         : selectedTab
     ];

@@ -1386,6 +1386,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:qa:cancel",
       tag: WS_METHODS.qaCancel,
     }),
+    releasesLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:releases:live",
+      tag: WS_METHODS.releasesSubscribe,
+    }),
+    refreshReleases: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:releases:refresh",
+      tag: WS_METHODS.releasesRefresh,
+    }),
     insightsLive,
     insightReport: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:insights:report",

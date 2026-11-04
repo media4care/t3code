@@ -49,6 +49,7 @@ export function initialWorkspaceTabsState(): WorkspaceTabsState {
       usage: emptyTab(),
       insights: emptyTab(),
       qa: emptyTab(),
+      releases: emptyTab(),
       settings: emptyTab(),
     },
   };

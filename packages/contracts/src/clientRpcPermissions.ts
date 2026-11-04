@@ -22,6 +22,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.qaStartAffected]: AuthTerminalOperateScope,
   [WS_METHODS.qaCancelAffected]: AuthTerminalOperateScope,
   [WS_METHODS.qaCancel]: AuthTerminalOperateScope,
+  // Refreshing runs the project's release command.
+  [WS_METHODS.releasesRefresh]: AuthTerminalOperateScope,
   [WS_METHODS.deviceForget]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.

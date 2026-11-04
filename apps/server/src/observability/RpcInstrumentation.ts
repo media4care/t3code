@@ -98,6 +98,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.qaCancel]: "qa",
   [WS_METHODS.qaDetails]: "qa",
   [WS_METHODS.qaTests]: "qa",
+  [WS_METHODS.releasesSubscribe]: "releases",
+  [WS_METHODS.releasesRefresh]: "releases",
   [WS_METHODS.insightsSubscribe]: "insights",
   [WS_METHODS.insightsConfigure]: "insights",
   [WS_METHODS.insightsRunNow]: "insights",

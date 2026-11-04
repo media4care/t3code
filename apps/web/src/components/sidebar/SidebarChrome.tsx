@@ -1,6 +1,7 @@
 import {
   LightbulbIcon,
   FlaskConicalIcon,
+  PackageIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
@@ -304,6 +305,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={() => {
               closeMobileSidebar();
               void navigate({ to: "/qa" });
+            }}
+          />
+          <SidebarUtilityItem
+            icon={<PackageIcon />}
+            label="Releases"
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/releases" });
             }}
           />
           <SidebarUtilityItem

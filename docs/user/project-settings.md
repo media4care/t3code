@@ -278,6 +278,45 @@ the runner. Imported results appear under CI results and in run history. They
 do not mark the local checkout's inputs as current: CI and local execution may
 use different files, dependencies, and target environments.
 
+## Releases
+
+Open **Releases** and choose a project to see where each release is: approvals
+waiting in its pipeline, store tracks and rollout percentages, OTA channels, and
+the version deployed to each environment. On mobile, Releases is in the
+navigation overflow. Web and desktop also offer **Open Releases** in the command
+palette and the configurable `releases.open` keyboard command.
+
+The project supplies this status itself. Add a command to its `t3.json` that
+prints a release status document as JSON on stdout:
+
+```json
+{
+  "releases": {
+    "command": "yarn --silent release:status --json",
+    "refreshMinutes": 15
+  }
+}
+```
+
+The document format is `ReleaseStatusDocument` in
+[`packages/contracts/src/releases.ts`](../../packages/contracts/src/releases.ts):
+releases per environment, pipeline gates, targets with their store binaries and
+OTA channel, and deployed services. A source the command cannot read goes in
+`sources` with its error, so the rest still shows.
+
+The command runs in the project root (or `cwd`) on the environment, with the
+same shell as QA suites, so it can read credentials from files there. While
+Releases is open, T3 Code runs it again once the last result is older than
+`refreshMinutes` (default 15); **Refresh** runs it immediately. If a run fails,
+the page keeps the last status and shows the error.
+
+**Waiting on you** lists pipeline approvals, failed steps, builds left on an
+internal or testing track, paused store rollouts, and OTA updates whose runtime
+no public build has. An OTA update only reaches installs of a binary with the
+same runtime, so an update live at 100% on a runtime that is only in TestFlight
+reaches testers only. Releases is read-only: approve, promote, or roll back in
+your pipeline, store console, or release tooling.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,
