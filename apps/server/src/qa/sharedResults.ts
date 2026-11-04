@@ -1,5 +1,5 @@
 import { IsoDateTime, QaError, QaRun, QaSuite, type ProjectId } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -33,7 +33,7 @@ export const SHARED_RESULT_DETAILS =
 export const makeSharedResults = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const invalid = () => new QaError({ reason: "storage" });
   const fingerprint = Effect.fn("QaService.sharedFingerprint")(function* (evidence: InputEvidence) {
     const bytes = new TextEncoder().encode(
@@ -43,13 +43,7 @@ export const makeSharedResults = Effect.gen(function* () {
         Object.entries(evidence.files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
       ]),
     );
-    return yield* crypto
-      .digest("SHA-256", bytes)
-      .pipe(
-        Effect.map((hash) =>
-          Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-        ),
-      );
+    return yield* digest.digestHex(Digest.sha256, bytes);
   });
   const directory = Effect.fn("QaService.sharedDirectory")(function* (
     root: string,

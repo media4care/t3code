@@ -23,8 +23,8 @@ import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatQaRouteImport } from './routes/_chat.qa'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
-import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
 import { Route as ChatInsightsRouteImport } from './routes/_chat.insights'
+import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
 import { Route as ChatSettingsWorktreesRouteImport } from './routes/_chat.settings.worktrees'
 import { Route as ChatSettingsThreadsRouteImport } from './routes/_chat.settings.threads'
 import { Route as ChatSettingsStorageRouteImport } from './routes/_chat.settings.storage'
@@ -123,17 +123,17 @@ const ChatNewRoute = ChatNewRouteImport.update({
   path: '/new',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatInsightsRoute = ChatInsightsRouteImport.update({
+  id: '/insights',
+  path: '/insights',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ThreadsEnvironmentIdThreadIdRoute =
   ThreadsEnvironmentIdThreadIdRouteImport.update({
     id: '/threads/$environmentId/$threadId',
     path: '/threads/$environmentId/$threadId',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ChatInsightsRoute = ChatInsightsRouteImport.update({
-  id: '/insights',
-  path: '/insights',
-  getParentRoute: () => ChatRoute,
-} as any)
 const ChatSettingsWorktreesRoute = ChatSettingsWorktreesRouteImport.update({
   id: '/worktrees',
   path: '/worktrees',
@@ -668,19 +668,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatNewRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/threads/$environmentId/$threadId': {
-      id: '/threads/$environmentId/$threadId'
-      path: '/threads/$environmentId/$threadId'
-      fullPath: '/threads/$environmentId/$threadId'
-      preLoaderRoute: typeof ThreadsEnvironmentIdThreadIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_chat/insights': {
       id: '/_chat/insights'
       path: '/insights'
       fullPath: '/insights'
       preLoaderRoute: typeof ChatInsightsRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/threads/$environmentId/$threadId': {
+      id: '/threads/$environmentId/$threadId'
+      path: '/threads/$environmentId/$threadId'
+      fullPath: '/threads/$environmentId/$threadId'
+      preLoaderRoute: typeof ThreadsEnvironmentIdThreadIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_chat/settings/worktrees': {
       id: '/_chat/settings/worktrees'

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
@@ -18,7 +19,7 @@ const scope = { projectId };
 const layer = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-git-explorer-" })),
   Layer.provideMerge(VcsProcess.layer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const fixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

@@ -20,7 +20,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -101,7 +102,8 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const processes = yield* ProcessRunner.ProcessRunner;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
   const scope = yield* Effect.scope;
@@ -562,7 +564,7 @@ const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     );
     const run: QaRun = {
-      id: yield* crypto.randomUUIDv4(),
+      id: yield* random.uuidV4(),
       projectId: input.projectId,
       suite,
       cwd,
@@ -731,7 +733,7 @@ const make = Effect.gen(function* () {
           isSameSchedule(configuration.timing, previous.configuration.timing);
         const value: QaSchedule = {
           configuration,
-          revision: yield* crypto.randomUUIDv4(),
+          revision: yield* random.uuidV4(),
           nextRunAt: configuration.enabled ? (preserveDue ? previous.nextRunAt : next) : null,
           lastRunAt: previous?.lastRunAt ?? null,
           lastStatus: previous?.lastStatus ?? "never",
@@ -884,26 +886,24 @@ const make = Effect.gen(function* () {
         try: () => parseJunitReport(report.reportXml),
         catch: (cause) => new QaError({ reason: "report", cause }),
       });
-      const hash = yield* crypto
-        .digest(
-          "SHA-256",
-          new TextEncoder().encode(
-            encodeJson([
-              report.suiteId,
-              report.source.provider,
-              report.source.runId,
-              report.source.environment,
-              report.source.url ?? null,
-              report.commit.toLowerCase(),
-              report.branch,
-              report.startedAt,
-              report.finishedAt,
-              report.exitCode,
-              report.reportXml,
-            ]),
-          ),
-        )
-        .pipe(Effect.map((bytes) => Buffer.from(bytes).toString("hex")));
+      const hash = yield* digest.digestHex(
+        Digest.sha256,
+        new TextEncoder().encode(
+          encodeJson([
+            report.suiteId,
+            report.source.provider,
+            report.source.runId,
+            report.source.environment,
+            report.source.url ?? null,
+            report.commit.toLowerCase(),
+            report.branch,
+            report.startedAt,
+            report.finishedAt,
+            report.exitCode,
+            report.reportXml,
+          ]),
+        ),
+      );
       const existing = yield* sql<{
         run_id: string;
         payload_hash: string;
@@ -921,7 +921,7 @@ const make = Effect.gen(function* () {
             ? "incomplete"
             : "passed";
       const run: QaRun = {
-        id: yield* crypto.randomUUIDv4(),
+        id: yield* random.uuidV4(),
         projectId: input.projectId,
         suite,
         cwd: "",

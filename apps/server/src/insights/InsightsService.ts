@@ -21,10 +21,10 @@ import {
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -116,7 +116,8 @@ const make = Effect.gen(function* () {
   const providers = yield* ProviderRegistry.ProviderRegistry;
   const links = yield* PeerLinks.PeerLinks;
   const peers = yield* PeerMcpClient.PeerMcpClient;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const threadSkills = yield* ThreadSkills.ThreadSkills;
   const readLoopWorksheets = yield* makeLoopWorksheetReader;
   const updates = yield* PubSub.sliding<void>(1);
@@ -324,9 +325,9 @@ const make = Effect.gen(function* () {
   const boundedId = (id: string) =>
     id.length <= 300
       ? Effect.succeed(id)
-      : crypto
-          .digest("SHA-256", new TextEncoder().encode(id))
-          .pipe(Effect.map((digest) => `sha256:${Hex.encode(digest)}`));
+      : digest
+          .digestHex(Digest.sha256, new TextEncoder().encode(id))
+          .pipe(Effect.map((hex) => `sha256:${hex}`));
 
   const projectsIn = (projectIds: ReadonlyArray<ProjectId>) =>
     sql<InsightsProject>`SELECT project_id AS projectId, title, workspace_root AS workspaceRoot
@@ -685,7 +686,7 @@ const make = Effect.gen(function* () {
         selection: string;
       }>`SELECT json_extract(payload_json, '$.modelSelection') AS selection FROM orchestration_v2_projection_runs WHERE thread_id = ${threadId} ORDER BY ordinal DESC LIMIT 1`;
       const value: InsightsReport = {
-        id: `insights:${yield* crypto.randomUUIDv4()}`,
+        id: `insights:${yield* random.uuidV4()}`,
         threadId,
         status: metrics.runs ? "analyzing" : "empty",
         createdAt,
@@ -784,7 +785,7 @@ const make = Effect.gen(function* () {
             const value: InsightRecommendation = {
               ...proposal,
               key,
-              id: existing?.id ?? `insight:${yield* crypto.randomUUIDv4()}`,
+              id: existing?.id ?? `insight:${yield* random.uuidV4()}`,
               status: existing?.status ?? "open",
               createdAt: existing?.createdAt ?? at,
               updatedAt: at,

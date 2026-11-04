@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -47,7 +48,7 @@ const decodeSharedRecord = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
 const layer = Layer.mergeAll(Sqlite.layerMemory, ProcessRunner.layer).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const suite: QaSuite = {
   id: "unit",

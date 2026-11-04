@@ -24,8 +24,8 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
-import * as Hex from "effect/encoding/Hex";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -213,7 +213,8 @@ function parseFiles(output: string, stage: GitExplorerFileStage): GitExplorerFil
 
 const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -225,12 +226,7 @@ const make = Effect.gen(function* () {
   >();
   const mutationLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
   const contentToken = Effect.fn("GitExplorer.contentToken")((value: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
-      Effect.map(Hex.encode),
-      Effect.mapError(
-        (cause) => new GitExplorerError({ operation: "changes", reason: "read-failed", cause }),
-      ),
-    ),
+    digest.digestHex(Digest.sha256, new TextEncoder().encode(value)),
   );
 
   const run = Effect.fn("GitExplorer.readGit")(function* (
@@ -524,15 +520,10 @@ const make = Effect.gen(function* () {
       ]
         .map((value) => `${value.length}:${value}`)
         .join("");
-      const signatureHash = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(signature))
-        .pipe(
-          Effect.map(Hex.encode),
-          Effect.mapError(
-            (cause) =>
-              new GitExplorerError({ operation: "snapshot", reason: "read-failed", cause }),
-          ),
-        );
+      const signatureHash = yield* digest.digestHex(
+        Digest.sha256,
+        new TextEncoder().encode(signature),
+      );
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       const cached = [...snapshots.values()].find(
         (snapshot) =>
@@ -542,14 +533,7 @@ const make = Effect.gen(function* () {
         cached.touchedAt = now;
         return { ...cached.overview, lastFetchAt };
       }
-      const snapshotId = yield* crypto
-        .randomUUIDv4()
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new GitExplorerError({ operation: "snapshot", reason: "read-failed", cause }),
-          ),
-        );
+      const snapshotId = yield* random.uuidV4();
       const hashes = new Map(refs.map((ref) => [ref.name, ref.hash]));
       const resolvedRefs = yield* Effect.forEach(
         refs,

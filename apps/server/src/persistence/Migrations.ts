@@ -1,7 +1,7 @@
-import InsightsMigration from "./Migrations/077_Insights.ts";
-import QaRunsMigration from "./Migrations/078_QaRuns.ts";
-import QaInputsMigration from "./Migrations/079_QaInputs.ts";
-import QaAutomationMigration from "./Migrations/080_QaAutomation.ts";
+import InsightsMigration from "./Migrations/080_Insights.ts";
+import QaRunsMigration from "./Migrations/081_QaRuns.ts";
+import QaInputsMigration from "./Migrations/082_QaInputs.ts";
+import QaAutomationMigration from "./Migrations/083_QaAutomation.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -223,7 +223,11 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 
 const run = Migrator.make({});
 
-// Explorer shipped ids 73-76 before upstream used them; preserve its tables and timestamps.
+const FIRST_EXPLORER_MIGRATION_ID = 80;
+const EXPLORER_MIGRATION_NAMES = ["Insights", "QaRuns", "QaInputs", "QaAutomation"];
+
+// Explorer shipped its migrations at 73 and then 77 before upstream claimed those ids; move them
+// past upstream's, keeping their tables and timestamps, and run the upstream migrations they hid.
 const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(
@@ -235,23 +239,29 @@ const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(fun
         migration_id: number;
         name: string;
       }>`SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 73 ORDER BY migration_id`;
-      if (!history.some((row) => row.migration_id === 73 && row.name === "Insights")) return [];
-      const names = ["Insights", "QaRuns", "QaInputs", "QaAutomation"];
+      const start = history.find((row) => row.name === "Insights")?.migration_id;
+      if (start === undefined || start >= FIRST_EXPLORER_MIGRATION_ID) return [];
+      const explorer = history.filter((row) => row.migration_id >= start);
       if (
-        !history.every((row, index) => row.migration_id === 73 + index && row.name === names[index])
+        !explorer.every(
+          (row, index) =>
+            row.migration_id === start + index && row.name === EXPLORER_MIGRATION_NAMES[index],
+        )
       ) {
         return yield* new Migrator.MigrationError({
           kind: "BadState",
           message: "Cannot upgrade Explorer with unexpected later migrations.",
         });
       }
-      yield* assertV2MigrationsCanRun(72);
-      for (const row of history) {
-        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + 4} WHERE migration_id = ${row.migration_id}`;
+      yield* assertV2MigrationsCanRun(start - 1);
+      const shift = FIRST_EXPLORER_MIGRATION_ID - start;
+      // Highest first, so a moved id never lands on one still waiting to move.
+      for (const row of explorer.toReversed()) {
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = ${row.migration_id + shift} WHERE migration_id = ${row.migration_id}`;
       }
       const executed: Array<readonly [number, string]> = [];
       for (const [id, name, migration] of migrationEntries) {
-        if (id !== 73 && id !== 74 && id !== 75 && id !== 76) continue;
+        if (id < start || id >= FIRST_EXPLORER_MIGRATION_ID) continue;
         yield* migration.pipe(
           Effect.mapError(
             (cause) =>
@@ -281,7 +291,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
   const explorerMigrations =
-    toMigrationInclusive === undefined || toMigrationInclusive >= 76
+    toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_EXPLORER_MIGRATION_ID - 1
       ? yield* reconcileExplorerMigrations()
       : [];
   if (includesV2) {
