@@ -34,6 +34,9 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import * as GitManager from "../git/GitManager.ts";
+import { ChildProcessSpawner } from "effect/process";
+import * as ProcessRunner from "../processRunner.ts";
+import * as BranchSandboxCleanup from "../project/BranchSandboxCleanup.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
@@ -551,6 +554,8 @@ function makeBranchPullRequest(state: "open" | "closed" | "merged") {
 
 interface HarnessOptions {
   readonly snapshot: SettlementSnapshot;
+  readonly sandboxFiles?: ReadonlyMap<string, string>;
+  readonly dockerFails?: boolean;
   readonly settings?: ContractServerSettings;
   readonly branchPullRequest?: GitManager.GitManager["Service"]["branchPullRequest"];
   readonly pullRequestSummary?: PullRequestService.PullRequestService["Service"]["summary"];
@@ -575,6 +580,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   const settingsChanges = yield* PubSub.unbounded<ContractServerSettings>();
   const mergedPullRequests = yield* PubSub.unbounded<PullRequestService.PullRequestMergeEvent>();
   const commands = yield* Ref.make<ReadonlyArray<AutoSettleCommand>>([]);
+  const dockerCalls = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
   const branchCalls = yield* Ref.make<
     ReadonlyArray<{ readonly cwd: string; readonly branch: string }>
   >([]);
@@ -633,6 +639,22 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
       return Effect.die(new Error(`Unexpected command: ${command.type}`));
     }
     return Ref.update(commands, (recorded) => [...recorded, command]).pipe(
+      Effect.andThen(
+        options.sandboxFiles === undefined
+          ? Effect.void
+          : Ref.update(snapshots, (snapshot) => ({
+              ...snapshot,
+              threads: snapshot.threads.map((thread) =>
+                thread.id === command.threadId
+                  ? {
+                      ...thread,
+                      settledOverride: "settled" as const,
+                      settledAt: command.settledAt ?? DateTime.makeUnsafe(NOW),
+                    }
+                  : thread,
+              ),
+            })),
+      ),
       Effect.andThen(options.onDispatch?.(command) ?? Effect.void),
       Effect.as({ sequence: 1, storedEvents: [] }),
     );
@@ -654,10 +676,30 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   });
 
   const layerDependencies = Layer.mergeAll(
+    Layer.succeed(ProcessRunner.ProcessRunner, {
+      run: ({ args }) =>
+        Ref.update(dockerCalls, (calls) => [...calls, args]).pipe(
+          Effect.as({
+            stdout: args[0] === "ps" ? "abcdef123456" : "",
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(options.dockerFails ? 1 : 0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          }),
+        ),
+    }),
     Layer.mock(ProjectStore.ProjectStoreV2)({
       listShells: () => Ref.get(snapshots).pipe(Effect.map((snapshot) => snapshot.projects)),
     }),
     Layer.mock(ProjectionStore.ProjectionStoreV2)({
+      getThreadShell: (id) =>
+        Ref.get(snapshots).pipe(
+          Effect.map((snapshot) => snapshot.threads.find((thread) => thread.id === id) ?? null),
+        ),
+      getShellSnapshot: () => Ref.get(snapshots),
       getSettlementCandidates: (threadId) =>
         Ref.update(candidateReads, (reads) => [...reads, threadId]).pipe(
           Effect.andThen(Ref.updateAndGet(snapshotReadCount, (count) => count + 1)),
@@ -705,6 +747,8 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     FileSystem.layerNoop({
+      readDirectory: () => Effect.succeed(["feature"]),
+      readFileString: (path) => Effect.succeed(options.sandboxFiles?.get(path) ?? ""),
       exists: (path) =>
         options.unreadablePaths?.includes(path)
           ? Effect.fail(
@@ -715,7 +759,11 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
                 pathOrDescriptor: path,
               }),
             )
-          : Effect.succeed(options.existingWorktreePaths?.includes(path) ?? false),
+          : Effect.succeed(
+              options.sandboxFiles?.has(path) ||
+                (options.sandboxFiles !== undefined && path === "/workspace/project/sandboxes") ||
+                (options.existingWorktreePaths?.includes(path) ?? false),
+            ),
     }),
     Path.layer,
   );
@@ -728,6 +776,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     snapshotReads,
     candidateReads,
     commands,
+    dockerCalls,
     branchCalls,
     summaryCalls,
     summaryRecovery,
@@ -745,7 +794,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     layer: Layer.effect(
       ThreadSettlementService.ThreadSettlementServiceV2,
       ThreadSettlementService.make,
-    ).pipe(Layer.provide(layerDependencies)),
+    ).pipe(Layer.provide(BranchSandboxCleanup.layer.pipe(Layer.provideMerge(layerDependencies)))),
   };
 });
 
@@ -761,6 +810,98 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementServiceV2 worker", () => {
+  it.effect(
+    "cleans only merge settlements and keeps shared, reactivated, and unrelated branch sandboxes",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          for (const scenario of [
+            "merged",
+            "closed",
+            "inactivity",
+            "shared",
+            "shared-project",
+            "reactivated",
+            "wrong-branch",
+            "wrong-repository",
+            "dispatch-failure",
+            "docker-failure",
+          ] as const) {
+            const thread = makeThread("sandbox-owner", { branch: "feature" });
+            const peer = makeThread("peer", {
+              branch: "feature",
+              settledOverride: "active",
+              projectId:
+                scenario === "shared-project" ? ProjectId.make("other-project") : PROJECT_ID,
+            });
+            const project = {
+              ...makeProject(),
+              repositoryIdentity: {
+                canonicalKey: "example.test/owner/repository",
+                locator: {
+                  source: "git-remote" as const,
+                  remoteName: "origin",
+                  remoteUrl: "https://example.test/owner/repository.git",
+                },
+              },
+            };
+            let fixture: Effect.Success<ReturnType<typeof makeHarness>>;
+            fixture = yield* makeHarness({
+              snapshot: makeSnapshot(
+                scenario === "shared" || scenario === "shared-project" ? [thread, peer] : [thread],
+                [project, makeProject(ProjectId.make("other-project"))],
+              ),
+              settings: {
+                ...DEFAULT_SERVER_SETTINGS,
+                sidebarAutoSettleAfterDays: scenario === "inactivity" ? 1 : null,
+              },
+              sandboxFiles: new Map([
+                [
+                  "/workspace/project/sandboxes/feature/sandbox.env",
+                  "SANDBOX_NAME=feature\nSANDBOX_BRANCH=feature\nCOMPOSE_PROJECT_NAME=m4c_123_feature\n",
+                ],
+              ]),
+              dockerFails: scenario === "docker-failure",
+              branchPullRequest: () =>
+                Effect.succeed({
+                  ...makeBranchPullRequest(scenario === "closed" ? "closed" : "merged"),
+                  headRef: scenario === "wrong-branch" ? "other" : "feature",
+                  repositoryKey:
+                    scenario === "wrong-repository"
+                      ? "example.test/other/repository"
+                      : "example.test/owner/repository",
+                }),
+              onDispatch: () =>
+                scenario === "dispatch-failure"
+                  ? Effect.die(new Error("stale settlement"))
+                  : scenario === "reactivated"
+                    ? Ref.update(fixture.snapshots, (snapshot) => ({
+                        ...snapshot,
+                        threads: [thread],
+                      }))
+                    : Effect.void,
+            });
+            yield* Effect.gen(function* () {
+              const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+              yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+              expect((yield* Ref.get(fixture.commands)).length, scenario).toBe(1);
+              expect(
+                (yield* Ref.get(fixture.dockerCalls)).map((args) => args[0]),
+                scenario,
+              ).toEqual(
+                scenario === "merged"
+                  ? ["ps", "stop", "rm"]
+                  : scenario === "docker-failure"
+                    ? ["ps"]
+                    : [],
+              );
+            }).pipe(Effect.provide(fixture.layer));
+          }
+        }),
+      ),
+  );
+
   it.effect("skips settings and PR decisions for recent branchless threads", () =>
     Effect.scoped(
       Effect.gen(function* () {

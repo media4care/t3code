@@ -26,6 +26,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as GitManager from "../git/GitManager.ts";
+import * as BranchSandboxCleanup from "../project/BranchSandboxCleanup.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -185,14 +186,14 @@ export function isSnoozed(
   return !wokeOnError;
 }
 
-export function resolveAutoSettlementAt(input: {
+function resolveAutoSettlement(input: {
   readonly thread: ProjectionStore.ProjectionSettlementCandidate;
   readonly pullRequest: SettlementPullRequest | null;
   readonly nowMs: number;
   readonly autoSettleAfterDays: number | null;
   readonly autoSettleOnMerge: boolean;
   readonly autoSettleKeepPullRequests?: boolean;
-}): DateTime.Utc | null {
+}): { settledAt: DateTime.Utc; reason: "merged" | "closed" | "inactivity" } | null {
   const { thread } = input;
   let pullRequest = input.pullRequest;
   const links = settlementPullRequestLinks(thread.pullRequests ?? []);
@@ -224,7 +225,10 @@ export function resolveAutoSettlementAt(input: {
       toMillis(thread.latestRunCompletedAt),
     ]) ?? DateTime.toEpochMillis(thread.createdAt);
   if (pullRequest !== null && pullRequestSettles(thread, pullRequest, input.autoSettleOnMerge)) {
-    return DateTime.makeUnsafe(activityAtMs);
+    return {
+      settledAt: DateTime.makeUnsafe(activityAtMs),
+      reason: pullRequest.state === "merged" ? "merged" : "closed",
+    };
   }
   const hasPullRequest =
     hasOpenLink ||
@@ -239,8 +243,14 @@ export function resolveAutoSettlementAt(input: {
   const inactivityAtMs =
     latestMillis([activityAtMs, toMillis(thread.lastSnoozeWakeAt), timerWakeAtMs]) ?? activityAtMs;
   return inactivityAtMs < input.nowMs - input.autoSettleAfterDays * DAY_MS
-    ? DateTime.makeUnsafe(inactivityAtMs)
+    ? { settledAt: DateTime.makeUnsafe(inactivityAtMs), reason: "inactivity" }
     : null;
+}
+
+export function resolveAutoSettlementAt(
+  input: Parameters<typeof resolveAutoSettlement>[0],
+): DateTime.Utc | null {
+  return resolveAutoSettlement(input)?.settledAt ?? null;
 }
 
 export class ThreadSettlementServiceV2 extends Context.Service<
@@ -304,6 +314,7 @@ export const make = Effect.gen(function* () {
   const shellClosedThreads = new Set<ThreadId>();
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const sandboxes = yield* BranchSandboxCleanup.BranchSandboxCleanup;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
   const settleActionRunAt = new Map<ThreadId, number>();
 
@@ -332,7 +343,7 @@ export const make = Effect.gen(function* () {
           thread.projectId,
         ).settings;
         const decisionNow = yield* DateTime.now;
-        const settledAt = resolveAutoSettlementAt({
+        const settlement = resolveAutoSettlement({
           thread,
           pullRequest,
           nowMs: DateTime.toEpochMillis(decisionNow),
@@ -340,7 +351,28 @@ export const make = Effect.gen(function* () {
           autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
           autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
         });
-        if (settledAt === null) return thread;
+        if (settlement === null) return thread;
+        const { settledAt } = settlement;
+        const project = projects.get(thread.projectId);
+        // Capture ownership before settlement can schedule worktree removal.
+        const targets =
+          settlement.reason === "merged" && thread.branch !== null && project !== undefined
+            ? yield* sandboxes
+                .find(
+                  [
+                    project.workspaceRoot,
+                    ...(thread.worktreePath === null ? [] : [thread.worktreePath]),
+                  ],
+                  thread.branch,
+                )
+                .pipe(
+                  Effect.catch(() =>
+                    Effect.logWarning("Branch sandbox discovery failed", {
+                      threadId: thread.id,
+                    }).pipe(Effect.as([])),
+                  ),
+                )
+            : [];
         const uuid = yield* random.uuidV4();
         yield* orchestrator.dispatch({
           type: "thread.auto-settle",
@@ -349,6 +381,55 @@ export const make = Effect.gen(function* () {
           snapshotAt: thread.updatedAt,
           settledAt,
         });
+        if (targets.length > 0 && project !== undefined && thread.branch !== null) {
+          // A linked PR can belong to another repository or branch; verify the sandbox's branch too.
+          const merged = yield* git.branchPullRequest(
+            { cwd: project.workspaceRoot, branch: thread.branch },
+            { refresh: true },
+          );
+          if (
+            merged?.state === "merged" &&
+            merged.headRef === thread.branch &&
+            pullRequestMatchesProject(merged, project)
+          ) {
+            const canRemove = Effect.gen(function* () {
+              const current = yield* projections.getThreadShell(thread.id);
+              if (
+                current === null ||
+                current.settledOverride !== "settled" ||
+                toMillis(current.settledAt) !== toMillis(settledAt) ||
+                current.branch !== thread.branch ||
+                current.activityRunStatus !== null ||
+                current.pendingRuntimeRequest !== null ||
+                backgroundWorkHoldsCompletion(current.pendingBackgroundTasks ?? [])
+              )
+                return false;
+              const snapshot = yield* projections.getShellSnapshot();
+              return ![...snapshot.threads, ...snapshot.archivedThreads].some(
+                (peer) =>
+                  peer.id !== thread.id &&
+                  peer.deletedAt === null &&
+                  ((peer.branch === thread.branch &&
+                    projects.get(peer.projectId)?.workspaceRoot === project.workspaceRoot) ||
+                    (thread.worktreePath !== null && peer.worktreePath === thread.worktreePath)) &&
+                  (peer.settledOverride !== "settled" ||
+                    peer.activityRunStatus !== null ||
+                    peer.pendingRuntimeRequest !== null ||
+                    backgroundWorkHoldsCompletion(peer.pendingBackgroundTasks ?? [])),
+              );
+            }).pipe(Effect.orElseSucceed(() => false));
+            for (const target of targets) {
+              yield* sandboxes.remove(target, canRemove).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Branch sandbox cleanup failed", {
+                    threadId: thread.id,
+                    operation: error.operation,
+                  }),
+                ),
+              );
+            }
+          }
+        }
         return null;
       },
       (effect, thread) =>
