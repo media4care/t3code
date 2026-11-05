@@ -131,6 +131,8 @@ interface HistoryProps {
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
+  onReset?: (revision: string) => void;
+  resetUnavailable?: boolean;
   onSelect: (revision: string | null) => void;
   refresh: () => void;
   refreshRevision: number;
@@ -162,6 +164,8 @@ function GitExplorerHistoryList({
   input,
   overview,
   selectedRevision,
+  onReset,
+  resetUnavailable,
   onSelect,
   refresh,
   refreshRevision,
@@ -339,9 +343,23 @@ function GitExplorerHistoryList({
                   event.preventDefault();
                   event.stopPropagation();
                   void showGitExplorerContextMenu(
-                    [{ id: "copy-hash", label: "Copy commit hash", icon: "copy" }],
+                    [
+                      { id: "copy-hash", label: "Copy commit hash", icon: "copy" },
+                      ...(onReset
+                        ? [
+                            {
+                              id: "reset",
+                              label: `Reset ${overview.headBranch ?? "current branch"} to this commit…`,
+                              disabled: resetUnavailable || !overview.headBranch,
+                            },
+                          ]
+                        : []),
+                    ],
                     gitExplorerMenuPosition(event),
-                    () => copyGitExplorerValue(commit.hash, "commit hash"),
+                    (action) => {
+                      if (action === "reset") onReset?.(commit.hash);
+                      else return copyGitExplorerValue(commit.hash, "commit hash");
+                    },
                   );
                 }}
                 aria-current={selectedRevision === commit.hash ? "true" : undefined}

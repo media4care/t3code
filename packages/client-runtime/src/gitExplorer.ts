@@ -296,3 +296,14 @@ export function prepareGitExplorerBranchesDeletion(
   }
   return { eligible, skipped };
 }
+
+export const gitExplorerResetModes = [
+  { value: "soft", label: "Soft", description: "Keep staged changes and working files." },
+  { value: "mixed", label: "Mixed", description: "Keep working files and unstage all changes." },
+  {
+    value: "hard",
+    label: "Hard",
+    description:
+      "Discard staged and tracked working changes. Untracked files obstructing tracked paths may also be deleted.",
+  },
+] as const;

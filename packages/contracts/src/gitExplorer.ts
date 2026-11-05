@@ -134,6 +134,7 @@ export const GitExplorerRunActionInput = Schema.Struct({
     "unstage",
     "discard",
     "commit",
+    "reset",
   ]),
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(10000))),
   stashHash: Schema.optional(GitExplorerHash),
@@ -151,6 +152,8 @@ export const GitExplorerRunActionInput = Schema.Struct({
   changeToken: Schema.optional(Schema.String),
   indexVersion: Schema.optional(Schema.String),
   amend: Schema.optional(Schema.Boolean),
+  revision: Schema.optional(GitExplorerHash),
+  resetMode: Schema.optional(Schema.Literals(["soft", "mixed", "hard"])),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
 export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
@@ -260,6 +263,7 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "invalid-branch-name",
     "changes-changed",
     "commit-message-required",
+    "invalid-reset",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -309,6 +313,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The changes have changed since you reviewed them. Refresh and review them again.";
       case "commit-message-required":
         return "Enter a commit message.";
+      case "invalid-reset":
+        return "Choose a reset mode and a commit for the checked-out branch.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }

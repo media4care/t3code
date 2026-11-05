@@ -1349,6 +1349,35 @@ const make = Effect.gen(function* () {
               reason: "worktree-changed",
             });
         }
+        if (input.action === "reset") {
+          if (!input.expectedBranch || !["soft", "mixed", "hard"].includes(input.resetMode ?? ""))
+            return yield* new GitExplorerError({ operation: "reset", reason: "invalid-reset" });
+          if (
+            !input.revision ||
+            !HASH.test(input.revision) ||
+            (yield* run(cwd, ["cat-file", "-t", input.revision], {
+              allowNonZero: true,
+            })).stdout.trim() !== "commit"
+          )
+            return yield* new GitExplorerError({ operation: "reset", reason: "invalid-revision" });
+          yield* git.execute({
+            operation: "GitExplorer.reset",
+            cwd,
+            args: [
+              "-c",
+              "submodule.recurse=false",
+              "reset",
+              `--${input.resetMode}`,
+              input.revision,
+              "--",
+            ],
+            env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+          });
+          yield* git.invalidateRefs(cwd);
+          return {
+            message: `Reset ${input.expectedBranch} to ${input.revision.slice(0, 12)} (${input.resetMode}).`,
+          };
+        }
         if (input.action === "switch" || input.action === "rename") {
           const name = input.branchName;
           if (

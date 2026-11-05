@@ -40,6 +40,7 @@ import { GitExplorerBranchAction } from "./GitExplorerBranchAction";
 import { GitExplorerStashAction, type GitExplorerStashActionKind } from "./GitExplorerStashAction";
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
 import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
+import { GitExplorerResetAction } from "./GitExplorerResetAction";
 import { GitExplorerHistory } from "./GitExplorerHistory";
 import { GitExplorerHistoryFilters } from "./GitExplorerHistoryFilters";
 import { GitExplorerBranches } from "./GitExplorerBranches";
@@ -146,6 +147,7 @@ function RepositoryExplorer({
     action: GitExplorerStashActionKind;
     stash: GitExplorerStash;
   } | null>(null);
+  const [resetRevision, setResetRevision] = useState<string | null>(null);
   const canManageStashes = useAtomValue(
     gitExplorerEnvironment.runAction.permissionAtom(environmentId),
   );
@@ -157,7 +159,11 @@ function RepositoryExplorer({
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : actionBusy || branchDeletion !== null || branchAction !== null || stashAction !== null
+      : actionBusy ||
+          branchDeletion !== null ||
+          branchAction !== null ||
+          stashAction !== null ||
+          resetRevision !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -365,7 +371,8 @@ function RepositoryExplorer({
               pendingBranch !== null ||
               branchDeletion !== null ||
               branchAction !== null ||
-              stashAction !== null
+              stashAction !== null ||
+              resetRevision !== null
             }
             onBusyChange={setActionBusy}
             refresh={refresh}
@@ -402,6 +409,17 @@ function RepositoryExplorer({
               selectRevision(null);
             setStashAction(null);
           }}
+        />
+      ) : null}
+      {overview && resetRevision ? (
+        <GitExplorerResetAction
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          revision={resetRevision}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setResetRevision(null)}
         />
       ) : null}
       {overview && branchAction ? (
@@ -529,6 +547,10 @@ function RepositoryExplorer({
                   input={input}
                   overview={overview}
                   selectedRevision={selectedRevision}
+                  onReset={setResetRevision}
+                  resetUnavailable={
+                    !canManageStashes || deleteUnavailable !== null || pendingBranch !== null
+                  }
                   onSelect={selectRevision}
                   refresh={refresh}
                   refreshRevision={refreshRevision}
@@ -567,7 +589,8 @@ function RepositoryExplorer({
                         pendingBranch !== null ||
                         branchDeletion !== null ||
                         branchAction !== null ||
-                        stashAction !== null,
+                        stashAction !== null ||
+                        resetRevision !== null,
                       refresh,
                       onBusyChange: setActionBusy,
                     }}
