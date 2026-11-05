@@ -357,6 +357,13 @@ closed reviews refresh periodically so reopening one on the host is detected. Me
 when requested. A settled thread's reviews stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
 review is terminal. An open or unsynced link keeps it active.
 
+When a thread settles after a merge, T3 also stops and removes its branch's m4c sandbox
+containers. It uses the branch and Compose project saved in `sandboxes/<name>/sandbox.env`
+and confirms that the sandbox's branch merged. An active thread sharing the branch or worktree
+keeps the sandbox running. Protected sandboxes are skipped; volumes and images are retained.
+Manual settlement, inactivity, and closing an unmerged PR do not trigger this cleanup.
+Docker cleanup failures are logged without undoing settlement.
+
 Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
 the thread is active, the server checks the pull request every two minutes and wakes the agent when a
 check fails, the required checks pass, someone else comments or reviews, or the branch starts to
