@@ -35,7 +35,7 @@ export function GitExplorerBranchAction(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !pending) props.onClose();
+        if (!open) props.onClose();
       }}
     >
       <DialogPopup>
@@ -73,8 +73,8 @@ export function GitExplorerBranchAction(props: {
             ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" disabled={pending} onClick={props.onClose}>
-              Cancel
+            <Button variant="outline" onClick={props.onClose}>
+              {pending ? "Close" : "Cancel"}
             </Button>
             <Button
               type="submit"

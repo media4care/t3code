@@ -720,6 +720,7 @@ const make = Effect.gen(function* () {
         refs: resolvedRefs,
         stashes,
         submodules,
+        remotes: mergeConfig.remotes,
         lastFetchAt,
         snapshotId,
       };
@@ -1377,6 +1378,88 @@ const make = Effect.gen(function* () {
           return {
             message: `Reset ${input.expectedBranch} to ${input.revision.slice(0, 12)} (${input.resetMode}).`,
           };
+        }
+        if (
+          input.action === "create-tag" ||
+          input.action === "push-tag" ||
+          input.action === "delete-tag"
+        ) {
+          const name = input.tagName;
+          const revision = input.revision;
+          if (
+            !name ||
+            name.startsWith("-") ||
+            !revision ||
+            !HASH.test(revision) ||
+            (yield* run(cwd, ["check-ref-format", `refs/tags/${name}`], { allowNonZero: true }))
+              .exitCode !== 0
+          )
+            return yield* new GitExplorerError({ operation: input.action, reason: "invalid-tag" });
+          const ref = `refs/tags/${name}`;
+          if (input.action === "create-tag") {
+            if (
+              (yield* run(cwd, ["cat-file", "-t", revision], {
+                allowNonZero: true,
+              })).stdout.trim() !== "commit"
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-revision",
+              });
+            yield* git.execute({
+              operation: "GitExplorer.create-tag",
+              cwd,
+              args: [
+                "tag",
+                "--no-sign",
+                ...(input.message?.trim() ? ["-a", "-m", input.message.trim()] : []),
+                "--",
+                name,
+                revision,
+              ],
+              env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+            });
+            yield* git.invalidateRefs(cwd);
+            return { message: `Created tag ${name}.` };
+          }
+          const object = (yield* run(cwd, ["rev-parse", "--verify", ref], {
+            allowNonZero: true,
+          })).stdout.trim();
+          const commit = (yield* run(cwd, ["rev-parse", "--verify", `${ref}^{commit}`], {
+            allowNonZero: true,
+          })).stdout.trim();
+          if (!HASH.test(object) || commit !== revision)
+            return yield* new GitExplorerError({ operation: input.action, reason: "tag-changed" });
+          if (input.action === "delete-tag") {
+            yield* git.execute({
+              operation: "GitExplorer.delete-tag",
+              cwd,
+              args: ["update-ref", "-d", ref, object],
+            });
+            yield* git.invalidateRefs(cwd);
+            return { message: `Deleted local tag ${name}.` };
+          }
+          if (!input.remote || !(yield* readMergeConfig(cwd)).remotes.includes(input.remote))
+            return yield* new GitExplorerError({
+              operation: input.action,
+              reason: "invalid-remote",
+            });
+          yield* git.execute({
+            operation: "GitExplorer.push-tag",
+            cwd,
+            // Publishing a ref to an existing commit has nothing for pre-push checks to verify.
+            args: [
+              "push",
+              "--no-verify",
+              "--no-follow-tags",
+              "--",
+              input.remote,
+              `${object}:${ref}`,
+            ],
+            env: { GIT_TERMINAL_PROMPT: "0" },
+            timeoutMs: null,
+          });
+          return { message: `Pushed tag ${name} to ${input.remote}.` };
         }
         if (input.action === "switch" || input.action === "rename") {
           const name = input.branchName;

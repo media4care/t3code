@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import * as Schema from "effect/Schema";
 import { useState } from "react";
+import { GIT_EXPLORER_COLORS, gitExplorerReferenceColors } from "./gitExplorerColors";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
@@ -63,6 +64,11 @@ import type { GitExplorerStashActionKind } from "./GitExplorerStashAction";
 interface StashActions {
   unavailable: string | null;
   onAction: (action: GitExplorerStashActionKind, stash: GitExplorerStash) => void;
+}
+
+interface TagActions {
+  unavailable: string | null;
+  onAction: (action: "push" | "delete", reference: GitExplorerRef) => void;
 }
 
 const ROW_CLASS =
@@ -236,6 +242,7 @@ function BranchSync({ reference }: { reference: GitExplorerRef }) {
 
 function ReferenceRow({
   reference,
+  color,
   label,
   current,
   selected,
@@ -245,8 +252,10 @@ function ReferenceRow({
   emphasized = false,
   actions,
   selection,
+  tagActions,
 }: {
   reference: GitExplorerRef;
+  color: number;
   label: string;
   current: boolean;
   selected: boolean;
@@ -256,7 +265,9 @@ function ReferenceRow({
   emphasized?: boolean;
   actions?: BranchActions;
   selection?: BranchSelection;
+  tagActions?: TagActions;
 }) {
+  const palette = GIT_EXPLORER_COLORS[color % GIT_EXPLORER_COLORS.length]!;
   const mergeDescription = statusError
     ? `Merge status unavailable. ${statusError}`
     : describeGitExplorerMerge(status);
@@ -275,7 +286,9 @@ function ReferenceRow({
     const canManage = actions && reference.kind === "local";
     const blocked =
       !canManage || actions.deleteUnavailable !== null || actions.pendingBranch !== null;
-    return showGitExplorerContextMenu<"copy-name" | "copy-hash" | "switch" | "rename">(
+    return showGitExplorerContextMenu<
+      "copy-name" | "copy-hash" | "switch" | "rename" | "push-tag" | "delete-tag"
+    >(
       [
         {
           id: "copy-name",
@@ -283,6 +296,21 @@ function ReferenceRow({
           icon: "copy",
         },
         { id: "copy-hash", label: "Copy commit hash", icon: "copy" },
+        ...(reference.kind === "tag" && tagActions
+          ? [
+              {
+                id: "push-tag" as const,
+                label: "Push tag…",
+                disabled: tagActions.unavailable !== null,
+                separatorBefore: true,
+              },
+              {
+                id: "delete-tag" as const,
+                label: "Delete local tag…",
+                disabled: tagActions.unavailable !== null,
+              },
+            ]
+          : []),
         ...(canManage
           ? [
               {
@@ -303,6 +331,11 @@ function ReferenceRow({
             reference.kind === "tag" ? "tag name" : "branch name",
           );
         else if (action === "copy-hash") await copyGitExplorerValue(reference.hash, "commit hash");
+        else if (
+          (action === "push-tag" || action === "delete-tag") &&
+          tagActions?.unavailable === null
+        )
+          tagActions.onAction(action === "push-tag" ? "push" : "delete", reference);
         else if (!blocked && (action === "rename" || (action === "switch" && !current)))
           actions.onBranchAction(action, reference);
       },
@@ -318,7 +351,7 @@ function ReferenceRow({
       className={cn(
         "group/branch flex min-w-0 items-center rounded-sm hover:bg-accent",
         (selection ? selection.selected.get(reference.name) === reference.hash : selected) &&
-          "bg-primary/8",
+          palette.selected,
       )}
     >
       {selection ? (
@@ -353,27 +386,28 @@ function ReferenceRow({
         aria-label={description}
       >
         {!selection && selected ? (
-          <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
+          <span className={cn("absolute inset-y-1 left-0 w-0.5 rounded-full", palette.marker)} />
         ) : null}
         <span className="flex w-full min-w-0 items-center gap-1.5">
-          <span className="flex w-3 shrink-0 items-center justify-center" aria-hidden>
+          <span
+            className={cn("flex w-3 shrink-0 items-center justify-center", palette.foreground)}
+            aria-hidden
+          >
             {reference.kind === "tag" ? (
-              <TagIcon className="size-3 text-info-foreground" />
+              <TagIcon className="size-3" />
             ) : current ? (
-              <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-primary/40 ring-inset">
-                <span className="size-1.5 rounded-full bg-primary" />
+              <span className="flex size-2.5 items-center justify-center rounded-full ring-1 ring-current ring-inset">
+                <span className={cn("size-1.5 rounded-full", palette.marker)} />
               </span>
             ) : (
-              <span className="size-1 rounded-full bg-muted-foreground/40" />
+              <span className={cn("size-1 rounded-full", palette.marker)} />
             )}
           </span>
           <GitExplorerHint className="min-w-0 flex-1 truncate" label={description}>
             {slash >= 0 ? (
               <span className="text-muted-foreground">{label.slice(0, slash + 1)}</span>
             ) : null}
-            <span
-              className={cn((current || emphasized) && "font-semibold", current && "text-primary")}
-            >
+            <span className={cn("text-foreground", (current || emphasized) && "font-semibold")}>
               {label.slice(slash + 1)}
             </span>
           </GitExplorerHint>
@@ -460,6 +494,7 @@ function ReferenceRow({
 
 function LocalBranchChunk({
   rows,
+  colors,
   collapsed,
   onToggle,
   environmentId,
@@ -472,6 +507,7 @@ function LocalBranchChunk({
   selection,
 }: {
   rows: readonly GitExplorerBranchRow[];
+  colors: ReadonlyMap<string, number>;
   collapsed: ReadonlySet<string>;
   onToggle: (path: string) => void;
   environmentId: EnvironmentId;
@@ -529,6 +565,7 @@ function LocalBranchChunk({
           <div key={reference.name} style={{ paddingInlineStart: row.depth * 12 }}>
             <ReferenceRow
               reference={reference}
+              color={colors.get(reference.hash) ?? 0}
               emphasized={emphasizedRefs.has(reference.name)}
               label={row.label}
               current={reference.shortName === overview.headBranch}
@@ -707,6 +744,7 @@ export function GitExplorerBranches({
   actions,
   stashActions,
   onOpenSubmodule,
+  tagActions,
 }: {
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
@@ -717,6 +755,7 @@ export function GitExplorerBranches({
   actions: BranchActions;
   stashActions: StashActions;
   onOpenSubmodule: (path: string) => void;
+  tagActions?: TagActions;
 }) {
   const [search, setSearch] = useState("");
   const [collapsedSections, setCollapsedSections] = useLocalStorage(
@@ -752,6 +791,7 @@ export function GitExplorerBranches({
       }
     : undefined;
   const filter = search.trim().toLocaleLowerCase();
+  const referenceColors = gitExplorerReferenceColors(overview.refs);
   const matches = (reference: GitExplorerRef) =>
     reference.shortName.toLocaleLowerCase().includes(filter);
   const [collapsedLocal, setCollapsedLocal] = useState<ReadonlySet<string>>(new Set());
@@ -877,6 +917,7 @@ export function GitExplorerBranches({
             <LocalBranchChunk
               key={rows[0]!.kind === "branch" ? rows[0]!.reference.name : rows[0]!.path}
               rows={rows}
+              colors={referenceColors}
               collapsed={visibleLocalFolders}
               onToggle={(path) => setCollapsedLocal((current) => toggleFolder(current, path))}
               environmentId={environmentId}
@@ -938,6 +979,7 @@ export function GitExplorerBranches({
                     ) : (
                       <ReferenceRow
                         reference={row.reference}
+                        color={referenceColors.get(row.reference.hash) ?? 0}
                         emphasized={emphasizedRefs.has(row.reference.name)}
                         label={row.label}
                         current={false}
@@ -968,10 +1010,12 @@ export function GitExplorerBranches({
                 <ReferenceRow
                   key={reference.name}
                   reference={reference}
+                  color={referenceColors.get(reference.hash) ?? 0}
                   label={reference.shortName}
                   current={false}
                   selected={selectedRevision === reference.hash}
                   onSelect={onSelect}
+                  {...(tagActions ? { tagActions } : {})}
                 />
               ))}
               {tags.length === 0 ? (

@@ -57,6 +57,7 @@ export const GitExplorerOverviewResult = Schema.Struct({
   stashes: Schema.Array(GitExplorerStash),
   // Optional so clients keep working against servers that predate submodules.
   submodules: Schema.optional(Schema.Array(GitExplorerSubmodule)),
+  remotes: Schema.optional(Schema.Array(Schema.String)),
   lastFetchAt: Schema.NullOr(Schema.String),
   snapshotId: Schema.String,
 });
@@ -135,6 +136,9 @@ export const GitExplorerRunActionInput = Schema.Struct({
     "discard",
     "commit",
     "reset",
+    "create-tag",
+    "push-tag",
+    "delete-tag",
   ]),
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(10000))),
   stashHash: Schema.optional(GitExplorerHash),
@@ -152,8 +156,10 @@ export const GitExplorerRunActionInput = Schema.Struct({
   changeToken: Schema.optional(Schema.String),
   indexVersion: Schema.optional(Schema.String),
   amend: Schema.optional(Schema.Boolean),
+  tagName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   revision: Schema.optional(GitExplorerHash),
   resetMode: Schema.optional(Schema.Literals(["soft", "mixed", "hard"])),
+  remote: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
 export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
@@ -264,6 +270,9 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "changes-changed",
     "commit-message-required",
     "invalid-reset",
+    "invalid-tag",
+    "tag-changed",
+    "invalid-remote",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -315,6 +324,12 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "Enter a commit message.";
       case "invalid-reset":
         return "Choose a reset mode and a commit for the checked-out branch.";
+      case "invalid-tag":
+        return "Enter a valid Git tag name and select a commit.";
+      case "tag-changed":
+        return "This tag changed or was removed. Refresh Git Explorer and try again.";
+      case "invalid-remote":
+        return "Choose a configured Git remote.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }

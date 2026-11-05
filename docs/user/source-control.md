@@ -51,6 +51,13 @@ discard staged and tracked working changes. Hard reset may also delete untracked
 obstruct tracked paths. Remote branches are unaffected. The previous branch tip remains in
 Git's reflog; discarded file changes cannot be recovered by moving the branch back.
 
+Use **Tag** on web and desktop, or **Add tag** on mobile, to tag the selected commit or HEAD.
+On web and desktop you can also right-click a commit and choose **Tag…**. An optional annotation
+creates an annotated tag. Enable **Push tag to remote** to publish it to a configured remote.
+A failed push keeps the local tag so you can retry. To push an existing tag or delete it locally,
+right-click the tag on web and desktop, or select its commit and use **Manage tags** on mobile.
+Deleting a local tag keeps any published copy on the remote.
+
 Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
 base commit, including saved untracked files. Stashes are listed separately from the graph.
 Reviewing a stash does not apply or remove it.

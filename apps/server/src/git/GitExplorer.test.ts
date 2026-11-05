@@ -174,6 +174,125 @@ it.layer(layer)("GitExplorer", (it) => {
   );
 
   it.effect(
+    "creates tags at selected commits and pushes only the selected tag to a configured remote",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-tags-" });
+        yield* git(["init", "--bare", remote]);
+        yield* git(["remote", "add", "publish", remote]);
+        yield* write("hello.txt", "second\n");
+        yield* git(["commit", "-am", "second"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const target = { ...scope, expectedHead: head, expectedBranch: "main", revision: root };
+        yield* git(["config", "tag.gpgSign", "true"]);
+        yield* explorer.runAction({ ...target, action: "create-tag", tagName: "v1.0" });
+        assert.equal(yield* git(["rev-parse", "refs/tags/v1.0"]), root);
+        yield* explorer.runAction({
+          ...target,
+          action: "create-tag",
+          tagName: "v1.1",
+          message: "Release notes",
+        });
+        assert.equal(yield* git(["cat-file", "-t", "refs/tags/v1.1"]), "tag");
+        assert.include(yield* git(["cat-file", "-p", "refs/tags/v1.1"]), "Release notes");
+        assert.deepEqual((yield* explorer.overview(scope)).remotes, ["publish"]);
+        yield* explorer.runAction({
+          ...target,
+          action: "create-tag",
+          tagName: "unrelated",
+          message: "Keep local",
+        });
+        yield* git(["config", "push.followTags", "true"]);
+        yield* fs.writeFileString(path.join(cwd, ".git/hooks/pre-push"), "#!/bin/sh\nexit 1\n", {
+          mode: 0o755,
+        });
+        yield* explorer.runAction({
+          ...target,
+          action: "push-tag",
+          tagName: "v1.1",
+          remote: "publish",
+        });
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1^{commit}"]),
+          root,
+        );
+        assert.equal(
+          yield* git(["--git-dir", remote, "for-each-ref", "--format=%(refname)"]),
+          "refs/tags/v1.1",
+        );
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1"]),
+          yield* git(["rev-parse", "refs/tags/v1.1"]),
+        );
+        yield* explorer.runAction({ ...target, action: "delete-tag", tagName: "v1.1" });
+        assert.equal(yield* git(["tag", "--list"]), "unrelated\nv1.0");
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1^{commit}"]),
+          root,
+        );
+        assert.equal(yield* git(["rev-parse", "HEAD"]), head);
+      }),
+  );
+
+  it.effect(
+    "rejects invalid, duplicate and moved tags and keeps local tags after a rejected push",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs } = yield* fixture;
+        const target = { ...scope, expectedHead: root, expectedBranch: "main", revision: root };
+        for (const tagName of ["--bad", "bad..name", "bad:name"]) {
+          const failure = yield* explorer
+            .runAction({ ...target, action: "create-tag", tagName })
+            .pipe(Effect.flip);
+          assert.equal(failure._tag, "GitExplorerError");
+        }
+        yield* explorer.runAction({ ...target, action: "create-tag", tagName: "release" });
+        assert.isTrue(
+          yield* explorer
+            .runAction({ ...target, action: "create-tag", tagName: "release" })
+            .pipe(Effect.isFailure),
+        );
+        assert.isTrue(
+          yield* explorer
+            .runAction({
+              ...target,
+              action: "push-tag",
+              tagName: "release",
+              remote: "not-configured",
+            })
+            .pipe(Effect.isFailure),
+        );
+        yield* write("hello.txt", "new\n");
+        yield* git(["commit", "-am", "new"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const current = { ...target, expectedHead: head };
+        yield* git(["tag", "--no-sign", "-f", "release", head]);
+        assert.isTrue(
+          yield* explorer
+            .runAction({ ...current, action: "delete-tag", tagName: "release" })
+            .pipe(Effect.isFailure),
+        );
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-tags-rejected-" });
+        yield* git(["init", "--bare", remote]);
+        yield* git(["remote", "add", "origin", remote]);
+        yield* git(["push", "origin", `${root}:refs/tags/release`]);
+        assert.isTrue(
+          yield* explorer
+            .runAction({
+              ...current,
+              revision: head,
+              action: "push-tag",
+              tagName: "release",
+              remote: "origin",
+            })
+            .pipe(Effect.isFailure),
+        );
+        assert.equal(yield* git(["rev-parse", "refs/tags/release"]), head);
+        assert.equal(yield* git(["--git-dir", remote, "rev-parse", "refs/tags/release"]), root);
+      }),
+  );
+  it.effect(
     "pops the selected stash after its list position changes and restores staged files",
     () =>
       Effect.gen(function* () {

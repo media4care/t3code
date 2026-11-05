@@ -14,24 +14,42 @@ export interface GitGraphLine {
 
 export interface GitGraphRow {
   readonly hash: string;
+  readonly color: number;
   readonly emphasized?: boolean;
   readonly column: number;
   readonly laneCount: number;
   readonly lines: ReadonlyArray<GitGraphLine>;
 }
 
-/**
- * Each lane carries a parent hash until its row arrives in topological order.
- * Vacated lanes are reused without moving surviving lanes: both row geometry
- * and colors stay stable when another history page is appended.
- */
+interface GitGraphLane {
+  readonly hash: string;
+  readonly color: number;
+  readonly priority: number;
+  readonly emphasized: boolean;
+}
+
+// Separate incoming lanes meet at their ancestor's node, preserving the oldest first-parent lane.
+// Pass continuation when paging to retain lane ownership, colors, and emphasis.
 export function layoutGitGraph(
   commits: ReadonlyArray<{ readonly hash: string; readonly parents: ReadonlyArray<string> }>,
-  initialLanes: ReadonlyArray<string | null> = [],
+  initialLanes: ReadonlyArray<string | GitGraphLane | null> = [],
   emphasizedTips: ReadonlySet<string> = new Set(),
+  tipColors?: ReadonlyMap<string, number>,
 ) {
-  const lanes = [...initialLanes];
-  const emphasizedHashes = new Set(emphasizedTips);
+  const lanes = initialLanes.map((lane, column) =>
+    typeof lane === "string"
+      ? {
+          hash: lane,
+          color: tipColors?.get(lane) ?? column,
+          priority: column,
+          emphasized: emphasizedTips.has(lane),
+        }
+      : lane,
+  );
+  let nextPriority = lanes.reduce(
+    (priority, lane) => Math.max(priority, (lane?.priority ?? -1) + 1),
+    0,
+  );
   const rows: GitGraphRow[] = [];
   const vacantLane = () => {
     const vacant = lanes.indexOf(null);
@@ -39,36 +57,53 @@ export function layoutGitGraph(
   };
 
   for (const commit of commits) {
-    const emphasized = emphasizedHashes.has(commit.hash);
-    const incomingColumn = lanes.indexOf(commit.hash);
+    const incomingColumn = lanes.reduce((best, lane, column) => {
+      if (lane?.hash !== commit.hash) return best;
+      const current = lanes[best];
+      return !current ||
+        (lane.emphasized && !current.emphasized) ||
+        (lane.emphasized === current.emphasized && lane.priority < current.priority)
+        ? column
+        : best;
+    }, -1);
+    const incoming = lanes[incomingColumn];
+    const emphasized = emphasizedTips.has(commit.hash) || incoming?.emphasized === true;
     const column = incomingColumn === -1 ? vacantLane() : incomingColumn;
+    const color = tipColors?.get(commit.hash) ?? incoming?.color ?? column;
+    const priority = incoming?.priority ?? nextPriority++;
     const lines: GitGraphLine[] = [];
     const incomingWidth = lanes.length;
 
     for (let lane = 0; lane < lanes.length; lane++) {
-      if (lanes[lane] === null) continue;
+      const pending = lanes[lane];
+      if (!pending) continue;
+      const joins = pending.hash === commit.hash;
       lines.push({
         from: lane,
-        to: lane,
-        color: lane,
-        kind: lane === incomingColumn ? "incoming" : "through",
-        ...(emphasizedHashes.has(lanes[lane]!) ? { emphasized: true } : {}),
+        to: joins ? column : lane,
+        color: pending.color,
+        kind: joins ? "incoming" : "through",
+        ...(pending.emphasized ? { emphasized: true } : {}),
       });
+      if (joins) lanes[lane] = null;
     }
 
     lanes[column] = null;
     for (const parent of new Set(commit.parents)) {
-      let parentColumn = lanes.indexOf(parent);
-      if (parentColumn === -1) {
-        parentColumn = lanes[column] === null ? column : vacantLane();
-        lanes[parentColumn] = parent;
-      }
-      const emphasizedParent = emphasized && parent === commit.parents[0];
-      if (emphasizedParent) emphasizedHashes.add(parent);
+      const firstParent = parent === commit.parents[0];
+      const parentColumn = firstParent ? column : vacantLane();
+      const parentColor = firstParent ? color : (tipColors?.get(parent) ?? parentColumn);
+      const emphasizedParent = emphasized && firstParent;
+      lanes[parentColumn] = {
+        hash: parent,
+        color: parentColor,
+        priority: firstParent ? priority : nextPriority++,
+        emphasized: emphasizedParent,
+      };
       lines.push({
         from: column,
         to: parentColumn,
-        color: parentColumn,
+        color: parentColor,
         kind: "parent",
         ...(emphasizedParent ? { emphasized: true } : {}),
       });
@@ -76,6 +111,7 @@ export function layoutGitGraph(
 
     rows.push({
       hash: commit.hash,
+      color,
       ...(emphasized ? { emphasized: true } : {}),
       column,
       laneCount: Math.max(incomingWidth, lanes.length, column + 1),
@@ -84,7 +120,7 @@ export function layoutGitGraph(
     while (lanes.length > 0 && lanes.at(-1) === null) lanes.pop();
   }
 
-  return { rows, lanes };
+  return { rows, lanes: lanes.map((lane) => lane?.hash ?? null), continuation: lanes };
 }
 
 export function formatGitExplorerSync(

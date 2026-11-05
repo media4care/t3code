@@ -41,7 +41,7 @@ export function GitExplorerResetAction(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !pending) props.onClose();
+        if (!open) props.onClose();
       }}
     >
       <DialogPopup>
@@ -117,8 +117,8 @@ export function GitExplorerResetAction(props: {
             ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" disabled={pending} onClick={props.onClose}>
-              Cancel
+            <Button variant="outline" onClick={props.onClose}>
+              {pending ? "Close" : "Cancel"}
             </Button>
             <Button type="submit" variant="destructive" disabled={!ready}>
               {pending ? "Resetting…" : `Reset ${overview.headBranch ?? "current branch"}`}

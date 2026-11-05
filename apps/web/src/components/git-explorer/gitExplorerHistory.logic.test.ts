@@ -1,5 +1,6 @@
 import type { GitExplorerCommit, GitExplorerRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { GIT_EXPLORER_COLORS, gitExplorerReferenceColors } from "./gitExplorerColors";
 
 import {
   mergeGitExplorerHistoryPage,
@@ -26,6 +27,34 @@ const reference = (shortName: string, kind: GitExplorerRef["kind"]): GitExplorer
   ahead: null,
   behind: null,
   upstreamMissing: false,
+});
+
+describe("Git Explorer reference colors", () => {
+  it("uses the full palette before repeating colors for unrelated branches", () => {
+    const refs = Array.from({ length: GIT_EXPLORER_COLORS.length * 2 }, (_, index) => ({
+      ...reference(`branch-${index * 8}`, "local"),
+      hash: String(index).padStart(40, "0"),
+    }));
+    const colors = gitExplorerReferenceColors(refs);
+    const usage = GIT_EXPLORER_COLORS.map(
+      (_, index) => [...colors.values()].filter((color) => color === index).length,
+    );
+    expect(usage).toEqual(GIT_EXPLORER_COLORS.map(() => 2));
+    expect(gitExplorerReferenceColors(refs.toReversed())).toEqual(colors);
+  });
+
+  it("keeps remote counterparts and references sharing a commit in the same color", () => {
+    const branch = reference("feature", "local");
+    const remote = { ...reference("origin/feature", "remote"), hash: "b".repeat(40) };
+    const tag = reference("v1.0", "tag");
+    const colors = gitExplorerReferenceColors([tag, remote, branch]);
+    expect(colors.get(remote.hash)).toBe(colors.get(branch.hash));
+    expect(colors.get(tag.hash)).toBe(colors.get(branch.hash));
+    const advanced = { ...branch, hash: "c".repeat(40) };
+    expect(gitExplorerReferenceColors([remote, advanced]).get(advanced.hash)).toBe(
+      colors.get(branch.hash),
+    );
+  });
 });
 
 describe("Git Explorer visible references", () => {

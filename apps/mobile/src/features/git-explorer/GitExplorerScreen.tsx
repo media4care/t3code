@@ -18,6 +18,7 @@ import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
 import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { GitExplorerResetControls } from "./GitExplorerResetControls";
+import { GitExplorerTagControls } from "./GitExplorerTagControls";
 import { useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
@@ -250,6 +251,12 @@ function GitExplorerRepository(props: {
                   onRefresh={explorer.refresh}
                 />
                 <GitExplorerResetControls
+                  params={params}
+                  overview={overview}
+                  selectedRevision={selectedRevision}
+                  onRefresh={explorer.refresh}
+                />
+                <GitExplorerTagControls
                   params={params}
                   overview={overview}
                   selectedRevision={selectedRevision}

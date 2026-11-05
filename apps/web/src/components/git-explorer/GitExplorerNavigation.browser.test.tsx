@@ -3,6 +3,7 @@ import {
   ProjectId,
   type GitExplorerCommit,
   type GitExplorerFile,
+  type GitExplorerHistoryResult,
   type GitExplorerOverviewResult,
 } from "@t3tools/contracts";
 import { useState } from "react";
@@ -21,11 +22,15 @@ const fixture = vi.hoisted(() => ({
   commits: [] as GitExplorerCommit[],
   files: [] as GitExplorerFile[],
   history: { commits: [] as GitExplorerCommit[], nextCursor: null },
+  historyPages: {} as Record<number, GitExplorerHistoryResult>,
 }));
 
 vi.mock("~/state/git-explorer", () => ({
   gitExplorerEnvironment: {
-    history: () => ({ kind: "history" }),
+    history: ({ input }: { input: { cursor: number } }) => ({
+      kind: "history",
+      cursor: input.cursor,
+    }),
     details: ({ input }: { input: { revision: string } }) => ({
       kind: "details",
       revision: input.revision,
@@ -34,10 +39,10 @@ vi.mock("~/state/git-explorer", () => ({
   },
 }));
 vi.mock("./useGitExplorerQuery", () => ({
-  useGitExplorerQuery: (query: { kind: string; revision?: string }) => ({
+  useGitExplorerQuery: (query: { kind: string; revision?: string; cursor?: number }) => ({
     data:
       query.kind === "history"
-        ? fixture.history
+        ? (fixture.historyPages[query.cursor ?? 0] ?? fixture.history)
         : query.kind === "details"
           ? {
               commit: fixture.commits.find((commit) => commit.hash === query.revision),
@@ -89,6 +94,7 @@ function setup() {
     binary: false,
   }));
   fixture.history = { commits: fixture.commits, nextCursor: null };
+  fixture.historyPages = {};
   const overview: GitExplorerOverviewResult = {
     snapshotId: "navigation",
     repositoryPath: "/repo",
@@ -154,6 +160,38 @@ it("reviews commits with arrow keys and retains keyboard focus across virtualize
   await expect
     .element(screen.getByRole("heading", { name: "Commit 0", exact: true }))
     .toBeVisible();
+});
+
+it("reveals an externally selected branch tip across history pages and on repeated selection", async () => {
+  const { overview } = setup();
+  fixture.historyPages = {
+    0: { commits: fixture.commits.slice(0, 100), nextCursor: 100 },
+    100: { commits: fixture.commits.slice(100), nextCursor: null },
+  };
+  const history = (revealRequest?: { revision: string }) => (
+    <div className="flex h-60 flex-col">
+      <GitExplorerHistory
+        environmentId={environmentId}
+        input={input}
+        overview={overview}
+        selectedRevision={revealRequest?.revision}
+        revealRequest={revealRequest ?? null}
+        onSelect={() => {}}
+        refresh={() => {}}
+        refreshRevision={0}
+        filters={{ historyScope: "all", searchField: "message", search: "" }}
+      />
+    </div>
+  );
+  await using screen = await render(history());
+  await expect.element(screen.getByRole("option", { name: /^Commit 0,/ })).toBeVisible();
+  await screen.rerender(history({ revision: fixture.commits[150]!.hash }));
+  await expect.element(screen.getByRole("option", { name: /^Commit 150,/ })).toBeVisible();
+  await screen.getByRole("listbox", { name: "Commits" }).click();
+  await userEvent.keyboard("{Home}");
+  await expect.element(screen.getByRole("option", { name: /^Commit 0,/ })).toBeVisible();
+  await screen.rerender(history({ revision: fixture.commits[150]!.hash }));
+  await expect.element(screen.getByRole("option", { name: /^Commit 150,/ })).toBeVisible();
 });
 
 it("changes the reviewed file with arrow keys and can reach files beyond the mounted window", async () => {

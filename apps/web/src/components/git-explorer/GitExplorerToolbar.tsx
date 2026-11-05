@@ -17,6 +17,7 @@ import {
   DownloadIcon,
   ArchiveRestoreIcon,
   Trash2Icon,
+  TagIcon,
 } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -48,6 +49,7 @@ export function GitExplorerToolbar({
   onBusyChange,
   refresh,
   onStashAction,
+  onAddTag,
 }: {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
@@ -58,6 +60,7 @@ export function GitExplorerToolbar({
   onBusyChange: (busy: boolean) => void;
   refresh: () => void;
   onStashAction: (action: GitExplorerStashActionKind, stash: GitExplorerStash) => void;
+  onAddTag: (revision: string) => void;
 }) {
   const allowed = useAtomValue(gitExplorerEnvironment.runAction.permissionAtom(environmentId));
   const runAction = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
@@ -116,6 +119,19 @@ export function GitExplorerToolbar({
   return (
     <>
       <div className="flex shrink-0 items-center gap-0.5" aria-label="Git actions">
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={unavailable !== null || !(selectedRevision ?? overview.headHash)}
+          title={unavailable ?? "Tag the selected commit, or HEAD"}
+          onClick={() => {
+            const revision = selectedRevision ?? overview.headHash;
+            if (revision) onAddTag(revision);
+          }}
+        >
+          <TagIcon className="size-3.5" aria-hidden />
+          Tag
+        </Button>
         {(
           [
             {
