@@ -125,7 +125,7 @@ export const InsightsMetrics = Schema.Struct({
 });
 export type InsightsMetrics = typeof InsightsMetrics.Type;
 
-/** A skill agents loaded through their provider's skill tool, and in how many runs. */
+/** A detected skill load through a native tool or instruction read, counted once per run. */
 export const InsightSkillUsage = Schema.Struct({
   skill: TrimmedNonEmptyString,
   runs: NonNegativeInt,
