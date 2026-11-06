@@ -95,7 +95,7 @@ it.each(["merge", "enable-auto-merge"] as const)(
         statePresentation={null}
         pendingAction={null}
         perform={perform}
-        resolveConflicts={null}
+        rebase={null}
       />
     );
     await using screen = await render(control("Checking stack membership…"));

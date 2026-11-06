@@ -151,15 +151,20 @@ export function PullRequestCheckoutMenu({
   );
 }
 
-export function PullRequestResolveConflictsButton({
-  handoff,
+export function PullRequestRebaseButton({
+  baseBranch,
+  conflicting,
+  pending,
   unavailable,
-  onResolve,
+  onRebase,
 }: {
-  handoff: string | null;
+  baseBranch: string;
+  conflicting: boolean;
+  pending: boolean;
   unavailable: boolean;
-  onResolve: () => void;
+  onRebase: () => void;
 }) {
+  const label = pending ? "Rebasing..." : conflicting ? "Resolve conflicts" : "Rebase";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -167,21 +172,25 @@ export function PullRequestResolveConflictsButton({
           <span className="inline-flex shrink-0">
             <Button
               size="xs"
-              variant="destructive-outline"
-              disabled={handoff !== null || unavailable}
-              onClick={onResolve}
-              aria-label={handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
+              variant={conflicting ? "destructive-outline" : "default"}
+              disabled={pending || unavailable}
+              onClick={onRebase}
+              aria-label={label}
             >
-              <PullRequestGlyph.conflicting aria-hidden className="size-3.5" />
-              <span className="@max-[30rem]/pr-header:hidden">
-                {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
-              </span>
+              {conflicting ? (
+                <PullRequestGlyph.conflicting aria-hidden className="size-3.5" />
+              ) : (
+                <GitBranchIcon aria-hidden className="size-3.5" />
+              )}
+              <span className="@max-[30rem]/pr-header:hidden">{label}</span>
             </Button>
           </span>
         }
       />
       <TooltipPopup side="top">
-        {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
+        {conflicting
+          ? `An agent rebases onto ${baseBranch}, resolves the conflicts, reviews the result and merges it`
+          : `Rebase onto ${baseBranch} before merging. If it conflicts, an agent takes over`}
       </TooltipPopup>
     </Tooltip>
   );
@@ -200,7 +209,7 @@ export function PullRequestPrimaryAction({
   statePresentation,
   pendingAction,
   perform,
-  resolveConflicts,
+  rebase,
 }: {
   pullRequestKey: string;
   primaryAction: ReturnType<typeof resolvePullRequestPrimaryControl> | null;
@@ -213,7 +222,7 @@ export function PullRequestPrimaryAction({
   statePresentation: ReturnType<typeof resolvePullRequestState> | null;
   pendingAction: PullRequestAction | null;
   perform: PerformPullRequestAction;
-  resolveConflicts: ReactNode;
+  rebase: ReactNode;
 }) {
   const inlineConfirm = useInlineActionConfirm(pullRequestKey);
   const actionPending = pendingAction !== null;
@@ -234,8 +243,8 @@ export function PullRequestPrimaryAction({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      {primaryAction === "resolve" ? (
-        resolveConflicts
+      {primaryAction === "resolve" || primaryAction === "rebase" ? (
+        rebase
       ) : primaryAction === "ready" ? (
         <Tooltip>
           <TooltipTrigger

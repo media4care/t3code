@@ -20,7 +20,7 @@ import { buildMessageContext, reviewCommentContextReference } from "~/lib/compos
 import {
   buildAddSelectionToAgentHandoff,
   buildExplainPullRequestHandoff,
-  buildResolveConflictsPrompt,
+  buildRebasePullRequestPrompt,
   resolveThreadPanelPullRequestAction,
   buildPullRequestReferenceContext,
   buildFixFindingHandoff,
@@ -178,6 +178,7 @@ describe("pull request primary control", () => {
     state: "open" as const,
     isDraft: false,
     mergeability: "mergeable" as const,
+    behind: false,
     checksState: "passing" as const,
     autoMergeEnabled: false,
     hasMergeMethod: true,
@@ -194,6 +195,16 @@ describe("pull request primary control", () => {
     expect(resolvePullRequestPrimaryControl({ ...open, checksState: "failing" })).toBe(
       "enable-auto-merge",
     );
+  });
+
+  it("offers a rebase instead of any merge while the branch is behind its base", () => {
+    expect(resolvePullRequestPrimaryControl({ ...open, behind: true })).toBe("rebase");
+    expect(
+      resolvePullRequestPrimaryControl({ ...open, behind: true, checksState: "pending" }),
+    ).toBe("rebase");
+    expect(
+      resolvePullRequestPrimaryControl({ ...open, behind: true, mergeability: "conflicting" }),
+    ).toBe("resolve");
   });
 
   it("does not offer auto-merge while the host state is unknown", () => {
@@ -908,9 +919,10 @@ describe("asking about a change rather than working on it", () => {
     expect(handoff.reviewComments[0]?.text).toContain("The merge request is #42");
     expect(handoff.reviewComments[0]?.text).not.toContain("pull request");
     expect(
-      buildResolveConflictsPrompt({
+      buildRebasePullRequestPrompt({
         ...base,
         url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/42",
+        mergeMethod: "squash",
       }),
     ).toMatch(/^MR #42 /u);
   });
@@ -1009,10 +1021,11 @@ describe("how the branch stands against its base", () => {
     expect(resolveBaseFreshness(detail({ baseComparison: undefined }))).toBeNull();
   });
 
-  it("narrows to what this reader may actually take", () => {
+  it("offers only a rebase, and only to a reader who may take it", () => {
+    expect(resolveBaseFreshness(detail())?.methods).toEqual(["rebase"]);
     expect(
       resolveBaseFreshness(detail({ viewerPermissions: { updateMethods: ["merge"] } }))?.methods,
-    ).toEqual(["merge"]);
+    ).toEqual([]);
   });
 });
 
@@ -1248,6 +1261,9 @@ describe("the compact row's single action slot", () => {
         openDetail({ checks: [check("failure"), check("pending")] }),
       ),
     ).toBe("fix");
+    expect(resolveThreadPanelPullRequestAction(openDetail({ baseComparison: "behind" }))).toBe(
+      "rebase",
+    );
   });
 
   it("offers nothing the viewer may not do, and nothing on settled pull requests", () => {

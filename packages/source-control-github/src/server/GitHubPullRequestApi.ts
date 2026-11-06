@@ -290,8 +290,21 @@ export class GitHubBranchDeletionRefusedError extends Schema.TaggedError<GitHubB
   }
 }
 
+export class GitHubMergeBehindBaseError extends Schema.TaggedError<GitHubMergeBehindBaseError>()(
+  "GitHubMergeBehindBaseError",
+  {
+    number: Schema.Int,
+    behindBy: Schema.Int,
+  },
+) {
+  override get message(): string {
+    return `Rebase pull request #${this.number} onto its base branch before merging. It is ${this.behindBy} ${this.behindBy === 1 ? "commit" : "commits"} behind.`;
+  }
+}
+
 export type GitHubPullRequestApiError =
   | GitHubBranchDeletionRefusedError
+  | GitHubMergeBehindBaseError
   | GitHubStackActionError
   | GitHubRequestPolicy.GitHubApiError
   | GitHubPullRequestReadError
@@ -2579,6 +2592,11 @@ export const make = Effect.gen(function* () {
               updateMethod: input.updateMethod === "rebase" ? "REBASE" : "MERGE",
             })
             .pipe(graphql(target), Effect.asVoid);
+        }
+        // Only a branch rebased onto its base merges. A merge queue rebases on its own.
+        const behindBy = state.baseRef?.compare?.behindBy ?? 0;
+        if (behindBy > 0 && state.isMergeQueueEnabled !== true) {
+          return yield* new GitHubMergeBehindBaseError({ number: input.number, behindBy });
         }
         let body: string | undefined;
         let expectedHead: string | undefined;

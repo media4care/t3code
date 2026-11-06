@@ -7,8 +7,7 @@ import {
   type PullRequestDetailView,
 } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { act, render } from "../../../test/render";
+import { render } from "../../../test/render";
 
 const { permissions } = vi.hoisted(() => ({
   permissions: { checkout: true, operate: true },
@@ -111,8 +110,7 @@ const detail: PullRequestDetailView = {
 };
 
 const environmentId = EnvironmentId.make("environment");
-const draftId = DraftId.make("conflicts-draft");
-const panel = (attach = false) => (
+const panel = () => (
   <PullRequestDetailPanel
     environmentId={environmentId}
     reference={detail}
@@ -126,14 +124,12 @@ const panel = (attach = false) => (
       isWeb: true,
       isDesktop: false,
     })}
-    {...(attach ? { composerDraftTarget: draftId } : {})}
   />
 );
 
 function setup() {
   permissions.checkout = true;
   permissions.operate = true;
-  useComposerDraftStore.setState({ draftsByThreadKey: {} });
 }
 
 it.each([AuthSourceControlWriteScope, AuthOrchestrationOperateScope])(
@@ -149,16 +145,3 @@ it.each([AuthSourceControlWriteScope, AuthOrchestrationOperateScope])(
     await expect.element(resolve).toBeDisabled();
   },
 );
-
-it("can still add conflict resolution to an existing composer without checkout scopes", async () => {
-  setup();
-  permissions.checkout = false;
-  permissions.operate = false;
-  await using screen = await render(panel(true));
-  const resolve = screen.getByRole("button", { name: "Resolve conflicts" });
-  await expect.element(resolve).toBeEnabled();
-  await act(() => resolve.click());
-  const draft = useComposerDraftStore.getState().getComposerDraft(draftId);
-  expect(draft?.prompt).toContain("conflicts");
-  expect(draft?.prompt).toContain(detail.url);
-});
