@@ -34,7 +34,8 @@ import {
 
 import {
   buildFixFindingsHandoff,
-  buildResolveConflictsPrompt,
+  buildRebasePullRequestPrompt,
+  resolveBaseFreshness,
   classifyPullRequestChecks,
   describePullRequestChecks,
   isPullRequestConflicting,
@@ -54,6 +55,7 @@ import {
   usePullRequestDefaultMergeMethodResolver,
   usePullRequestHandoffs,
 } from "../pullRequest/usePullRequestActions";
+import { usePullRequestRebaseLaunch } from "../pullRequest/usePullRequestRebaseLaunch";
 import {
   ChangeRequestStatusIcon,
   type PrStatusIndicator,
@@ -169,6 +171,11 @@ export function ThreadDetailsPrRow({
     },
   });
   const { handoff, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
+  const rebaseLaunch = usePullRequestRebaseLaunch({
+    environmentId,
+    projectId: detail?.projectId ?? null,
+    cwd: detail?.workspaceRoot ?? null,
+  });
   const lastSelectedMergeMethod = useUiStateStore((state) => state.pullRequestMergeMethod);
   const resolveProjectDefaultMergeMethod = usePullRequestDefaultMergeMethodResolver(
     environmentId,
@@ -190,14 +197,24 @@ export function ThreadDetailsPrRow({
     lastSelectedMergeMethod,
   );
 
-  const startResolveConflicts = () => {
+  // The host rebases a clean branch itself; anything it cannot apply goes to an agent.
+  const rebaseOntoBase = async () => {
     if (detail === null) return;
-    void startHandoff("conflicts", {
-      prompt: buildResolveConflictsPrompt({
+    if (
+      resolveBaseFreshness(detail)?.methods.includes("rebase") &&
+      (await perform("update-branch", undefined, "rebase"))
+    ) {
+      return;
+    }
+    void rebaseLaunch.launch({
+      url: detail.url,
+      title: `Rebase #${detail.number} onto ${detail.baseBranch}`,
+      prompt: buildRebasePullRequestPrompt({
         number: detail.number,
         url: detail.url,
         headBranch: detail.headBranch,
         baseBranch: detail.baseBranch,
+        mergeMethod: selectedMergeMethod,
       }),
     });
   };
@@ -318,15 +335,21 @@ export function ThreadDetailsPrRow({
     );
 
   const trailingAction =
-    rowAction === "resolve"
+    rowAction === "resolve" || rowAction === "rebase"
       ? {
-          label: "Resolve",
-          pendingLabel: "Preparing...",
-          pending: handoff === "conflicts",
-          destructive: true,
-          suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
-          tooltip: "Check the branch out and resolve the conflicts in a new thread",
-          onClick: startResolveConflicts,
+          label: rowAction === "resolve" ? "Resolve" : "Rebase",
+          pendingLabel: "Rebasing...",
+          pending: rebaseLaunch.launching,
+          destructive: rowAction === "resolve",
+          suffix:
+            rowAction === "resolve" ? (
+              <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />
+            ) : null,
+          tooltip:
+            rowAction === "resolve"
+              ? `An agent rebases onto ${detail?.baseBranch}, resolves the conflicts, reviews the result and merges it`
+              : `Rebase onto ${detail?.baseBranch} before merging. If it conflicts, an agent takes over`,
+          onClick: () => void rebaseOntoBase(),
         }
       : rowAction === "ready"
         ? {
@@ -460,7 +483,7 @@ export function ThreadDetailsPrRow({
                       size="sm"
                       part="meta"
                       tone={trailingAction.destructive ? "destructive" : "primary"}
-                      disabled={actionPending || handoff !== null}
+                      disabled={actionPending || handoff !== null || rebaseLaunch.launching}
                       onClick={trailingAction.onClick}
                     />
                   }

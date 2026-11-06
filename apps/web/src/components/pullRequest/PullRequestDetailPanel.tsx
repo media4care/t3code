@@ -53,6 +53,7 @@ import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { usePullRequestDefaultMergeMethodResolver } from "./usePullRequestActions";
+import { usePullRequestRebaseLaunch } from "./usePullRequestRebaseLaunch";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import { usePreparePullRequestThreadAction } from "~/state/sourceControlActions";
 import { cn } from "~/lib/utils";
@@ -93,7 +94,7 @@ import {
   PullRequestApproveWorkflowsButton,
   PullRequestCheckoutMenu,
   PullRequestPrimaryAction,
-  PullRequestResolveConflictsButton,
+  PullRequestRebaseButton,
 } from "./PullRequestDetailActions";
 import { PullRequestBaseBranch } from "./PullRequestBaseBranch";
 import { PullRequestDetailCrumbs } from "./PullRequestDetailCrumbs";
@@ -116,7 +117,7 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
-  buildResolveConflictsPrompt,
+  buildRebasePullRequestPrompt,
   handoffPrompt,
   handoffReviewComments,
   latestPullRequestReviewOutcomes,
@@ -194,7 +195,7 @@ const actionFailureHints = (term: string): Record<PullRequestAction, string> => 
 });
 
 const UPDATE_BRANCH_REBASE_FAILURE_HINT =
-  "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
+  "The host could not rebase it cleanly. An agent rebases it in its own worktree instead.";
 
 const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
@@ -655,6 +656,11 @@ export function PullRequestDetailPanel({
     environmentId: actingEnvironmentId,
     cwd: checkoutRoot,
   });
+  const rebaseLaunch = usePullRequestRebaseLaunch({
+    environmentId: actingEnvironmentId,
+    projectId: acting?.projectId ?? handoffSummary?.projectId ?? null,
+    cwd: checkoutRoot,
+  });
 
   const finishAction = async (
     action: PullRequestAction,
@@ -1089,16 +1095,30 @@ export function PullRequestDetailPanel({
     );
   };
 
-  const startResolveConflicts = () => {
+  const launchRebaseAgent = () => {
     if (!handoffSummary) return;
-    void startHandoff("conflicts", {
-      prompt: buildResolveConflictsPrompt({
+    void rebaseLaunch.launch({
+      url: handoffSummary.url,
+      title: `Rebase #${handoffSummary.number} onto ${handoffSummary.baseBranch}`,
+      prompt: buildRebasePullRequestPrompt({
         number: handoffSummary.number,
         url: handoffSummary.url,
         headBranch: handoffSummary.headBranch,
         baseBranch: handoffSummary.baseBranch,
+        mergeMethod: selectedMergeMethod,
       }),
     });
+  };
+
+  // The host rebases a clean branch itself; anything it cannot apply goes to an agent.
+  const rebaseOntoBase = async () => {
+    if (
+      freshness?.methods.includes("rebase") &&
+      (await perform("update-branch", undefined, "rebase"))
+    ) {
+      return;
+    }
+    launchRebaseAgent();
   };
 
   const selectMergeMethod = (method: PullRequestMergeMethod) => {
@@ -1119,6 +1139,7 @@ export function PullRequestDetailPanel({
   const selectedMergeMethodLabel = PULL_REQUEST_MERGE_METHOD_LABELS[selectedMergeMethod];
   const pendingAutoMergeLabel = `Auto-merge (${selectedMergeMethodLabel.toLowerCase()})`;
   const conflicting = isPullRequestConflicting(detail);
+  const behind = detail?.state === "open" && detail.baseComparison === "behind";
   const autoMergeArmed = detail?.state === "open" && detail.autoMergeEnabled === true;
   const armedMergeMethod = detail?.autoMergeMethod;
   const armedAutoMergeLabel = armedMergeMethod
@@ -1146,6 +1167,7 @@ export function PullRequestDetailPanel({
         state: detail.state,
         isDraft: detail.isDraft,
         mergeability: detail.mergeability,
+        behind,
         checksState,
         autoMergeEnabled: detail.autoMergeEnabled,
         hasMergeMethod: allowedMergeMethods.length > 0,
@@ -1166,6 +1188,7 @@ export function PullRequestDetailPanel({
         primaryAction !== "enable-auto-merge" &&
         !detail.isDraft &&
         !conflicting &&
+        !behind &&
         can("enable-auto-merge") &&
         allowedMergeMethods.length > 0));
   const showsMergeNow =
@@ -1175,12 +1198,14 @@ export function PullRequestDetailPanel({
     can("merge") &&
     !detail.isDraft &&
     !conflicting &&
+    !behind &&
     allowedMergeMethods.length > 0;
   const showsMergeMethods =
     detail?.state === "open" &&
     can("merge") &&
     !detail.isDraft &&
     !conflicting &&
+    !behind &&
     allowedMergeMethods.length > 1;
   const statePresentation = detail
     ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft })
@@ -1232,13 +1257,18 @@ export function PullRequestDetailPanel({
       />
     ) : null;
 
-  const resolveConflictsControl = (
-    <PullRequestResolveConflictsButton
-      handoff={handoff}
-      unavailable={attachTarget === null && (checkoutRoot === null || !canPrepareWorktree)}
-      onResolve={startResolveConflicts}
+  const rebaseControl = handoffSummary ? (
+    <PullRequestRebaseButton
+      baseBranch={handoffSummary.baseBranch}
+      conflicting={handoffSummary.mergeability === "conflicting"}
+      pending={rebaseLaunch.launching || pendingAction === "update-branch"}
+      unavailable={
+        !(checkoutRoot !== null && canOperateThread && rebaseLaunch.available) &&
+        !freshness?.methods.includes("rebase")
+      }
+      onRebase={() => void rebaseOntoBase()}
     />
-  );
+  ) : null;
 
   if (detailQuery.isPending && !detail) {
     return (
@@ -1256,7 +1286,7 @@ export function PullRequestDetailPanel({
           handoffSummary ? (
             <TooltipProvider delay={150} closeDelay={150} timeout={400}>
               {handoffSummary.state === "open" && handoffSummary.mergeability === "conflicting"
-                ? resolveConflictsControl
+                ? rebaseControl
                 : null}
               {checkoutControl}
             </TooltipProvider>
@@ -1343,7 +1373,7 @@ export function PullRequestDetailPanel({
                 statePresentation={statePresentation}
                 pendingAction={pendingAction}
                 perform={perform}
-                resolveConflicts={resolveConflictsControl}
+                rebase={rebaseControl}
               />
               {checkoutControl}
               <PullRequestActionsMenu
@@ -1445,7 +1475,7 @@ export function PullRequestDetailPanel({
                       freshness={freshness}
                       stacked={isStackedPullRequest}
                       pending={actionPending}
-                      onUpdate={(method) => void perform("update-branch", undefined, method)}
+                      onUpdate={() => void rebaseOntoBase()}
                       iconClassName="size-3"
                     />
                     <ArrowLeftIcon
@@ -1546,7 +1576,7 @@ export function PullRequestDetailPanel({
                     freshness={freshness}
                     stacked={isStackedPullRequest}
                     pending={actionPending}
-                    onUpdate={(method) => void perform("update-branch", undefined, method)}
+                    onUpdate={() => void rebaseOntoBase()}
                   />
                 }
                 head={

@@ -4,6 +4,7 @@ import {
   allowedMergeMethods,
   canPerformPullRequestAction,
   mergeUnavailableReason,
+  allowedUpdateMethods,
   pullRequestActionLabel,
 } from "./pullRequestActions";
 
@@ -63,6 +64,24 @@ describe("mobile pull request actions", () => {
     const pr = detail({ mergeability: "conflicting" });
     expect(canPerformPullRequestAction(pr, "merge")).toBe(false);
     expect(mergeUnavailableReason(pr, true, GITHUB)).toContain("conflicts");
+  });
+
+  it("holds a merge until the branch is rebased, and updates only by rebasing", () => {
+    expect(
+      mergeUnavailableReason(
+        { ...detail(), baseComparison: "behind", baseBranch: "main" },
+        true,
+        GITHUB,
+      ),
+    ).toBe("Rebase onto main before merging.");
+    expect(allowedUpdateMethods(detail())).toEqual([]);
+    expect(
+      allowedUpdateMethods(
+        detail({
+          viewerPermissions: { actions: ALL_PR_ACTIONS, updateMethods: ["merge", "rebase"] },
+        }),
+      ),
+    ).toEqual(["rebase"]);
   });
 
   it("names the change request with its host's term", () => {

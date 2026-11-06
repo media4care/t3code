@@ -270,6 +270,13 @@ Press **Escape** before releasing to cancel. Failed closes stay in the list so y
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
 supports approving waiting fork workflows and opening a revert pull request for a merged change.
 
+A pull request merges only once its branch is rebased onto its base. While it is behind, **Rebase**
+replaces Merge and auto-merge, and GitHub merges are refused from every client. GitHub rebases a
+clean branch itself. When the branch conflicts or GitHub cannot rebase it, an agent (Claude Opus 5.5,
+high effort) rebases it in its own worktree, resolves the conflicts, runs the checks, and
+force-pushes. If the repository has a `smart-review` skill, the agent reviews only the conflict
+resolutions and merges when the review finds nothing blocking. Otherwise it stops after the push.
+
 Pull request sharing is off by default. In Settings → Environments → Pull request sharing (Pull
 request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
 environment you trust to share its source control access.
@@ -348,6 +355,8 @@ and their marks follow the same rules as on web and desktop.
   remotes can require separate setup from the hosting provider's API access.
 - **A review cannot load:** open it on the host website while resolving connectivity, permissions,
   or rate limits.
+- **A fork lists the original repository's pull requests:** a remote named `upstream` takes
+  precedence over `origin`. Run `gh repo set-default <owner>/<fork>` in the checkout, then rescan.
 
 ## Linked pull requests
 

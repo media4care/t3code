@@ -83,9 +83,10 @@ export function allowedMergeMethods(pr: ActionDetail) {
   return pr.capabilities.mergeMethods.filter((method) => pr.mergeCapabilities[method]);
 }
 
+// Merge updates leave merge commits behind; a branch is brought up to date only by rebasing.
 export function allowedUpdateMethods(pr: ActionDetail) {
-  return (pr.capabilities.updateMethods ?? []).filter((method) =>
-    pr.viewerPermissions.updateMethods?.includes(method),
+  return (pr.capabilities.updateMethods ?? []).filter(
+    (method) => method === "rebase" && pr.viewerPermissions.updateMethods?.includes(method),
   );
 }
 
@@ -118,7 +119,7 @@ export function canPerformPullRequestAction(pr: ActionDetail, action: PullReques
 }
 
 export function mergeUnavailableReason(
-  pr: ActionDetail,
+  pr: ActionDetail & Partial<Pick<PullRequestDetail, "baseComparison" | "baseBranch">>,
   connectionAllowsWrites: boolean,
   terminology: ChangeRequestTerminology,
 ) {
@@ -131,6 +132,7 @@ export function mergeUnavailableReason(
     return `Your account cannot merge this ${terminology.singular}.`;
   if (pr.isDraft) return "Mark this draft ready for review before merging.";
   if (pr.mergeability === "conflicting") return "Resolve the branch conflicts before merging.";
+  if (pr.baseComparison === "behind") return `Rebase onto ${pr.baseBranch} before merging.`;
   if (!allowedMergeMethods(pr).length) return "This repository has no available merge methods.";
   return null;
 }

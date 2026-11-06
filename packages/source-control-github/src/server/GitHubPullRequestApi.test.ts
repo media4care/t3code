@@ -1983,7 +1983,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
           headRefOid: "abc123",
           isMergeQueueEnabled: false,
           mergeStateStatus: "BLOCKED",
-          baseRef: { compare: { behindBy: 2 } },
+          baseRef: { compare: { behindBy: 0 } },
           ...pullRequest,
         },
       },
@@ -2353,6 +2353,31 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(result._tag).toBe("Failure");
       expect(variablesOf("mergePullRequest(")).toEqual([]);
     }),
+  );
+
+  it.effect.each(["merge", "enable-auto-merge"] as const)(
+    "refuses to %s a pull request that is behind its base",
+    (action) =>
+      Effect.gen(function* () {
+        route([
+          "query PullRequestActionState",
+          actionState({ mergeStateStatus: "CLEAN", baseRef: { compare: { behindBy: 3 } } }),
+        ]);
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const result = yield* Effect.result(
+          cli.runPullRequestAction({
+            cwd: "/w",
+            repository: "acme/web",
+            host: "github.com",
+            number: 7,
+            action,
+            mergeMethod: "squash",
+          }),
+        );
+        expect(result._tag).toBe("Failure");
+        expect(variablesOf("mergePullRequest(")).toEqual([]);
+        expect(variablesOf("enablePullRequestAutoMerge(")).toEqual([]);
+      }),
   );
 
   it.effect("merges at once when auto-merge is asked of a pull request that is ready now", () =>

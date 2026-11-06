@@ -70,10 +70,21 @@ function parseRemoteFetchUrls(stdout: string): Map<string, string> {
   return remotes;
 }
 
+// `gh repo set-default` marks its remote with `remote.<name>.gh-resolved base`.
+function parseGhDefaultRemote(stdout: string): string | null {
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^remote\.(.+)\.gh-resolved\s+base$/.exec(line.trim());
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
 function pickPrimaryRemote(
   remotes: ReadonlyMap<string, string>,
+  ghDefaultRemote: string | null,
 ): { readonly remoteName: string; readonly remoteUrl: string } | null {
-  for (const preferredRemoteName of ["upstream", "origin"] as const) {
+  for (const preferredRemoteName of [ghDefaultRemote, "upstream", "origin"]) {
+    if (preferredRemoteName === null) continue;
     const remoteUrl = remotes.get(preferredRemoteName);
     if (remoteUrl) {
       return { remoteName: preferredRemoteName, remoteUrl };
@@ -240,7 +251,29 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   }
 
   const remotes = parseRemoteFetchUrls(remoteResult.value.stdout);
-  const remote = pickPrimaryRemote(remotes);
+  const ghDefaultResult =
+    remotes.size > 1
+      ? yield* processRunner
+          .run({
+            command: "git",
+            args: [
+              "-C",
+              cacheKey.rootPath,
+              ...(cacheKey.isBare ? ["--git-dir=."] : []),
+              "config",
+              "--get-regexp",
+              "^remote\\..*\\.gh-resolved$",
+            ],
+            env: explicitBareRepositoryEnv(process.env, yield* HostProcess.Platform),
+            timeoutBehavior: "timedOutResult",
+          })
+          .pipe(Effect.option)
+      : null;
+  const ghDefaultRemote =
+    ghDefaultResult?._tag === "Some" && ghDefaultResult.value.code === 0
+      ? parseGhDefaultRemote(ghDefaultResult.value.stdout)
+      : null;
+  const remote = pickPrimaryRemote(remotes, ghDefaultRemote);
   return remote
     ? buildRepositoryIdentity({
         ...remote,
