@@ -230,6 +230,12 @@ export function gitExplorerUpstreamMergeSummary(
       description: `Merge status for upstream ${upstream} has not been loaded.`,
       mergeStatus: null,
     };
+  if (reference.upstream === status.targetRef)
+    return {
+      label: "Not pushed",
+      description: `Tracks ${upstream}, the merge target, so the branch has no remote branch of its own.`,
+      mergeStatus: null,
+    };
   const labels = {
     merged: "Upstream merged",
     equivalent: "Upstream equivalent",
