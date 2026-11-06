@@ -283,35 +283,32 @@ export function InsightsDashboard({
 
       {report.skills && metrics.runs > 0 && (
         <View className="gap-3 rounded-2xl border border-border-subtle bg-surface p-4">
-          <Text className="font-t3-semibold text-sm text-foreground">Skills used</Text>
+          <Text className="font-t3-semibold text-sm text-foreground">Detected skill loads</Text>
           {report.skills.length ? (
             report.skills.map((entry) => (
               <View
                 key={entry.skill}
                 accessible
-                accessibilityLabel={`${entry.skill}: loaded in ${entry.runs} of ${metrics.runs} runs`}
+                accessibilityLabel={`${entry.skill}: detected in ${entry.runs} runs`}
                 className="min-h-8 flex-row items-center gap-3"
               >
                 <Text numberOfLines={1} className="w-32 font-t3-medium text-xs text-foreground">
                   {entry.skill}
                 </Text>
-                <View className="h-1.5 flex-1 overflow-hidden rounded-full bg-subtle-strong">
-                  <View
-                    className="h-full rounded-full bg-primary"
-                    style={{ width: `${(entry.runs / metrics.runs) * 100}%` }}
-                  />
-                </View>
-                <Text className="w-16 text-right text-xs text-foreground-muted">
-                  {entry.runs}/{metrics.runs} runs
+                <Text className="flex-1 text-right text-xs text-foreground-muted">
+                  {entry.runs} {entry.runs === 1 ? "run" : "runs"}
                 </Text>
               </View>
             ))
           ) : (
-            <Text className="text-sm text-foreground-muted">No skills loaded in these runs.</Text>
+            <Text className="text-sm text-foreground-muted">
+              No skill loads detected in this sample.
+            </Text>
           )}
           <Text className="text-xs text-foreground-muted">
-            Counted from Claude and OpenCode skill tool calls. Other providers don't report skill
-            loads.
+            Detected in {metrics.runs} sampled runs. Counts are a lower bound, not a usage rate.
+            Coverage varies by provider and report version; skills already in context may be
+            missing. Older reports are not recalculated.
           </Text>
         </View>
       )}

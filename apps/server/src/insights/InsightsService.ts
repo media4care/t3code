@@ -698,7 +698,7 @@ const make = Effect.gen(function* () {
         limitations: [
           "Evidence is sampled: up to 8 timeline items and 12 delegations per run. Inspect source threads before drawing conclusions.",
           "Timings include waiting; tokens are shown only where recorded for the main agent of each run. Native child sessions may be missing; workflow totals are not added again. Agent-reported attribution is not independent verification.",
-          "Skills count only loads through Claude's and OpenCode's skill tools; other providers, and skills read as plain files, are not counted.",
+          "Skill counts are a lower bound from recorded native skill calls and supported explicit SKILL.md reads. Skills already in context or read through unsupported tools may be missing. Older linked environments may only report native skill calls.",
           ...(hasMore
             ? ["More activity remains for the next analysis; the checkpoint has not skipped it."]
             : []),
