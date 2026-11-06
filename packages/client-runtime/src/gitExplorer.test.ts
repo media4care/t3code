@@ -283,6 +283,12 @@ describe("Git Explorer upstream status", () => {
     expect(gitExplorerUpstreamMergeSummary({ ...ref, hash: "d".repeat(40) }, status).label).toBe(
       "Upstream unknown",
     );
+    const trackingTarget = gitExplorerUpstreamMergeSummary(
+      { ...ref, upstream: status.targetRef },
+      { ...status, upstream: { ...status.upstream!, name: status.targetRef! } },
+    );
+    expect(trackingTarget.label).toBe("Not pushed");
+    expect(trackingTarget.mergeStatus).toBeNull();
     const { upstream: _upstream, ...legacyStatus } = status;
     expect(gitExplorerUpstreamMergeSummary(ref, legacyStatus).label).toBe("Upstream unknown");
   });
