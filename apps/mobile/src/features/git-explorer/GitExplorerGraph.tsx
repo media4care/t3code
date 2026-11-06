@@ -102,7 +102,7 @@ const GraphCommit = memo(function GraphCommit(props: {
               className="h-[14px] shrink flex-row items-center gap-1 overflow-hidden"
             >
               {props.isHead ? (
-                <Text className="h-[14px] rounded-sm bg-primary px-1 text-[10px] leading-[14px] font-t3-semibold text-primary-foreground">
+                <Text className="h-[14px] rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] font-t3-semibold text-foreground">
                   HEAD
                 </Text>
               ) : null}
@@ -110,14 +110,7 @@ const GraphCommit = memo(function GraphCommit(props: {
                 <Text
                   key={ref.name}
                   numberOfLines={1}
-                  className={cn(
-                    "h-[14px] shrink rounded-sm px-1 text-[10px] leading-[14px]",
-                    ref.kind === "tag"
-                      ? "bg-subtle-strong text-foreground-muted"
-                      : ref.kind === "remote"
-                        ? "bg-subtle-strong text-foreground"
-                        : "bg-primary/15 text-primary-text",
-                  )}
+                  className="h-[14px] shrink rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] text-foreground"
                 >
                   {ref.kind === "tag" ? "tag " : ""}
                   {ref.shortName}

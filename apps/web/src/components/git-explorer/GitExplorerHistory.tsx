@@ -32,6 +32,7 @@ import { useDebouncedValue } from "~/state/queries";
 import type { GitExplorerHistoryFilters } from "./GitExplorerHistoryFilters";
 import { GitExplorerNotice } from "./GitExplorerNotice";
 import { GitExplorerHint } from "./GitExplorerHint";
+import { GIT_EXPLORER_COLORS, gitExplorerReferenceColors } from "./gitExplorerColors";
 import {
   mergeGitExplorerHistoryPage,
   selectGitExplorerReferences,
@@ -45,15 +46,7 @@ import {
   showGitExplorerContextMenu,
 } from "./gitExplorerContextMenu";
 
-const GRAPH_COLORS = [
-  "text-primary",
-  "text-success-foreground",
-  "text-warning-foreground",
-  "text-info-foreground",
-  "text-destructive",
-  "text-muted-foreground",
-];
-const LANE_WIDTH = 14;
+const LANE_WIDTH = 11;
 const AUTHOR_COLUMN_CLASS = "hidden w-40 shrink-0 truncate px-2 @min-[40rem]/git-history:block";
 const DATE_COLUMN_CLASS = "hidden w-36 shrink-0 truncate px-2 @min-[52rem]/git-history:block";
 
@@ -68,7 +61,7 @@ function CommitGraph({
   offset: number;
   height: number;
 }) {
-  const x = (column: number) => (column + 0.5) * LANE_WIDTH + 8;
+  const x = (column: number) => column * LANE_WIDTH + 18;
   return (
     <svg
       viewBox={`${offset} 0 ${width} ${height}`}
@@ -79,24 +72,24 @@ function CommitGraph({
       {row.lines.map((line) => {
         const fromY = line.kind === "parent" ? height / 2 : 0;
         const toY = line.kind === "incoming" ? height / 2 : height;
-        const midY = (fromY + toY) / 2;
         return (
           <path
             key={`${line.kind}:${line.from}:${line.to}`}
-            d={`M ${x(line.from)} ${fromY} C ${x(line.from)} ${midY}, ${x(line.to)} ${midY}, ${x(line.to)} ${toY}`}
+            d={`M ${x(line.from)} ${fromY} L ${x(line.to)} ${toY}`}
             fill="none"
             stroke="currentColor"
-            strokeWidth={line.emphasized ? 3.5 : 2}
-            className={GRAPH_COLORS[line.color % GRAPH_COLORS.length]}
+            strokeWidth={line.emphasized ? 3 : 1.5}
+            strokeLinecap="round"
+            className={GIT_EXPLORER_COLORS[line.color % GIT_EXPLORER_COLORS.length]!.foreground}
           />
         );
       })}
       <circle
         cx={x(row.column)}
         cy={height / 2}
-        r={row.emphasized ? 4 : 3.5}
+        r={4}
         fill="currentColor"
-        className={GRAPH_COLORS[row.column % GRAPH_COLORS.length]}
+        className={GIT_EXPLORER_COLORS[row.color % GIT_EXPLORER_COLORS.length]!.foreground}
       />
     </svg>
   );
@@ -108,11 +101,7 @@ function RefLabel({ reference, emphasized }: { reference: GitExplorerRef; emphas
       className={cn(
         "inline-flex h-4.5 min-w-0 max-w-36 flex-auto items-center gap-1 rounded px-1 text-xs leading-none",
         emphasized && "font-semibold",
-        reference.kind === "local"
-          ? "bg-primary text-primary-foreground"
-          : reference.kind === "tag"
-            ? "bg-info/8 text-info-foreground ring-1 ring-info/24 ring-inset dark:bg-info/16"
-            : "bg-accent text-foreground/85 ring-1 ring-border ring-inset",
+        "bg-muted text-foreground ring-1 ring-border ring-inset",
       )}
       label={`${reference.shortName} · ${reference.kind === "local" ? formatGitExplorerSync(reference) : reference.kind === "tag" ? "tag" : "remote-tracking branch"}`}
     >
@@ -131,6 +120,11 @@ interface HistoryProps {
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
+  revealRequest?: { revision: string } | null;
+  onAddTag?: (revision: string) => void;
+  onReset?: (revision: string) => void;
+  resetUnavailable?: boolean;
+  tagUnavailable?: string | null;
   onSelect: (revision: string | null) => void;
   refresh: () => void;
   refreshRevision: number;
@@ -162,6 +156,11 @@ function GitExplorerHistoryList({
   input,
   overview,
   selectedRevision,
+  revealRequest,
+  onAddTag,
+  tagUnavailable,
+  onReset,
+  resetUnavailable,
   onSelect,
   refresh,
   refreshRevision,
@@ -207,10 +206,11 @@ function GitExplorerHistoryList({
     history.commits,
     [],
     new Set(overview.refs.filter((ref) => emphasizedRefs.has(ref.name)).map((ref) => ref.hash)),
+    gitExplorerReferenceColors(overview.refs),
   );
   const graphWidth =
     graph.rows.reduce((width, row) => Math.max(width, row.laneCount), 2) * LANE_WIDTH + 16;
-  const graphDisplayWidth = compact ? Math.max(48, Math.min(graphWidth, 64)) : 88;
+  const graphDisplayWidth = compact ? Math.max(48, Math.min(graphWidth, 64)) : 160;
   const visibleGraphOffset = Math.min(graphOffset, Math.max(0, graphWidth - graphDisplayWidth));
   const rows = history.commits.map((commit, index) => ({ commit, graph: graph.rows[index]! }));
   const navigation = useGitExplorerListNavigation({
@@ -240,6 +240,30 @@ function GitExplorerHistoryList({
     if (query.isPending || query.error || cursor !== history.cursor) return;
     if (history.result?.nextCursor != null) setCursor(history.result.nextCursor);
   };
+  const handledReveal = useRef<typeof revealRequest>(undefined);
+  const revealIndex = revealRequest
+    ? history.commits.findIndex((commit) => commit.hash === revealRequest.revision)
+    : -1;
+  const canReveal = revealRequest && filters.historyScope === "all" && !filters.search;
+  if (
+    canReveal &&
+    revealIndex < 0 &&
+    !query.isPending &&
+    !query.error &&
+    cursor === history.cursor &&
+    history.result?.nextCursor != null
+  ) {
+    setCursor(history.result.nextCursor);
+  }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reveal sidebar selections in the virtualized DOM once the requested row is loaded.
+  useEffect(() => {
+    if (!canReveal || handledReveal.current === revealRequest) return;
+    const list = navigation.listProps.ref.current;
+    if (revealIndex >= 0 && list) {
+      handledReveal.current = revealRequest;
+      void list.scrollIndexIntoView({ index: revealIndex, animated: false });
+    }
+  }, [canReveal, revealRequest, revealIndex, navigation.listProps.ref]);
   const extraData = {
     selectedRevision,
     refsByHash,
@@ -262,7 +286,7 @@ function GitExplorerHistoryList({
         <span className="shrink-0 px-2" style={{ width: graphDisplayWidth }}>
           Graph
         </span>
-        <span className="min-w-0 flex-1 border-l border-border/60 px-2">Description</span>
+        <span className="min-w-0 flex-1 border-l border-border/60 px-1">Description</span>
         <span className="w-22 shrink-0 border-l border-border/60 px-2">Commit</span>
         <span className={cn(AUTHOR_COLUMN_CLASS, "border-l border-border/60")}>Author</span>
         <span className={cn(DATE_COLUMN_CLASS, "border-l border-border/60")}>Date</span>
@@ -339,9 +363,27 @@ function GitExplorerHistoryList({
                   event.preventDefault();
                   event.stopPropagation();
                   void showGitExplorerContextMenu(
-                    [{ id: "copy-hash", label: "Copy commit hash", icon: "copy" }],
+                    [
+                      { id: "copy-hash", label: "Copy commit hash", icon: "copy" },
+                      ...(onReset
+                        ? [
+                            {
+                              id: "reset",
+                              label: `Reset ${overview.headBranch ?? "current branch"} to this commit…`,
+                              disabled: resetUnavailable || !overview.headBranch,
+                            },
+                          ]
+                        : []),
+                      ...(onAddTag
+                        ? [{ id: "tag", label: "Tag…", disabled: tagUnavailable != null }]
+                        : []),
+                    ],
                     gitExplorerMenuPosition(event),
-                    () => copyGitExplorerValue(commit.hash, "commit hash"),
+                    (action) => {
+                      if (action === "reset") onReset?.(commit.hash);
+                      else if (action === "tag") onAddTag?.(commit.hash);
+                      else return copyGitExplorerValue(commit.hash, "commit hash");
+                    },
                   );
                 }}
                 aria-current={selectedRevision === commit.hash ? "true" : undefined}
@@ -357,9 +399,9 @@ function GitExplorerHistoryList({
                     height={rowHeight}
                   />
                 </span>
-                <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden px-2">
+                <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden px-1">
                   {isHead ? (
-                    <span className="inline-flex h-4.5 shrink-0 items-center rounded bg-primary px-1 text-xs leading-none text-primary-foreground">
+                    <span className="inline-flex h-4.5 shrink-0 items-center rounded bg-muted px-1 text-xs leading-none text-foreground ring-1 ring-border ring-inset">
                       HEAD
                     </span>
                   ) : null}
@@ -374,7 +416,7 @@ function GitExplorerHistoryList({
                       ))}
                       {hiddenReferences.length > 0 ? (
                         <GitExplorerHint
-                          className="inline-flex h-4.5 shrink-0 items-center rounded bg-accent px-1 text-xs leading-none text-foreground/85"
+                          className="inline-flex h-4.5 shrink-0 items-center rounded bg-muted px-1 text-xs leading-none text-foreground ring-1 ring-border ring-inset"
                           label={`More references: ${hiddenReferences.map((reference) => (reference.kind === "tag" ? `tag: ${reference.shortName}` : reference.shortName)).join(", ")}`}
                         >
                           +{hiddenReferences.length}

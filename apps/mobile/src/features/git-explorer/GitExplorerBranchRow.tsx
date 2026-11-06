@@ -150,12 +150,7 @@ export function GitExplorerBranchRow(props: {
       <View className="min-w-0 flex-1">
         <Text numberOfLines={1} ellipsizeMode="middle" className="text-[12px] leading-[16px]">
           {prefix ? <Text className="text-foreground-muted">{prefix}</Text> : null}
-          <Text
-            className={cn(
-              "font-t3-medium",
-              current ? "font-t3-semibold text-primary-text" : "text-foreground",
-            )}
-          >
+          <Text className={cn("font-t3-medium text-foreground", current && "font-t3-semibold")}>
             {leaf}
           </Text>
         </Text>

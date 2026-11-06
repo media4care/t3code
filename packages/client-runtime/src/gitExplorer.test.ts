@@ -126,20 +126,36 @@ describe("Git Explorer graph", () => {
   });
 
   it("draws both merge parents and rejoins their common ancestor", () => {
-    const { rows, lanes } = layoutGitGraph([
+    const commits = [
       { hash: "merge", parents: ["main", "feature"] },
       { hash: "feature", parents: ["base"] },
       { hash: "main", parents: ["base"] },
       { hash: "base", parents: [] },
-    ]);
+    ];
+    const { rows, lanes } = layoutGitGraph(commits);
     expect(rows[0]?.lines).toEqual([
       { from: 0, to: 0, color: 0, kind: "parent" },
       { from: 0, to: 1, color: 1, kind: "parent" },
     ]);
     expect(rows[1]?.lines).toContainEqual({ from: 0, to: 0, color: 0, kind: "through" });
-    expect(rows[2]?.lines).toContainEqual({ from: 0, to: 1, color: 1, kind: "parent" });
-    expect(rows[3]?.column).toBe(1);
+    expect(rows[2]?.lines).toContainEqual({ from: 0, to: 0, color: 0, kind: "parent" });
+    expect(rows[3]?.column).toBe(0);
+    expect(rows[3]?.lines).toContainEqual({ from: 1, to: 0, color: 1, kind: "incoming" });
     expect(lanes).toEqual([]);
+    const colored = layoutGitGraph(
+      commits,
+      [],
+      new Set(),
+      new Map([
+        ["merge", 4],
+        ["feature", 2],
+      ]),
+    );
+    expect(colored.rows.map((row) => row.column)).toEqual(rows.map((row) => row.column));
+    expect(colored.rows.map((row) => row.color)).toEqual([4, 2, 4, 4]);
+    expect(colored.rows[0]?.lines.map((line) => line.color)).toEqual([4, 2]);
+    expect(colored.rows[1]?.lines.find((line) => line.kind === "through")?.color).toBe(4);
+    expect(colored.rows[3]?.lines).toContainEqual({ from: 1, to: 0, color: 2, kind: "incoming" });
   });
 
   it("keeps all octopus merge parents until their rows arrive", () => {
@@ -150,16 +166,21 @@ describe("Git Explorer graph", () => {
   });
 
   it("reuses a free lane without shifting a surviving branch", () => {
-    const graph = layoutGitGraph([
+    const commits = [
       { hash: "a", parents: ["root"] },
       { hash: "b", parents: ["other-root"] },
       { hash: "root", parents: [] },
       { hash: "c", parents: ["other-root"] },
       { hash: "other-root", parents: [] },
-    ]);
+    ];
+    const graph = layoutGitGraph(commits);
     expect(graph.rows.map((row) => row.column)).toEqual([0, 1, 0, 0, 1]);
-    expect(graph.rows[3]?.lines).toContainEqual({ from: 0, to: 1, color: 1, kind: "parent" });
+    expect(graph.rows[3]?.lines).toContainEqual({ from: 0, to: 0, color: 0, kind: "parent" });
+    expect(graph.rows[4]?.lines).toContainEqual({ from: 0, to: 1, color: 0, kind: "incoming" });
     expect(graph.lanes).toEqual([]);
+    const first = layoutGitGraph(commits.slice(0, 4));
+    const second = layoutGitGraph(commits.slice(4), first.continuation);
+    expect([...first.rows, ...second.rows]).toEqual(graph.rows);
   });
 
   it("preserves geometry across page boundaries and leaves shallow parents open", () => {
@@ -176,6 +197,21 @@ describe("Git Explorer graph", () => {
     expect(second.lanes).toEqual(combined.lanes);
     expect(second.lanes.filter(Boolean)).toEqual(["shallow-boundary"]);
     expect(first.lanes).toEqual(["base", "b"]);
+    const colors = new Map([
+      ["m", 4],
+      ["b", 2],
+    ]);
+    const emphasized = new Set(["m"]);
+    const coloredFirst = layoutGitGraph(commits.slice(0, 2), [], emphasized, colors);
+    const coloredSecond = layoutGitGraph(
+      commits.slice(2),
+      coloredFirst.continuation,
+      emphasized,
+      colors,
+    );
+    expect([...coloredFirst.rows, ...coloredSecond.rows]).toEqual(
+      layoutGitGraph(commits, [], emphasized, colors).rows,
+    );
   });
 
   it("keeps a long linear history in a single lane", () => {

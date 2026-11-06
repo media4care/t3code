@@ -49,7 +49,7 @@ export function GitExplorerStashAction(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !pending) props.onClose();
+        if (!open) props.onClose();
       }}
     >
       <DialogPopup>
@@ -96,8 +96,8 @@ export function GitExplorerStashAction(props: {
             ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" disabled={pending} onClick={props.onClose}>
-              {failureMessage ? "Close" : "Cancel"}
+            <Button variant="outline" onClick={props.onClose}>
+              {pending || failureMessage ? "Close" : "Cancel"}
             </Button>
             <Button
               type="submit"

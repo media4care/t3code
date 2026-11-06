@@ -69,6 +69,229 @@ const fixture = Effect.gen(function* () {
 });
 
 it.layer(layer)("GitExplorer", (it) => {
+  it.effect.each(["soft", "mixed", "hard"] as const)(
+    "resets the current branch with %s semantics and keeps its previous tip recoverable",
+    (resetMode) =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        yield* git(["branch", "other"]);
+        yield* write("hello.txt", "second\n");
+        yield* git(["commit", "-am", "second"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        yield* write("hello.txt", "staged\n");
+        yield* git(["add", "hello.txt"]);
+        yield* write("hello.txt", "working\n");
+        yield* write("untracked.txt", "keep me\n");
+        yield* explorer.runAction({
+          ...scope,
+          action: "reset",
+          expectedHead: head,
+          expectedBranch: "main",
+          revision: root,
+          resetMode,
+        });
+        const overview = yield* explorer.overview(scope);
+        assert.equal(overview.headHash, root);
+        assert.equal(overview.headBranch, "main");
+        assert.equal(yield* git(["rev-parse", "refs/heads/other"]), root);
+        assert.equal(yield* git(["rev-parse", "ORIG_HEAD"]), head);
+        assert.equal(yield* git(["rev-parse", "main@{1}"]), head);
+        assert.equal(yield* git(["show", ":hello.txt"]), resetMode === "soft" ? "staged" : "first");
+        assert.equal(
+          yield* fs.readFileString(path.join(cwd, "hello.txt")),
+          resetMode === "hard" ? "first\n" : "working\n",
+        );
+        assert.equal(yield* fs.readFileString(path.join(cwd, "untracked.txt")), "keep me\n");
+      }),
+  );
+
+  it.effect("resets only the branch in the selected linked worktree", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root, fs, path } = yield* fixture;
+      yield* write("hello.txt", "second\n");
+      yield* git(["commit", "-am", "second"]);
+      const head = yield* git(["rev-parse", "HEAD"]);
+      const worktreePath = path.join(yield* fs.makeTempDirectoryScoped(), "linked");
+      yield* git(["worktree", "add", "-b", "topic", worktreePath]);
+      yield* explorer.runAction({
+        ...scope,
+        worktreePath,
+        action: "reset",
+        revision: root,
+        resetMode: "hard",
+        expectedHead: head,
+        expectedBranch: "topic",
+      });
+      assert.equal(yield* git(["rev-parse", "refs/heads/topic"]), root);
+      assert.equal(yield* git(["rev-parse", "HEAD"]), head);
+      assert.equal(yield* fs.readFileString(path.join(worktreePath, "hello.txt")), "first\n");
+    }),
+  );
+
+  it.effect(
+    "rejects reset requests with stale HEAD or branch, detached HEAD, missing modes and non-commit targets",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root } = yield* fixture;
+        yield* write("hello.txt", "second\n");
+        yield* git(["commit", "-am", "second"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const target = {
+          ...scope,
+          action: "reset" as const,
+          expectedHead: head,
+          expectedBranch: "main",
+          revision: root,
+          resetMode: "hard" as const,
+        };
+        for (const request of [
+          { ...target, expectedHead: root },
+          { ...target, expectedBranch: "other" },
+        ])
+          assert.equal(
+            (yield* explorer.runAction(request).pipe(Effect.flip)).reason,
+            "worktree-changed",
+          );
+        assert.equal(
+          (yield* explorer.runAction({ ...target, resetMode: undefined }).pipe(Effect.flip)).reason,
+          "invalid-reset",
+        );
+        const blob = yield* git(["rev-parse", "HEAD:hello.txt"]);
+        for (const revision of [blob, "f".repeat(40), undefined]) {
+          assert.equal(
+            (yield* explorer.runAction({ ...target, revision }).pipe(Effect.flip)).reason,
+            "invalid-revision",
+          );
+        }
+        assert.equal(yield* git(["rev-parse", "HEAD"]), head);
+        yield* git(["checkout", "--detach", head]);
+        assert.equal(
+          (yield* explorer.runAction({ ...target, expectedBranch: null }).pipe(Effect.flip)).reason,
+          "invalid-reset",
+        );
+        assert.equal(yield* git(["rev-parse", "HEAD"]), head);
+      }),
+  );
+
+  it.effect(
+    "creates tags at selected commits and pushes only the selected tag to a configured remote",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-tags-" });
+        yield* git(["init", "--bare", remote]);
+        yield* git(["remote", "add", "publish", remote]);
+        yield* write("hello.txt", "second\n");
+        yield* git(["commit", "-am", "second"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const target = { ...scope, expectedHead: head, expectedBranch: "main", revision: root };
+        yield* git(["config", "tag.gpgSign", "true"]);
+        yield* explorer.runAction({ ...target, action: "create-tag", tagName: "v1.0" });
+        assert.equal(yield* git(["rev-parse", "refs/tags/v1.0"]), root);
+        yield* explorer.runAction({
+          ...target,
+          action: "create-tag",
+          tagName: "v1.1",
+          message: "Release notes",
+        });
+        assert.equal(yield* git(["cat-file", "-t", "refs/tags/v1.1"]), "tag");
+        assert.include(yield* git(["cat-file", "-p", "refs/tags/v1.1"]), "Release notes");
+        assert.deepEqual((yield* explorer.overview(scope)).remotes, ["publish"]);
+        yield* explorer.runAction({
+          ...target,
+          action: "create-tag",
+          tagName: "unrelated",
+          message: "Keep local",
+        });
+        yield* git(["config", "push.followTags", "true"]);
+        yield* fs.writeFileString(path.join(cwd, ".git/hooks/pre-push"), "#!/bin/sh\nexit 1\n", {
+          mode: 0o755,
+        });
+        yield* explorer.runAction({
+          ...target,
+          action: "push-tag",
+          tagName: "v1.1",
+          remote: "publish",
+        });
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1^{commit}"]),
+          root,
+        );
+        assert.equal(
+          yield* git(["--git-dir", remote, "for-each-ref", "--format=%(refname)"]),
+          "refs/tags/v1.1",
+        );
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1"]),
+          yield* git(["rev-parse", "refs/tags/v1.1"]),
+        );
+        yield* explorer.runAction({ ...target, action: "delete-tag", tagName: "v1.1" });
+        assert.equal(yield* git(["tag", "--list"]), "unrelated\nv1.0");
+        assert.equal(
+          yield* git(["--git-dir", remote, "rev-parse", "refs/tags/v1.1^{commit}"]),
+          root,
+        );
+        assert.equal(yield* git(["rev-parse", "HEAD"]), head);
+      }),
+  );
+
+  it.effect(
+    "rejects invalid, duplicate and moved tags and keeps local tags after a rejected push",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, write, root, fs } = yield* fixture;
+        const target = { ...scope, expectedHead: root, expectedBranch: "main", revision: root };
+        for (const tagName of ["--bad", "bad..name", "bad:name"]) {
+          const failure = yield* explorer
+            .runAction({ ...target, action: "create-tag", tagName })
+            .pipe(Effect.flip);
+          assert.equal(failure._tag, "GitExplorerError");
+        }
+        yield* explorer.runAction({ ...target, action: "create-tag", tagName: "release" });
+        assert.isTrue(
+          yield* explorer
+            .runAction({ ...target, action: "create-tag", tagName: "release" })
+            .pipe(Effect.isFailure),
+        );
+        assert.isTrue(
+          yield* explorer
+            .runAction({
+              ...target,
+              action: "push-tag",
+              tagName: "release",
+              remote: "not-configured",
+            })
+            .pipe(Effect.isFailure),
+        );
+        yield* write("hello.txt", "new\n");
+        yield* git(["commit", "-am", "new"]);
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const current = { ...target, expectedHead: head };
+        yield* git(["tag", "--no-sign", "-f", "release", head]);
+        assert.isTrue(
+          yield* explorer
+            .runAction({ ...current, action: "delete-tag", tagName: "release" })
+            .pipe(Effect.isFailure),
+        );
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-tags-rejected-" });
+        yield* git(["init", "--bare", remote]);
+        yield* git(["remote", "add", "origin", remote]);
+        yield* git(["push", "origin", `${root}:refs/tags/release`]);
+        assert.isTrue(
+          yield* explorer
+            .runAction({
+              ...current,
+              revision: head,
+              action: "push-tag",
+              tagName: "release",
+              remote: "origin",
+            })
+            .pipe(Effect.isFailure),
+        );
+        assert.equal(yield* git(["rev-parse", "refs/tags/release"]), head);
+        assert.equal(yield* git(["--git-dir", remote, "rev-parse", "refs/tags/release"]), root);
+      }),
+  );
   it.effect(
     "pops the selected stash after its list position changes and restores staged files",
     () =>

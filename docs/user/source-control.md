@@ -44,6 +44,20 @@ checked-out branch's ancestry. Right-click commits or branches to copy their has
 Right-click a changed file to copy its path, open its current worktree version in an editor,
 or reveal it in the environment's file manager.
 
+Right-click a commit and choose **Reset _branch_ to this commit…** to move the checked-out
+branch to it. On mobile, select a commit and use **Reset branch…**. Choose **Soft** to keep
+staged changes and working files, **Mixed** to keep files and unstage changes, or **Hard** to
+discard staged and tracked working changes. Hard reset may also delete untracked files that
+obstruct tracked paths. Remote branches are unaffected. The previous branch tip remains in
+Git's reflog; discarded file changes cannot be recovered by moving the branch back.
+
+Use **Tag** on web and desktop, or **Add tag** on mobile, to tag the selected commit or HEAD.
+On web and desktop you can also right-click a commit and choose **Tag…**. An optional annotation
+creates an annotated tag. Enable **Push tag to remote** to publish it to a configured remote.
+A failed push keeps the local tag so you can retry. To push an existing tag or delete it locally,
+right-click the tag on web and desktop, or select its commit and use **Manage tags** on mobile.
+Deleting a local tag keeps any published copy on the remote.
+
 Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
 base commit, including saved untracked files. Stashes are listed separately from the graph.
 Reviewing a stash does not apply or remove it.

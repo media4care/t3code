@@ -40,7 +40,9 @@ import { GitExplorerBranchAction } from "./GitExplorerBranchAction";
 import { GitExplorerStashAction, type GitExplorerStashActionKind } from "./GitExplorerStashAction";
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
 import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
+import { GitExplorerResetAction } from "./GitExplorerResetAction";
 import { GitExplorerHistory } from "./GitExplorerHistory";
+import { GitExplorerTagAction, type GitExplorerTagRequest } from "./GitExplorerTagAction";
 import { GitExplorerHistoryFilters } from "./GitExplorerHistoryFilters";
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerHint } from "./GitExplorerHint";
@@ -146,6 +148,8 @@ function RepositoryExplorer({
     action: GitExplorerStashActionKind;
     stash: GitExplorerStash;
   } | null>(null);
+  const [resetRevision, setResetRevision] = useState<string | null>(null);
+  const [tagAction, setTagAction] = useState<GitExplorerTagRequest | null>(null);
   const canManageStashes = useAtomValue(
     gitExplorerEnvironment.runAction.permissionAtom(environmentId),
   );
@@ -157,7 +161,12 @@ function RepositoryExplorer({
   const deleteUnavailable =
     environment?.connection.phase !== "connected"
       ? "Connect to this environment before deleting a branch."
-      : actionBusy || branchDeletion !== null || branchAction !== null || stashAction !== null
+      : actionBusy ||
+          branchDeletion !== null ||
+          branchAction !== null ||
+          stashAction !== null ||
+          tagAction !== null ||
+          resetRevision !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -181,6 +190,7 @@ function RepositoryExplorer({
   const overviewQuery = useGitExplorerQuery(gitExplorerEnvironment.overview(target));
   const overview = overviewQuery.data;
   const [selectedRevision, setSelectedRevision] = useState<string | null | undefined>(undefined);
+  const [historyReveal, setHistoryReveal] = useState<{ revision: string } | null>(null);
   const [historyFilters, setHistoryFilters] = useState<GitExplorerHistoryFilters>({
     historyScope: "all",
     searchField: "message",
@@ -257,6 +267,7 @@ function RepositoryExplorer({
     });
   const selectRevision = (revision: string | null) => {
     setSelectedRevision(revision);
+    setHistoryReveal(null);
     setShowReview(true);
     setShowBranches(false);
   };
@@ -358,6 +369,7 @@ function RepositoryExplorer({
             input={input}
             overview={overview}
             selectedRevision={selectedRevision}
+            onAddTag={(revision) => setTagAction({ action: "create", revision })}
             onStashAction={(action, stash) => setStashAction({ action, stash })}
             connected={environment?.connection.phase === "connected"}
             busy={
@@ -365,14 +377,22 @@ function RepositoryExplorer({
               pendingBranch !== null ||
               branchDeletion !== null ||
               branchAction !== null ||
-              stashAction !== null
+              stashAction !== null ||
+              tagAction !== null ||
+              resetRevision !== null
             }
             onBusyChange={setActionBusy}
             refresh={refresh}
           />
         ) : null}
         {overview ? (
-          <GitExplorerHistoryFilters filters={historyFilters} onChange={setHistoryFilters} />
+          <GitExplorerHistoryFilters
+            filters={historyFilters}
+            onChange={(filters) => {
+              setHistoryReveal(null);
+              setHistoryFilters(filters);
+            }}
+          />
         ) : (
           <span className="flex-1" />
         )}
@@ -402,6 +422,28 @@ function RepositoryExplorer({
               selectRevision(null);
             setStashAction(null);
           }}
+        />
+      ) : null}
+      {overview && resetRevision ? (
+        <GitExplorerResetAction
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          revision={resetRevision}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setResetRevision(null)}
+        />
+      ) : null}
+      {overview && tagAction ? (
+        <GitExplorerTagAction
+          {...tagAction}
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setTagAction(null)}
         />
       ) : null}
       {overview && branchAction ? (
@@ -452,7 +494,26 @@ function RepositoryExplorer({
                 input={input}
                 overview={overview}
                 selectedRevision={selectedRevision}
-                onSelect={selectRevision}
+                tagActions={{
+                  unavailable: deleteUnavailable,
+                  onAction: (action, reference) =>
+                    setTagAction({
+                      action,
+                      revision: reference.hash,
+                      tagName: reference.shortName,
+                    }),
+                }}
+                onSelect={(revision) => {
+                  selectRevision(revision);
+                  if (revision && overview.refs.some((reference) => reference.hash === revision)) {
+                    setHistoryFilters((filters) => ({
+                      ...filters,
+                      historyScope: "all",
+                      search: "",
+                    }));
+                    setHistoryReveal({ revision });
+                  }
+                }}
                 active={split || showBranches}
                 onOpenSubmodule={(path) =>
                   openRepository(submodulePath ? `${submodulePath}/${path}` : path)
@@ -529,6 +590,13 @@ function RepositoryExplorer({
                   input={input}
                   overview={overview}
                   selectedRevision={selectedRevision}
+                  revealRequest={historyReveal}
+                  onAddTag={(revision) => setTagAction({ action: "create", revision })}
+                  onReset={setResetRevision}
+                  resetUnavailable={
+                    !canManageStashes || deleteUnavailable !== null || pendingBranch !== null
+                  }
+                  tagUnavailable={deleteUnavailable}
                   onSelect={selectRevision}
                   refresh={refresh}
                   refreshRevision={refreshRevision}
@@ -567,7 +635,9 @@ function RepositoryExplorer({
                         pendingBranch !== null ||
                         branchDeletion !== null ||
                         branchAction !== null ||
-                        stashAction !== null,
+                        stashAction !== null ||
+                        tagAction !== null ||
+                        resetRevision !== null,
                       refresh,
                       onBusyChange: setActionBusy,
                     }}
