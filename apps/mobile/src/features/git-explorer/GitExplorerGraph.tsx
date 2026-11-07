@@ -1,3 +1,7 @@
+import {
+  GIT_EXPLORER_COLORS,
+  gitExplorerReferenceColors,
+} from "@t3tools/client-runtime/git-explorer-colors";
 import { memo, useMemo, useState } from "react";
 import { FlatList, Pressable, ScrollView, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -15,7 +19,7 @@ import { Menu } from "../../components/ui/Menu";
 import { cn } from "../../lib/cn";
 import type { GitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 
-const COLORS = ["#60a5fa", "#34d399", "#c084fc", "#fb923c", "#f472b6", "#22d3ee"];
+const COLORS = GIT_EXPLORER_COLORS.map((color) => color.value);
 const STATUS_LABELS = {
   "local-only": "Ahead of upstream",
   "upstream-only": "Upstream only",
@@ -101,7 +105,7 @@ const GraphCommit = memo(function GraphCommit(props: {
             cx={x(graph.column)}
             cy={nodeY}
             r={props.isHead ? 4.5 : 3.3}
-            fill={COLORS[graph.column % COLORS.length]}
+            fill={COLORS[graph.color % COLORS.length]}
           />
           {props.isHead ? <Circle cx={x(graph.column)} cy={nodeY} r={1.5} fill="#ffffff" /> : null}
         </Svg>
@@ -206,7 +210,11 @@ export function GitExplorerGraph(props: {
   readonly menu: GitExplorerCommitMenu;
 }) {
   const rowHeight = props.tablet ? 26 : 36;
-  const layout = useMemo(() => layoutGitGraph(props.commits), [props.commits]);
+  const layout = useMemo(
+    () =>
+      layoutGitGraph(props.commits, [], new Set(), gitExplorerReferenceColors(props.overview.refs)),
+    [props.commits, props.overview.refs],
+  );
   const laneCount = layout.rows.reduce((max, row) => Math.max(max, row.laneCount), 1);
   const graphWidth = Math.max(props.tablet ? 58 : 30, laneCount * 14 + 6);
   const [viewportWidth, setViewportWidth] = useState(320);

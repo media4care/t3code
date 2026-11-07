@@ -1,3 +1,4 @@
+import { gitExplorerReferenceColors } from "@t3tools/client-runtime/git-explorer-colors";
 import { useMemo, useState, type ReactNode } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import type {
@@ -62,6 +63,10 @@ export function GitExplorerBranches(props: {
   readonly onOpenSubmodule: (path: string) => void;
   readonly onRefresh: () => void;
 }) {
+  const colors = useMemo(
+    () => gitExplorerReferenceColors(props.overview.refs),
+    [props.overview.refs],
+  );
   const rowHeight = props.tablet ? 28 : 36;
   const sidebar = props.sidebar !== undefined;
   const actions = useGitExplorerBranchActions(props.params, props.onRefresh);
@@ -426,6 +431,7 @@ export function GitExplorerBranches(props: {
           return (
             <GitExplorerBranchRow
               branch={item.ref}
+              color={colors.get(item.ref.hash) ?? 0}
               displayName={item.displayName}
               statusBranches={item.statusBranches}
               overview={props.overview}

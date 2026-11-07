@@ -1,7 +1,11 @@
 import { prepareGitExplorerBranchDeletion } from "@t3tools/client-runtime/git-explorer";
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { GitExplorerBranchStatus, GitExplorerRef } from "@t3tools/contracts";
+import type {
+  GitExplorerBranchStatus,
+  GitExplorerRef,
+  GitExplorerOverviewResult,
+} from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 
@@ -50,6 +54,10 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
   );
   const connected = environment?.connectionState === "connected";
   const run = useAtomCommand(gitExplorerEnvironment.deleteBranch, { reportFailure: false });
+  const canSwitch = useAtomValue(
+    gitExplorerEnvironment.runAction.permissionAtom(target.environmentId),
+  );
+  const runSwitch = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
   const pending = useRef(false);
   const [busyBranch, setBusyBranch] = useState<string | null>(null);
   const unavailableReason = !connected
@@ -57,8 +65,60 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     : !canWrite
       ? "This connection cannot change source control."
       : busyBranch
-        ? "A branch deletion is in progress."
+        ? "A branch action is in progress."
         : null;
+
+  const switchUnavailable = !connected
+    ? "Reconnect to switch branches."
+    : !canSwitch
+      ? "This connection cannot change source control."
+      : busyBranch
+        ? "A branch action is in progress."
+        : null;
+  const confirmSwitch = (ref: GitExplorerRef, overview: GitExplorerOverviewResult) => {
+    if (
+      switchUnavailable ||
+      pending.current ||
+      ref.kind !== "local" ||
+      ref.shortName === overview.headBranch
+    )
+      return;
+    Dialog.confirm({
+      title: "Switch branch",
+      message: `Switch ${overview.selectedWorktreePath} to ${ref.shortName}. Local changes are kept; Git will refuse if they would be overwritten.`,
+      confirmText: "Switch branch",
+      onConfirm: () => {
+        if (pending.current) return;
+        pending.current = true;
+        setBusyBranch(ref.name);
+        void runSwitch({
+          ...target,
+          input: {
+            ...target.input,
+            action: "switch",
+            branchName: ref.name,
+            branchHash: ref.hash,
+            expectedHead: overview.headHash,
+            expectedBranch: overview.headBranch,
+          },
+        })
+          .then((result) => {
+            if (AsyncResult.isFailure(result)) {
+              const failure = squashAtomCommandFailure(result);
+              Dialog.alert(
+                "Could not switch branch",
+                failure instanceof Error ? failure.message : "Refresh and try again.",
+              );
+            }
+          })
+          .finally(() => {
+            pending.current = false;
+            setBusyBranch(null);
+            onRefresh();
+          });
+      },
+    });
+  };
 
   const confirmDelete = (ref: GitExplorerRef, status: GitExplorerBranchStatus) => {
     if (
@@ -106,5 +166,5 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     });
   };
 
-  return { busyBranch, unavailableReason, confirmDelete };
+  return { busyBranch, unavailableReason, confirmDelete, switchUnavailable, confirmSwitch };
 }
