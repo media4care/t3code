@@ -11,9 +11,13 @@ function subscribeToAppState(onChange: () => void) {
 }
 const appIsActive = () => AppState.currentState === "active";
 
+export function useAppForeground() {
+  return useSyncExternalStore(subscribeToAppState, appIsActive, appIsActive);
+}
+
 export function useGitExplorerActive() {
   const focused = useIsFocused();
-  const foreground = useSyncExternalStore(subscribeToAppState, appIsActive, appIsActive);
+  const foreground = useAppForeground();
   return focused && foreground;
 }
 
