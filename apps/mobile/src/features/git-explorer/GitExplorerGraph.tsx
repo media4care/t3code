@@ -11,7 +11,9 @@ import type {
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { Button } from "../../components/ui/Button";
+import { Menu } from "../../components/ui/Menu";
 import { cn } from "../../lib/cn";
+import type { GitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 
 const COLORS = ["#60a5fa", "#34d399", "#c084fc", "#fb923c", "#f472b6", "#22d3ee"];
 const STATUS_LABELS = {
@@ -35,8 +37,9 @@ const GraphCommit = memo(function GraphCommit(props: {
   readonly headBranch: string | null;
   readonly selected: boolean;
   readonly onSelect: (hash: string) => void;
+  readonly menu: GitExplorerCommitMenu;
 }) {
-  const { graph, commit, rowHeight } = props;
+  const { graph, commit, rowHeight, menu } = props;
   const preferredBranch =
     props.refs.find(
       (ref) =>
@@ -59,124 +62,133 @@ const GraphCommit = memo(function GraphCommit(props: {
       : commit.upstreamStatus === "upstream-only"
         ? "↓"
         : "";
+  const tags = props.refs.filter((ref) => ref.kind === "tag");
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${props.isHead ? "HEAD. " : ""}${commit.subject}. ${commit.hash.slice(0, 8)}. ${commit.authorName}. ${props.refs.map((ref) => `${ref.kind === "tag" ? "Tag " : ""}${ref.shortName}`).join(", ")}. ${props.worktrees}. ${STATUS_LABELS[commit.upstreamStatus]}`}
-      accessibilityState={{ selected: props.selected }}
-      onPress={() => props.onSelect(commit.hash)}
-      style={{ height: rowHeight }}
-      className={cn(
-        "flex-row items-center px-1",
-        props.selected ? "bg-primary/10" : "bg-sheet-solid",
-      )}
+    <Menu
+      shouldOpenOnLongPress
+      title={`${commit.hash.slice(0, 7)} · ${commit.subject || "(No commit message)"}`}
+      actions={menu.getActions(commit.hash, tags)}
+      onPressAction={({ nativeEvent }) => menu.onAction(commit.hash, nativeEvent.event)}
     >
-      <Svg width={props.graphWidth} height={rowHeight} accessible={false}>
-        {graph.lines.map((line) => {
-          const startY = line.kind === "parent" ? nodeY : 0;
-          const endY = line.kind === "incoming" ? nodeY : rowHeight;
-          const midY = (startY + endY) / 2;
-          return (
-            <Path
-              key={`${line.kind}:${line.from}:${line.to}`}
-              d={`M ${x(line.from)} ${startY} C ${x(line.from)} ${midY} ${x(line.to)} ${midY} ${x(line.to)} ${endY}`}
-              stroke={COLORS[line.color % COLORS.length]}
-              strokeWidth={1.6}
-              fill="none"
-            />
-          );
-        })}
-        <Circle
-          cx={x(graph.column)}
-          cy={nodeY}
-          r={props.isHead ? 4.5 : 3.3}
-          fill={COLORS[graph.column % COLORS.length]}
-        />
-        {props.isHead ? <Circle cx={x(graph.column)} cy={nodeY} r={1.5} fill="#ffffff" /> : null}
-      </Svg>
-      <View className="min-w-0 flex-1 justify-center pl-1">
-        <View className="h-[14px] min-w-0 flex-row items-center gap-1">
-          {props.refs.length > 0 || props.isHead ? (
-            <View
-              style={{ maxWidth: "48%" }}
-              className="h-[14px] shrink flex-row items-center gap-1 overflow-hidden"
+      <Pressable
+        accessibilityRole="button"
+        accessibilityHint="Touch and hold for commit actions."
+        accessibilityLabel={`${props.isHead ? "HEAD. " : ""}${commit.subject}. ${commit.hash.slice(0, 8)}. ${commit.authorName}. ${props.refs.map((ref) => `${ref.kind === "tag" ? "Tag " : ""}${ref.shortName}`).join(", ")}. ${props.worktrees}. ${STATUS_LABELS[commit.upstreamStatus]}`}
+        accessibilityState={{ selected: props.selected }}
+        onPress={() => props.onSelect(commit.hash)}
+        style={{ height: rowHeight }}
+        className={cn(
+          "flex-row items-center px-1",
+          props.selected ? "bg-primary/10" : "bg-sheet-solid",
+        )}
+      >
+        <Svg width={props.graphWidth} height={rowHeight} accessible={false}>
+          {graph.lines.map((line) => {
+            const startY = line.kind === "parent" ? nodeY : 0;
+            const endY = line.kind === "incoming" ? nodeY : rowHeight;
+            const midY = (startY + endY) / 2;
+            return (
+              <Path
+                key={`${line.kind}:${line.from}:${line.to}`}
+                d={`M ${x(line.from)} ${startY} C ${x(line.from)} ${midY} ${x(line.to)} ${midY} ${x(line.to)} ${endY}`}
+                stroke={COLORS[line.color % COLORS.length]}
+                strokeWidth={1.6}
+                fill="none"
+              />
+            );
+          })}
+          <Circle
+            cx={x(graph.column)}
+            cy={nodeY}
+            r={props.isHead ? 4.5 : 3.3}
+            fill={COLORS[graph.column % COLORS.length]}
+          />
+          {props.isHead ? <Circle cx={x(graph.column)} cy={nodeY} r={1.5} fill="#ffffff" /> : null}
+        </Svg>
+        <View className="min-w-0 flex-1 justify-center pl-1">
+          <View className="h-[14px] min-w-0 flex-row items-center gap-1">
+            {props.refs.length > 0 || props.isHead ? (
+              <View
+                style={{ maxWidth: "48%" }}
+                className="h-[14px] shrink flex-row items-center gap-1 overflow-hidden"
+              >
+                {props.isHead ? (
+                  <Text className="h-[14px] rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] font-t3-semibold text-foreground">
+                    HEAD
+                  </Text>
+                ) : null}
+                {visibleRefs.map((ref) => (
+                  <Text
+                    key={ref.name}
+                    numberOfLines={1}
+                    className="h-[14px] shrink rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] text-foreground"
+                  >
+                    {ref.kind === "tag" ? "tag " : ""}
+                    {ref.shortName}
+                  </Text>
+                ))}
+                {props.refs.length > visibleRefs.length ? (
+                  <Text className="text-[10px] leading-[14px] text-foreground-muted">
+                    +{props.refs.length - visibleRefs.length}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <Text
+              numberOfLines={1}
+              className="min-w-0 flex-1 text-[12px] leading-[14px] text-foreground"
             >
-              {props.isHead ? (
-                <Text className="h-[14px] rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] font-t3-semibold text-foreground">
-                  HEAD
-                </Text>
-              ) : null}
-              {visibleRefs.map((ref) => (
-                <Text
-                  key={ref.name}
-                  numberOfLines={1}
-                  className="h-[14px] shrink rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] text-foreground"
-                >
-                  {ref.kind === "tag" ? "tag " : ""}
-                  {ref.shortName}
-                </Text>
-              ))}
-              {props.refs.length > visibleRefs.length ? (
-                <Text className="text-[10px] leading-[14px] text-foreground-muted">
-                  +{props.refs.length - visibleRefs.length}
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-          <Text
-            numberOfLines={1}
-            className="min-w-0 flex-1 text-[12px] leading-[14px] text-foreground"
-          >
-            {commit.subject || "(No commit message)"}
-          </Text>
-          {direction ? (
-            <Text className="pr-1 text-[12px] leading-[14px] font-t3-semibold text-primary-text">
-              {direction}
+              {commit.subject || "(No commit message)"}
+            </Text>
+            {direction ? (
+              <Text className="pr-1 text-[12px] leading-[14px] font-t3-semibold text-primary-text">
+                {direction}
+              </Text>
+            ) : null}
+            {props.worktrees ? (
+              <Text className="pr-1 text-[10px] leading-[14px] text-foreground-muted">WT</Text>
+            ) : null}
+          </View>
+          {!props.tablet ? (
+            <Text
+              numberOfLines={1}
+              className="mt-[2px] text-[10px] leading-[12px] text-foreground-muted"
+            >
+              {commit.hash.slice(0, 7)} · {commit.authorName} ·{" "}
+              {new Date(commit.committedAt).toLocaleDateString()}
             </Text>
           ) : null}
-          {props.worktrees ? (
-            <Text className="pr-1 text-[10px] leading-[14px] text-foreground-muted">WT</Text>
-          ) : null}
         </View>
-        {!props.tablet ? (
-          <Text
-            numberOfLines={1}
-            className="mt-[2px] text-[10px] leading-[12px] text-foreground-muted"
-          >
-            {commit.hash.slice(0, 7)} · {commit.authorName} ·{" "}
-            {new Date(commit.committedAt).toLocaleDateString()}
-          </Text>
+        {props.tablet ? (
+          <>
+            <Text
+              numberOfLines={1}
+              style={{ width: 67 }}
+              className="pl-2 font-mono text-[11px] leading-[14px] text-foreground-muted"
+            >
+              {commit.hash.slice(0, 7)}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={{ width: 106 }}
+              className="pl-2 text-[11px] leading-[14px] text-foreground-muted"
+            >
+              {commit.authorName}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={{ width: 64 }}
+              className="px-2 text-[11px] leading-[14px] text-foreground-muted"
+            >
+              {new Date(commit.committedAt).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+              })}
+            </Text>
+          </>
         ) : null}
-      </View>
-      {props.tablet ? (
-        <>
-          <Text
-            numberOfLines={1}
-            style={{ width: 67 }}
-            className="pl-2 font-mono text-[11px] leading-[14px] text-foreground-muted"
-          >
-            {commit.hash.slice(0, 7)}
-          </Text>
-          <Text
-            numberOfLines={1}
-            style={{ width: 106 }}
-            className="pl-2 text-[11px] leading-[14px] text-foreground-muted"
-          >
-            {commit.authorName}
-          </Text>
-          <Text
-            numberOfLines={1}
-            style={{ width: 64 }}
-            className="px-2 text-[11px] leading-[14px] text-foreground-muted"
-          >
-            {new Date(commit.committedAt).toLocaleDateString(undefined, {
-              month: "short",
-              day: "numeric",
-            })}
-          </Text>
-        </>
-      ) : null}
-    </Pressable>
+      </Pressable>
+    </Menu>
   );
 });
 
@@ -191,6 +203,7 @@ export function GitExplorerGraph(props: {
   readonly error: string | null;
   readonly onRefresh: () => void;
   readonly tablet: boolean;
+  readonly menu: GitExplorerCommitMenu;
 }) {
   const rowHeight = props.tablet ? 26 : 36;
   const layout = useMemo(() => layoutGitGraph(props.commits), [props.commits]);
@@ -307,6 +320,7 @@ export function GitExplorerGraph(props: {
                   headBranch={props.overview.headBranch}
                   selected={props.selectedRevision === item.hash}
                   onSelect={props.onSelect}
+                  menu={props.menu}
                 />
               ) : null;
             }}
