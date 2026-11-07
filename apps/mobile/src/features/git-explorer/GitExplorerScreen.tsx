@@ -1,6 +1,12 @@
-import { useCallback, useState } from "react";
+import { use, useContext, useState } from "react";
 import { FlatList, Platform, Pressable, View } from "react-native";
-import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { RegistryContext } from "@effect/atom-react";
+import {
+  CommonActions,
+  StackActions,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,7 +16,10 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
+import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
+import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useProject, useProjects } from "../../state/entities";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { GitExplorerBranches } from "./GitExplorerBranches";
@@ -19,8 +28,38 @@ import { GitExplorerChanges } from "./GitExplorerChanges";
 import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
-import { useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
+import { useActiveGitQuery, useGitExplorerActive } from "./useActiveGitQuery";
+import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
+
+type GitExplorerRouteParams = GitExplorerParams & { readonly revision?: string | undefined };
+
+function readRouteParams(params: object | undefined): GitExplorerRouteParams | null {
+  if (!params || !("environmentId" in params) || !("projectId" in params)) return null;
+  const { environmentId, projectId } = params;
+  if (typeof environmentId !== "string" || typeof projectId !== "string") return null;
+  const optional = (key: "worktreePath" | "submodulePath" | "revision") => {
+    const value: unknown = key in params ? params[key as keyof typeof params] : undefined;
+    return typeof value === "string" ? { [key]: value } : {};
+  };
+  return {
+    environmentId,
+    projectId,
+    ...optional("worktreePath"),
+    ...optional("submodulePath"),
+    ...optional("revision"),
+  };
+}
+
+/** On iPad the workspace list column carries the open repository's branches, like the thread list. */
+function useBranchesInListColumn() {
+  const { layout } = useAdaptiveWorkspaceLayout();
+  const workspace = useWorkspaceTabs();
+  return (
+    Platform.OS === "ios" && layout.usesSplitView && workspace?.state.selectedTab === "gitExplorer"
+  );
+}
 
 export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
   const navigation = useNavigation();
@@ -28,6 +67,12 @@ export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
+  const primaryColumn = use(NativePrimaryColumnContext);
+  const branchesInListColumn = useBranchesInListColumn();
+  const openRoute = primaryColumn?.gitExplorerRoute;
+  const openParams = openRoute ? readRouteParams(openRoute.params) : null;
+  if (props.workspace && branchesInListColumn && openRoute && openParams)
+    return <GitExplorerBranchesColumn routeKey={openRoute.key} params={openParams} />;
   return (
     <>
       {props.workspace && Platform.OS === "ios" ? null : (
@@ -80,30 +125,109 @@ export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
   );
 }
 
-export function GitExplorerScreen(props: StaticScreenProps<GitExplorerParams>) {
-  const routeScope = JSON.stringify(props.route.params);
-  const [selection, setSelection] = useState({
-    routeScope,
-    worktreePath: props.route.params.worktreePath,
-  });
-  const worktreePath =
-    selection.routeScope === routeScope ? selection.worktreePath : props.route.params.worktreePath;
-  const scopeKey = JSON.stringify([
-    props.route.params.environmentId,
-    props.route.params.projectId,
-    worktreePath,
-  ]);
+export function GitExplorerScreen(props: StaticScreenProps<GitExplorerRouteParams>) {
+  const navigation = useNavigation();
+  const { revision, ...params } = props.route.params;
+  const scopeKey = JSON.stringify([params.environmentId, params.projectId, params.worktreePath]);
   return (
     <GitExplorerRepository
       key={scopeKey}
-      params={{ ...props.route.params, worktreePath }}
-      onWorktreeChange={(path) => setSelection({ routeScope, worktreePath: path })}
+      params={params}
+      selectedRevision={revision ?? null}
+      onSelectRevision={(next) => navigation.setParams({ revision: next ?? undefined })}
+      onWorktreeChange={(path) => navigation.setParams({ worktreePath: path, revision: undefined })}
+    />
+  );
+}
+
+function GitExplorerBranchesColumn(props: {
+  readonly routeKey: string;
+  readonly params: GitExplorerRouteParams;
+}) {
+  const navigation = useNavigation();
+  const registry = useContext(RegistryContext);
+  const insets = useSafeAreaInsets();
+  const workspace = useWorkspaceTabs();
+  const active = useGitExplorerActive();
+  const { revision, ...params } = props.params;
+  const target = gitExplorerTarget(params);
+  const overview = useActiveGitQuery(gitExplorerEnvironment.overview(target), active);
+  const project = useProject({
+    environmentId: EnvironmentId.make(params.environmentId),
+    projectId: ProjectId.make(params.projectId),
+  });
+  const updateDetail = (next: Partial<GitExplorerRouteParams>) =>
+    navigation.dispatch({ ...CommonActions.setParams(next), source: props.routeKey });
+  const header = (
+    <View className="gap-0.5 px-3 pb-2">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={
+          params.submodulePath ? "Back to parent repository" : "Back to repositories"
+        }
+        onPress={() => navigation.dispatch({ ...CommonActions.goBack(), source: props.routeKey })}
+        className="-ml-1 flex-row items-center gap-1 self-start py-1 active:opacity-60"
+      >
+        <SymbolView name="chevron.left" size={12} tintColorClassName="accent-primary-text" />
+        <Text className="text-sm text-primary-text">
+          {params.submodulePath ? "Parent repository" : "Repositories"}
+        </Text>
+      </Pressable>
+      <Text numberOfLines={1} className="text-xl font-t3-semibold text-drawer-foreground">
+        {params.submodulePath
+          ? `${project?.title ?? "Repository"} › ${params.submodulePath}`
+          : (project?.title ?? "Repository")}
+      </Text>
+    </View>
+  );
+  if (!overview.data)
+    return (
+      <View className="flex-1 bg-drawer">
+        {overview.error ? (
+          <EmptyState
+            variant="plain"
+            title="Could not open Git Explorer"
+            detail={overview.error}
+            actionLabel="Retry"
+            onAction={() => gitExplorerEnvironment.refresh(registry, target)}
+          />
+        ) : (
+          <View className="p-8">
+            <AppActivityIndicator />
+          </View>
+        )}
+      </View>
+    );
+  return (
+    <GitExplorerBranches
+      overview={overview.data}
+      params={params}
+      active={active}
+      onRefresh={() => gitExplorerEnvironment.refresh(registry, target)}
+      selectedRevision={revision ?? null}
+      tablet
+      sidebar={{
+        header,
+        bottomInset: Math.max(insets.bottom, workspace?.bottomClearance ?? 0),
+      }}
+      onOpenSubmodule={(path) =>
+        navigation.dispatch({
+          ...StackActions.push("GitExplorer", {
+            ...params,
+            submodulePath: params.submodulePath ? `${params.submodulePath}/${path}` : path,
+          }),
+          source: props.routeKey,
+        })
+      }
+      onSelect={(hash) => updateDetail({ revision: hash })}
     />
   );
 }
 
 function GitExplorerRepository(props: {
   readonly params: GitExplorerParams;
+  readonly selectedRevision: string | null;
+  readonly onSelectRevision: (revision: string | null) => void;
   readonly onWorktreeChange: (path: string) => void;
 }) {
   const navigation = useNavigation();
@@ -120,18 +244,20 @@ function GitExplorerRepository(props: {
     onRefresh: explorer.refresh,
   });
   const [width, setWidth] = useState(0);
-  const [selectedRevision, setSelectedRevision] = useState<string | null>(null);
+  const selectedRevision = props.selectedRevision;
+  const branchesInListColumn = useBranchesInListColumn();
   const [reviewVisible, setReviewVisible] = useState(false);
   const [branchesVisible, setBranchesVisible] = useState(false);
   const split = width >= 700;
-  const branchRail = width >= 850;
+  const branchRail = width >= 850 && !branchesInListColumn;
+  const branchesPinned = branchRail || branchesInListColumn;
   const insets = useSafeAreaInsets();
   const columnMetrics = useNativeColumnLayoutMetrics();
   const safeArea = columnMetrics?.safeArea ?? insets;
-  const selectRevision = useCallback((revision: string | null) => {
-    setSelectedRevision(revision);
+  const selectRevision = (revision: string | null) => {
+    props.onSelectRevision(revision);
     setReviewVisible(true);
-  }, []);
+  };
   const currentBranch = overview?.refs.find(
     (ref) =>
       ref.kind === "local" &&
@@ -213,10 +339,10 @@ function GitExplorerRepository(props: {
             <>
               <View className="border-b border-border px-3 py-1">
                 <Pressable
-                  disabled={branchRail}
-                  accessibilityRole={branchRail ? undefined : "button"}
+                  disabled={branchesPinned}
+                  accessibilityRole={branchesPinned ? undefined : "button"}
                   accessibilityLabel={`${branchesVisible ? "Hide" : "Show"} branches, remotes, tags and stashes. Current branch ${overview.headBranch ?? "Detached HEAD"}, ${currentBranch ? formatGitExplorerSync(currentBranch) : "No upstream comparison"}`}
-                  accessibilityState={{ expanded: branchRail || branchesVisible }}
+                  accessibilityState={{ expanded: branchesPinned || branchesVisible }}
                   onPress={() => setBranchesVisible((visible) => !visible)}
                   className="min-h-9 flex-row items-center gap-2"
                   hitSlop={{ top: 4, bottom: 4 }}
@@ -233,7 +359,7 @@ function GitExplorerRepository(props: {
                   >
                     {currentBranch ? formatGitExplorerSync(currentBranch) : "No upstream"}
                   </Text>
-                  {!branchRail ? (
+                  {!branchesPinned ? (
                     <Text className="text-[11px] leading-[14px] text-primary-text">
                       Browse {branchesVisible ? "▴" : "▾"}
                     </Text>
@@ -256,7 +382,7 @@ function GitExplorerRepository(props: {
                   onRefresh={explorer.refresh}
                 />
               </View>
-              {!branchRail && branchesVisible ? (
+              {!branchesPinned && branchesVisible ? (
                 <View style={{ height: 240 }} className="border-b border-border bg-card">
                   <GitExplorerBranches
                     overview={overview}

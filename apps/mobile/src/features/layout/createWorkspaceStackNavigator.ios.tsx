@@ -84,6 +84,7 @@ function ColumnScreen(props: {
   readonly attached?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly selectedPullRequestKey?: string | null;
+  readonly gitExplorerRoute?: Route | undefined;
   readonly onDismiss: (routeKey: string, native: boolean) => void;
   readonly onAppearance: (type: "willAppear" | "didAppear" | "willDisappear", key: string) => void;
   readonly onCompose?: () => void;
@@ -102,6 +103,9 @@ function ColumnScreen(props: {
         presented,
         selectedThreadKey: props.selectedThreadKey ?? null,
         selectedPullRequestKey: props.selectedPullRequestKey ?? null,
+        gitExplorerRoute: props.gitExplorerRoute
+          ? { key: props.gitExplorerRoute.key, params: props.gitExplorerRoute.params }
+          : null,
       }
     : null;
   const key = descriptor.route.key;
@@ -236,6 +240,7 @@ function WorkspaceColumns(
   const collapsedColumn = useRef<CollapsedSplitColumn>({ visible: compactColumn, leaving: null });
   const threadParams = props.detail.findLast((route) => route.name === "Thread")?.params;
   const pullRequestParams = props.detail.findLast(isPullRequestRoute)?.params;
+  const gitExplorerRoute = props.detail.findLast((route) => route.name === "GitExplorer");
   const selectedPullRequestKey =
     pullRequestParams &&
     "environmentId" in pullRequestParams &&
@@ -371,6 +376,7 @@ function WorkspaceColumns(
             primary
             selectedThreadKey={selectedThreadKey}
             selectedPullRequestKey={selectedPullRequestKey}
+            gitExplorerRoute={gitExplorerRoute}
             onDismiss={handleNativeDismiss}
             onAppearance={followCollapsedSplit}
             navigation={props.navigation}

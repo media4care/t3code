@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import type {
   GitExplorerOverviewResult,
@@ -12,6 +12,12 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { cn } from "../../lib/cn";
+import { ThreadListV2Section } from "../threads/thread-list-v2-items";
+import {
+  THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
+  THREAD_LIST_V2_SIDEBAR_ROW_STYLE,
+  selectedThreadRowColors,
+} from "../threads/thread-list-v2-row-appearance";
 import { GitExplorerBranchRow } from "./GitExplorerBranchRow";
 import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
 import type { GitExplorerParams } from "./useGitExplorer";
@@ -49,12 +55,15 @@ export function GitExplorerBranches(props: {
   readonly params: GitExplorerParams;
   readonly active: boolean;
   readonly tablet: boolean;
+  /** Styled like the thread and pull request lists, for the workspace list column. */
+  readonly sidebar?: { readonly header: ReactNode; readonly bottomInset: number };
   readonly selectedRevision: string | null;
   readonly onSelect: (revision: string) => void;
   readonly onOpenSubmodule: (path: string) => void;
   readonly onRefresh: () => void;
 }) {
   const rowHeight = props.tablet ? 28 : 36;
+  const sidebar = props.sidebar !== undefined;
   const actions = useGitExplorerBranchActions(props.params, props.onRefresh);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<ReadonlyMap<string, string>>(new Map());
@@ -168,43 +177,46 @@ export function GitExplorerBranches(props: {
         unavailableReason={actions.unavailableReason}
       />
     );
+  const toolbar = (
+    <View className={cn("flex-row flex-wrap gap-1", sidebar ? "px-1 pb-1" : "p-1")}>
+      <Button
+        label={selecting ? "Cancel" : "Select branches"}
+        tone="text"
+        disabled={actions.unavailableReason !== null && !selecting}
+        onPress={() => {
+          setSelecting(!selecting);
+          setSelected(new Map());
+        }}
+      />
+      {selecting ? (
+        <>
+          <Button
+            label={
+              selectedReferences.length === localReferences.length ? "Clear all" : "Select all"
+            }
+            tone="text"
+            disabled={actions.unavailableReason !== null || localReferences.length === 0}
+            onPress={() =>
+              setSelected(
+                selectedReferences.length === localReferences.length
+                  ? new Map()
+                  : new Map(localReferences.map((ref) => [ref.name, ref.hash])),
+              )
+            }
+          />
+          <Button
+            label={`Delete selected (${selectedReferences.length})`}
+            tone="danger"
+            disabled={actions.unavailableReason !== null || selectedReferences.length === 0}
+            onPress={() => setDeleting(selectedReferences)}
+          />
+        </>
+      ) : null}
+    </View>
+  );
   return (
-    <View className="flex-1">
-      <View className="flex-row flex-wrap gap-1 p-1">
-        <Button
-          label={selecting ? "Cancel" : "Select branches"}
-          tone="text"
-          disabled={actions.unavailableReason !== null && !selecting}
-          onPress={() => {
-            setSelecting(!selecting);
-            setSelected(new Map());
-          }}
-        />
-        {selecting ? (
-          <>
-            <Button
-              label={
-                selectedReferences.length === localReferences.length ? "Clear all" : "Select all"
-              }
-              tone="text"
-              disabled={actions.unavailableReason !== null || localReferences.length === 0}
-              onPress={() =>
-                setSelected(
-                  selectedReferences.length === localReferences.length
-                    ? new Map()
-                    : new Map(localReferences.map((ref) => [ref.name, ref.hash])),
-                )
-              }
-            />
-            <Button
-              label={`Delete selected (${selectedReferences.length})`}
-              tone="danger"
-              disabled={actions.unavailableReason !== null || selectedReferences.length === 0}
-              onPress={() => setDeleting(selectedReferences)}
-            />
-          </>
-        ) : null}
-      </View>
+    <View className={sidebar ? "flex-1 bg-drawer" : "flex-1"}>
+      {sidebar ? null : toolbar}
       <FlatList
         data={rows}
         keyExtractor={(row) =>
@@ -219,10 +231,38 @@ export function GitExplorerBranches(props: {
         initialNumToRender={24}
         maxToRenderPerBatch={24}
         windowSize={5}
-        contentInsetAdjustmentBehavior="never"
+        contentInsetAdjustmentBehavior={sidebar ? "automatic" : "never"}
+        contentContainerStyle={sidebar ? { paddingBottom: props.sidebar?.bottomInset } : undefined}
+        ListHeaderComponent={
+          props.sidebar ? (
+            <>
+              {props.sidebar.header}
+              {toolbar}
+            </>
+          ) : undefined
+        }
         renderItem={({ item }) => {
           if (item.kind === "heading") {
             const section = item.section;
+            if (sidebar) {
+              const label = `${item.label} (${item.detail === "Remote" ? "remote" : item.detail})`;
+              return (
+                <ThreadListV2Section
+                  label={label}
+                  pane="sidebar"
+                  {...(section
+                    ? {
+                        disclosure: {
+                          expanded: !collapsed.has(section),
+                          onToggle: () => toggleSection(section),
+                          accessibilityLabel: label,
+                          accessibilityHint: `${collapsed.has(section) ? "Expands" : "Collapses"} ${item.label.toLowerCase()}.`,
+                        },
+                      }
+                    : {})}
+                />
+              );
+            }
             const content = (
               <>
                 <View className="flex-row items-center gap-1">
@@ -278,8 +318,11 @@ export function GitExplorerBranches(props: {
                 accessibilityState={{ disabled: !openable }}
                 disabled={!openable}
                 onPress={() => props.onOpenSubmodule(item.submodule.path)}
-                style={{ height: rowHeight }}
-                className="flex-row items-center gap-2 bg-card px-3"
+                style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight }}
+                className={cn(
+                  "flex-row items-center gap-2",
+                  sidebar ? "bg-drawer active:bg-thread-hover" : "bg-card px-3",
+                )}
               >
                 <SymbolView
                   name={SUBMODULE_STATES[item.submodule.state].icon}
@@ -289,8 +332,15 @@ export function GitExplorerBranches(props: {
                 <Text
                   numberOfLines={1}
                   className={cn(
-                    "min-w-0 flex-1 text-[12px] leading-[16px]",
-                    openable ? "text-foreground" : "text-foreground-muted",
+                    "min-w-0 flex-1",
+                    sidebar ? "text-base font-t3-medium" : "text-[12px] leading-[16px]",
+                    openable
+                      ? sidebar
+                        ? "text-drawer-foreground"
+                        : "text-foreground"
+                      : sidebar
+                        ? "text-drawer-foreground-muted"
+                        : "text-foreground-muted",
                   )}
                 >
                   {item.submodule.path}
@@ -311,23 +361,39 @@ export function GitExplorerBranches(props: {
           }
           if (item.kind === "empty")
             return (
-              <View style={{ height: rowHeight }} className="justify-center px-3">
-                <Text className="text-[11px] leading-[14px] text-foreground-muted">
+              <View
+                style={sidebar ? undefined : { height: rowHeight }}
+                className={sidebar ? "px-3 py-2" : "justify-center px-3"}
+              >
+                <Text
+                  className={
+                    sidebar
+                      ? "text-sm text-drawer-foreground-muted"
+                      : "text-[11px] leading-[14px] text-foreground-muted"
+                  }
+                >
                   {item.label}
                 </Text>
               </View>
             );
-          if (item.kind === "stash")
-            return (
+          if (item.kind === "stash") {
+            const stashSelected = item.stash.hash === props.selectedRevision;
+            const stashRow = (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`${item.stash.name}. ${item.stash.subject}. Saved ${new Date(item.stash.createdAt).toLocaleString()}.`}
                 accessibilityState={{ selected: item.stash.hash === props.selectedRevision }}
                 onPress={() => props.onSelect(item.stash.hash)}
-                style={{ height: rowHeight }}
+                style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight }}
                 className={cn(
-                  "flex-row items-center gap-2 px-3",
-                  item.stash.hash === props.selectedRevision ? "bg-primary/10" : "bg-card",
+                  "flex-row items-center gap-2",
+                  sidebar
+                    ? stashSelected
+                      ? "bg-thread-selected"
+                      : "bg-drawer active:bg-thread-hover"
+                    : stashSelected
+                      ? "bg-primary/10 px-3"
+                      : "bg-card px-3",
                 )}
               >
                 <Text className="rounded-sm bg-subtle-strong px-1 font-mono text-[10px] leading-[14px] text-foreground-muted">
@@ -335,12 +401,28 @@ export function GitExplorerBranches(props: {
                 </Text>
                 <Text
                   numberOfLines={1}
-                  className="min-w-0 flex-1 text-[12px] leading-[16px] text-foreground"
+                  className={cn(
+                    "min-w-0 flex-1",
+                    sidebar
+                      ? cn(
+                          "text-base font-t3-medium",
+                          stashSelected
+                            ? selectedThreadRowColors.foregroundClassName
+                            : "text-drawer-foreground",
+                        )
+                      : "text-[12px] leading-[16px] text-foreground",
+                  )}
                 >
                   {item.stash.subject}
                 </Text>
               </Pressable>
             );
+            return sidebar ? (
+              <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>{stashRow}</View>
+            ) : (
+              stashRow
+            );
+          }
           return (
             <GitExplorerBranchRow
               branch={item.ref}
@@ -350,6 +432,7 @@ export function GitExplorerBranches(props: {
               params={props.params}
               active={props.active}
               rowHeight={rowHeight}
+              sidebar={sidebar}
               selected={item.ref.hash === props.selectedRevision}
               onSelect={props.onSelect}
               actions={actions}
