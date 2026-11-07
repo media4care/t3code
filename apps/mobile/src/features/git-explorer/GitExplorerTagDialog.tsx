@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,105 +14,18 @@ import { Menu } from "../../components/ui/Menu";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useWorkspaceEnvironments } from "../../state/workspace";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 
-type TagRequest = { action: "create" | "push" | "delete"; revision: string; name: string };
+export type GitExplorerTagRequest = {
+  action: "create" | "push" | "delete";
+  revision: string;
+  name: string;
+};
 
-export function GitExplorerTagControls(props: {
+export function GitExplorerTagDialog(props: {
   params: GitExplorerParams;
   overview: GitExplorerOverviewResult;
-  selectedRevision: string | null;
-  onRefresh: () => void;
-}) {
-  const target = gitExplorerTarget(props.params);
-  const allowed = useAtomValue(
-    gitExplorerEnvironment.runAction.permissionAtom(target.environmentId),
-  );
-  const connected = useWorkspaceEnvironments().some(
-    (environment) =>
-      environment.environmentId === target.environmentId &&
-      environment.connectionState === "connected",
-  );
-  const [request, setRequest] = useState<TagRequest | null>(null);
-  const revision = props.selectedRevision ?? props.overview.headHash;
-  const tags = props.overview.refs.filter(
-    (ref) => ref.kind === "tag" && ref.hash === props.selectedRevision,
-  );
-  const disabled = !allowed || !connected;
-  return (
-    <>
-      <View className="flex-row gap-2 pb-2">
-        <Button
-          label="Add tag"
-          icon="tag"
-          tone="text"
-          disabled={disabled || !revision}
-          onPress={() => {
-            if (revision) setRequest({ action: "create", revision, name: "" });
-          }}
-        />
-        {tags.length > 0 ? (
-          <Menu
-            title="Tags"
-            accessibilityRole="button"
-            accessibilityLabel="Manage tags"
-            actions={tags.map((tag) => ({
-              id: tag.name,
-              title: tag.shortName,
-              subactions: [
-                {
-                  id: `push:${tag.shortName}`,
-                  title: "Push tag…",
-                  image: "arrow.up",
-                  attributes: { disabled },
-                },
-                {
-                  id: `delete:${tag.shortName}`,
-                  title: "Delete local tag…",
-                  image: "trash",
-                  attributes: { disabled, destructive: true },
-                },
-              ],
-            }))}
-            onPressAction={({ nativeEvent }) => {
-              if (
-                !nativeEvent.event.startsWith("push:") &&
-                !nativeEvent.event.startsWith("delete:")
-              )
-                return;
-              const action = nativeEvent.event.startsWith("push:") ? "push" : "delete";
-              const name = nativeEvent.event.slice(action === "push" ? 5 : 7);
-              const tag = tags.find((ref) => ref.shortName === name);
-              if (tag && !disabled) setRequest({ action, revision: tag.hash, name });
-            }}
-          >
-            <Button
-              label="Manage tags"
-              icon="tag"
-              tone="text"
-              disabled={disabled}
-              onPress={() => {}}
-            />
-          </Menu>
-        ) : null}
-      </View>
-      {request ? (
-        <TagDialog
-          {...props}
-          request={request}
-          unavailable={disabled}
-          onClose={() => setRequest(null)}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function TagDialog(props: {
-  params: GitExplorerParams;
-  overview: GitExplorerOverviewResult;
-  request: TagRequest;
+  request: GitExplorerTagRequest;
   unavailable: boolean;
   onRefresh: () => void;
   onClose: () => void;

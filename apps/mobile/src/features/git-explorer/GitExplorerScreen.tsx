@@ -17,8 +17,8 @@ import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
 import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
-import { GitExplorerResetControls } from "./GitExplorerResetControls";
-import { GitExplorerTagControls } from "./GitExplorerTagControls";
+import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
+import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
 import { useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
@@ -114,6 +114,11 @@ function GitExplorerRepository(props: {
   });
   const explorer = useGitExplorer(params);
   const overview = explorer.overview.data;
+  const commitMenu = useGitExplorerCommitMenu({
+    params,
+    overview,
+    onRefresh: explorer.refresh,
+  });
   const [width, setWidth] = useState(0);
   const [selectedRevision, setSelectedRevision] = useState<string | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
@@ -250,18 +255,6 @@ function GitExplorerRepository(props: {
                   overview={overview}
                   onRefresh={explorer.refresh}
                 />
-                <GitExplorerResetControls
-                  params={params}
-                  overview={overview}
-                  selectedRevision={selectedRevision}
-                  onRefresh={explorer.refresh}
-                />
-                <GitExplorerTagControls
-                  params={params}
-                  overview={overview}
-                  selectedRevision={selectedRevision}
-                  onRefresh={explorer.refresh}
-                />
               </View>
               {!branchRail && branchesVisible ? (
                 <View style={{ height: 240 }} className="border-b border-border bg-card">
@@ -309,6 +302,7 @@ function GitExplorerRepository(props: {
                         error={explorer.history.error}
                         onRefresh={explorer.refresh}
                         tablet={split}
+                        menu={commitMenu.menu}
                       />
                     </View>
                   ) : null}
@@ -327,6 +321,16 @@ function GitExplorerRepository(props: {
                   ) : null}
                 </View>
               </View>
+              {commitMenu.tagRequest ? (
+                <GitExplorerTagDialog
+                  params={params}
+                  overview={overview}
+                  request={commitMenu.tagRequest}
+                  unavailable={commitMenu.unavailable}
+                  onRefresh={explorer.refresh}
+                  onClose={commitMenu.closeTagDialog}
+                />
+              ) : null}
             </>
           ) : null}
         </View>
