@@ -1,3 +1,4 @@
+import { GIT_EXPLORER_COLORS } from "@t3tools/client-runtime/git-explorer-colors";
 import type { GitExplorerOverviewResult, GitExplorerRef } from "@t3tools/contracts";
 import {
   formatGitExplorerSync,
@@ -39,6 +40,7 @@ function syncMark(ref: GitExplorerRef) {
 }
 
 export function GitExplorerBranchRow(props: {
+  readonly color: number;
   readonly branch: GitExplorerRef;
   readonly displayName: string;
   readonly statusBranches?: readonly string[];
@@ -170,6 +172,18 @@ export function GitExplorerBranchRow(props: {
           tintColorClassName="accent-primary-text"
         />
       ) : null}
+      {!props.selection ? (
+        <View
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: 5,
+            backgroundColor: GIT_EXPLORER_COLORS[props.color % GIT_EXPLORER_COLORS.length]!.value,
+            borderWidth: current ? 2 : 0,
+            borderColor: "white",
+          }}
+        />
+      ) : null}
       {current && !sidebar ? (
         <View
           style={{ width: 2, height: 14, top: (rowHeight - 14) / 2 }}
@@ -272,6 +286,11 @@ export function GitExplorerBranchRow(props: {
         shouldOpenOnLongPress
         actions={[
           {
+            id: "switch",
+            title: "Switch to branch",
+            attributes: { disabled: current || props.actions.switchUnavailable !== null },
+          },
+          {
             id: "status",
             title: `Local branch: ${mergeDescription}`,
             subtitle: statusDetail,
@@ -299,6 +318,7 @@ export function GitExplorerBranchRow(props: {
           },
         ]}
         onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "switch") props.actions.confirmSwitch(ref, props.overview);
           if (nativeEvent.event === "delete") requestDelete();
         }}
       >
