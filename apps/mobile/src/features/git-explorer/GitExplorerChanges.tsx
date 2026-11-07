@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { FlatList, Pressable, ScrollView, View } from "react-native";
 import type { GitExplorerFile, GitExplorerOverviewResult } from "@t3tools/contracts";
 
@@ -7,12 +7,15 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { cn } from "../../lib/cn";
+import { WorkspacePaneDivider } from "../layout/workspace-pane-divider";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useActiveGitQuery } from "./useActiveGitQuery";
 import { GitExplorerDiff } from "./GitExplorerDiff";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 
 const REVIEW_ROW_HEIGHT = 44;
+const FILE_LIST_MIN_WIDTH = 140;
+const DIFF_MIN_WIDTH = 240;
 
 function fileKey(file: GitExplorerFile) {
   return JSON.stringify([file.stage, file.path]);
@@ -30,6 +33,8 @@ export function GitExplorerChanges(props: {
   readonly revision: string | null;
   readonly split: boolean;
   readonly active: boolean;
+  readonly fileListWidth: number;
+  readonly onFileListWidthChange: (width: number) => void;
   readonly onBack: () => void;
 }) {
   const target = gitExplorerTarget(props.params);
@@ -40,6 +45,12 @@ export function GitExplorerChanges(props: {
   );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [metadataExpanded, setMetadataExpanded] = useState(false);
+  const [paneWidth, setPaneWidth] = useState(0);
+  const resizeStartWidth = useRef(0);
+  const fileListWidth = Math.max(
+    FILE_LIST_MIN_WIDTH,
+    Math.min(props.fileListWidth, paneWidth - DIFF_MIN_WIDTH),
+  );
   const files = details.data?.files ?? [];
   const explicitIndex = files.findIndex((file) => fileKey(file) === selectedKey);
   const selectedIndex = explicitIndex >= 0 ? explicitIndex : props.split ? 0 : -1;
@@ -185,11 +196,14 @@ export function GitExplorerChanges(props: {
               ) : null}
             </View>
           ) : null}
-          <View className={cn("min-h-0 flex-1", props.split ? "flex-row" : "flex-col")}>
+          <View
+            className={cn("min-h-0 flex-1", props.split ? "flex-row" : "flex-col")}
+            onLayout={(event) => setPaneWidth(event.nativeEvent.layout.width)}
+          >
             {showFiles ? (
               <View
                 className={props.split ? "min-h-0 border-r border-border" : "min-h-0 flex-1"}
-                style={props.split ? { width: 190 } : undefined}
+                style={props.split ? { width: fileListWidth } : undefined}
               >
                 <FlatList
                   data={files}
@@ -239,6 +253,19 @@ export function GitExplorerChanges(props: {
                   )}
                 />
               </View>
+            ) : null}
+            {props.split && selectedFile ? (
+              <WorkspacePaneDivider
+                accessibilityLabel="Resize changed files list"
+                currentWidth={fileListWidth}
+                resizeDirection={1}
+                onResizeStart={() => {
+                  resizeStartWidth.current = fileListWidth;
+                }}
+                onResizeBy={(delta) =>
+                  props.onFileListWidthChange(resizeStartWidth.current + delta)
+                }
+              />
             ) : null}
             {selectedFile ? (
               <View className="min-h-0 min-w-0 flex-1">

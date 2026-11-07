@@ -12,6 +12,7 @@ import type {
   GitExplorerRef,
 } from "@t3tools/contracts";
 
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { Button } from "../../components/ui/Button";
@@ -110,31 +111,44 @@ const GraphCommit = memo(function GraphCommit(props: {
           {props.isHead ? <Circle cx={x(graph.column)} cy={nodeY} r={1.5} fill="#ffffff" /> : null}
         </Svg>
         <View className="min-w-0 flex-1 justify-center pl-1">
-          <View className="h-[14px] min-w-0 flex-row items-center gap-1">
+          <View className="h-[18px] min-w-0 flex-row items-center gap-1">
             {props.refs.length > 0 || props.isHead ? (
               <View
-                style={{ maxWidth: "48%" }}
-                className="h-[14px] shrink flex-row items-center gap-1 overflow-hidden"
+                style={{ maxWidth: "50%" }}
+                className="h-[18px] shrink flex-row items-center gap-1 overflow-hidden"
               >
                 {props.isHead ? (
-                  <Text className="h-[14px] rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] font-t3-semibold text-foreground">
-                    HEAD
-                  </Text>
+                  <View className="h-[18px] justify-center rounded border border-border bg-subtle-strong px-1">
+                    <Text className="text-[12px] leading-[14px] text-foreground">HEAD</Text>
+                  </View>
                 ) : null}
                 {visibleRefs.map((ref) => (
-                  <Text
+                  <View
                     key={ref.name}
-                    numberOfLines={1}
-                    className="h-[14px] shrink rounded-sm bg-subtle-strong px-1 text-[10px] leading-[14px] text-foreground"
+                    className="h-[18px] min-w-0 shrink flex-row items-center gap-1 rounded border border-border bg-subtle-strong px-1"
                   >
-                    {ref.kind === "tag" ? "tag " : ""}
-                    {ref.shortName}
-                  </Text>
+                    <SymbolView
+                      name={ref.kind === "tag" ? "tag" : "arrow.triangle.branch"}
+                      size={10}
+                      tintColorClassName="accent-foreground"
+                    />
+                    <Text
+                      numberOfLines={1}
+                      className={cn(
+                        "min-w-0 shrink text-[12px] leading-[14px] text-foreground",
+                        ref === preferredBranch && "font-t3-semibold",
+                      )}
+                    >
+                      {ref.shortName}
+                    </Text>
+                  </View>
                 ))}
                 {props.refs.length > visibleRefs.length ? (
-                  <Text className="text-[10px] leading-[14px] text-foreground-muted">
-                    +{props.refs.length - visibleRefs.length}
-                  </Text>
+                  <View className="h-[18px] justify-center rounded border border-border bg-subtle-strong px-1">
+                    <Text className="text-[12px] leading-[14px] text-foreground">
+                      +{props.refs.length - visibleRefs.length}
+                    </Text>
+                  </View>
                 ) : null}
               </View>
             ) : null}
@@ -209,7 +223,7 @@ export function GitExplorerGraph(props: {
   readonly tablet: boolean;
   readonly menu: GitExplorerCommitMenu;
 }) {
-  const rowHeight = props.tablet ? 26 : 36;
+  const rowHeight = props.tablet ? 22 : 34;
   const layout = useMemo(
     () =>
       layoutGitGraph(props.commits, [], new Set(), gitExplorerReferenceColors(props.overview.refs)),
