@@ -4,6 +4,7 @@ import {
   gitExplorerBranchDeletionBlock,
   gitExplorerUpstreamMergeSummary,
 } from "@t3tools/client-runtime/git-explorer";
+import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
@@ -14,6 +15,11 @@ import { cn } from "../../lib/cn";
 import { useHoverGesture } from "../../lib/useHoverGesture";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import {
+  THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
+  THREAD_LIST_V2_SIDEBAR_ROW_STYLE,
+  selectedThreadRowColors,
+} from "../threads/thread-list-v2-row-appearance";
 import { useActiveGitQuery } from "./useActiveGitQuery";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 import {
@@ -40,6 +46,8 @@ export function GitExplorerBranchRow(props: {
   readonly params: GitExplorerParams;
   readonly active: boolean;
   readonly rowHeight: number;
+  /** Styled like the thread and pull request lists, for the workspace list column. */
+  readonly sidebar?: boolean;
   readonly selected: boolean;
   readonly onSelect: (revision: string) => void;
   readonly actions: ReturnType<typeof useGitExplorerBranchActions>;
@@ -100,6 +108,20 @@ export function GitExplorerBranchRow(props: {
   const slash = props.displayName.lastIndexOf("/");
   const prefix = props.displayName.slice(0, slash + 1);
   const leaf = props.displayName.slice(slash + 1);
+  const sidebar = props.sidebar === true;
+  const highlighted = props.selection ? props.selection.checked : props.selected;
+  const foreground =
+    sidebar && highlighted
+      ? selectedThreadRowColors.foregroundClassName
+      : sidebar
+        ? "text-drawer-foreground"
+        : "text-foreground";
+  const mutedForeground =
+    sidebar && highlighted
+      ? selectedThreadRowColors.mutedForegroundClassName
+      : sidebar
+        ? "text-drawer-foreground-muted"
+        : "text-foreground-muted";
   const row = (
     <Pressable
       accessibilityRole={props.selection ? "checkbox" : "button"}
@@ -124,14 +146,21 @@ export function GitExplorerBranchRow(props: {
         if (event.nativeEvent.actionName === "delete") requestDelete();
       }}
       onPress={() => (props.selection ? props.selection.onToggle() : props.onSelect(ref.hash))}
-      style={{ height: rowHeight }}
+      style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight }}
       className={cn(
-        "flex-row items-center gap-1 px-3",
-        (props.selection ? props.selection.checked : props.selected)
-          ? "bg-primary/10"
-          : hovered
-            ? "bg-row-hover"
-            : "bg-card",
+        "flex-row items-center",
+        sidebar ? "gap-2" : "gap-1 px-3",
+        sidebar
+          ? highlighted
+            ? "bg-thread-selected"
+            : hovered
+              ? "bg-thread-hover"
+              : "bg-drawer active:bg-thread-hover"
+          : highlighted
+            ? "bg-primary/10"
+            : hovered
+              ? "bg-row-hover"
+              : "bg-card",
       )}
     >
       {props.selection ? (
@@ -141,16 +170,20 @@ export function GitExplorerBranchRow(props: {
           tintColorClassName="accent-primary-text"
         />
       ) : null}
-      {current ? (
+      {current && !sidebar ? (
         <View
           style={{ width: 2, height: 14, top: (rowHeight - 14) / 2 }}
           className="absolute left-0 rounded-r-sm bg-primary"
         />
       ) : null}
       <View className="min-w-0 flex-1">
-        <Text numberOfLines={1} ellipsizeMode="middle" className="text-[12px] leading-[16px]">
-          {prefix ? <Text className="text-foreground-muted">{prefix}</Text> : null}
-          <Text className={cn("font-t3-medium text-foreground", current && "font-t3-semibold")}>
+        <Text
+          numberOfLines={1}
+          ellipsizeMode="middle"
+          className={sidebar ? "text-base" : "text-[12px] leading-[16px]"}
+        >
+          {prefix ? <Text className={mutedForeground}>{prefix}</Text> : null}
+          <Text className={cn("font-t3-medium", foreground, current && "font-t3-semibold")}>
             {leaf}
           </Text>
         </Text>
@@ -158,10 +191,10 @@ export function GitExplorerBranchRow(props: {
           <Text
             numberOfLines={1}
             className={cn(
-              "text-[12px] leading-[16px]",
+              sidebar ? "text-xs" : "text-[12px] leading-[16px]",
               upstream.mergeStatus === "merged" || upstream.mergeStatus === "equivalent"
                 ? "text-adaptive-emerald-700-300"
-                : "text-foreground-muted",
+                : mutedForeground,
             )}
           >
             {upstream.label}
@@ -171,25 +204,28 @@ export function GitExplorerBranchRow(props: {
       {mark ? (
         <Text
           numberOfLines={1}
-          style={{ width: 42, textAlign: "right" }}
+          style={{ width: sidebar ? 52 : 42, textAlign: "right" }}
           className={cn(
-            "text-[10px] leading-[14px]",
+            sidebar ? "text-2xs tabular-nums" : "text-[10px] leading-[14px]",
             ref.upstreamMissing || (ref.behind ?? 0) > 0
               ? "text-warning-foreground"
               : (ref.ahead ?? 0) > 0
                 ? "text-primary-text"
-                : "text-foreground-muted",
+                : mutedForeground,
           )}
         >
           {mark}
         </Text>
       ) : null}
       {ref.kind === "local" ? (
-        <View style={{ width: 24, height: rowHeight }} className="items-center justify-center">
+        <View
+          style={{ width: 24, height: sidebar ? undefined : rowHeight }}
+          className="items-center justify-center"
+        >
           {hovered && canDelete ? (
             <Pressable
               accessible={false}
-              style={{ width: 24, height: rowHeight }}
+              style={{ width: 24, height: sidebar ? 24 : rowHeight }}
               className="items-center justify-center"
               onPress={(event) => {
                 event.stopPropagation();
@@ -216,7 +252,7 @@ export function GitExplorerBranchRow(props: {
                 "text-[13px] leading-[16px]",
                 status?.mergeStatus === "equivalent"
                   ? "text-adaptive-emerald-700-300"
-                  : "text-foreground-muted",
+                  : mutedForeground,
               )}
             >
               {status?.mergeStatus === "equivalent" ? "≈" : query.isPending ? "·" : "?"}
@@ -226,8 +262,10 @@ export function GitExplorerBranchRow(props: {
       ) : null}
     </Pressable>
   );
-  if (ref.kind !== "local" || props.selection) return row;
-  return (
+  const container = (content: ReactNode) =>
+    sidebar ? <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>{content}</View> : content;
+  if (ref.kind !== "local" || props.selection) return container(row);
+  return container(
     <GestureDetector gesture={hoverGesture}>
       <Menu
         title={ref.shortName}
@@ -266,6 +304,6 @@ export function GitExplorerBranchRow(props: {
       >
         {row}
       </Menu>
-    </GestureDetector>
+    </GestureDetector>,
   );
 }

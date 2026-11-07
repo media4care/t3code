@@ -31,6 +31,8 @@ export const NativePrimaryColumnContext = createContext<{
   readonly presented: boolean;
   readonly selectedThreadKey: string | null;
   readonly selectedPullRequestKey: string | null;
+  /** The Git Explorer page open beside the list; its branches show in the list column. */
+  readonly gitExplorerRoute: { readonly key: string; readonly params: object | undefined } | null;
 } | null>(null);
 export const NativeWorkspaceInspectorContext = createContext<{
   readonly render: (() => ReactNode) | undefined;
