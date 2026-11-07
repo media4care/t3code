@@ -28,9 +28,13 @@ import { GitExplorerChanges } from "./GitExplorerChanges";
 import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
-import { useActiveGitQuery, useGitExplorerActive } from "./useActiveGitQuery";
+import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import {
+  THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
+  THREAD_LIST_V2_SIDEBAR_ROW_STYLE,
+} from "../threads/thread-list-v2-row-appearance";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
 
 type GitExplorerRouteParams = GitExplorerParams & { readonly revision?: string | undefined };
@@ -73,6 +77,7 @@ export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
   const openParams = openRoute ? readRouteParams(openRoute.params) : null;
   if (props.workspace && branchesInListColumn && openRoute && openParams)
     return <GitExplorerBranchesColumn routeKey={openRoute.key} params={openParams} />;
+  const sidebar = props.workspace === true && primaryColumn !== null;
   return (
     <>
       {props.workspace && Platform.OS === "ios" ? null : (
@@ -85,6 +90,7 @@ export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
       )}
       <ScreenContent>
         <FlatList
+          className={sidebar ? "bg-drawer" : undefined}
           data={projects}
           keyExtractor={(item) => JSON.stringify([item.environmentId, item.id])}
           contentInsetAdjustmentBehavior="automatic"
@@ -100,25 +106,53 @@ export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
               detail="Connect an environment and add a project to explore its repository."
             />
           }
-          renderItem={({ item }) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Explore Git history for ${item.title}`}
-              className="min-h-20 gap-1 border-b border-border-subtle px-5 py-4"
-              onPress={() =>
-                navigation.navigate("GitExplorer", {
-                  environmentId: item.environmentId,
-                  projectId: item.id,
-                })
-              }
-            >
-              <Text className="font-t3-semibold text-foreground">{item.title}</Text>
-              <Text numberOfLines={1} className="text-xs text-foreground-muted">
-                {savedConnectionsById[item.environmentId]?.environmentLabel ?? "Environment"} ·{" "}
-                {item.workspaceRoot}
-              </Text>
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const row = (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Explore Git history for ${item.title}`}
+                style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : undefined}
+                className={
+                  sidebar
+                    ? "gap-1 bg-drawer active:bg-thread-hover"
+                    : "min-h-20 gap-1 border-b border-border-subtle px-5 py-4"
+                }
+                onPress={() =>
+                  navigation.navigate("GitExplorer", {
+                    environmentId: item.environmentId,
+                    projectId: item.id,
+                  })
+                }
+              >
+                <Text
+                  numberOfLines={1}
+                  className={
+                    sidebar
+                      ? "text-base font-t3-medium text-drawer-foreground"
+                      : "font-t3-semibold text-foreground"
+                  }
+                >
+                  {item.title}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  className={
+                    sidebar
+                      ? "text-xs text-drawer-foreground-muted"
+                      : "text-xs text-foreground-muted"
+                  }
+                >
+                  {savedConnectionsById[item.environmentId]?.environmentLabel ?? "Environment"} ·{" "}
+                  {item.workspaceRoot}
+                </Text>
+              </Pressable>
+            );
+            return sidebar ? (
+              <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>{row}</View>
+            ) : (
+              row
+            );
+          }}
         />
       </ScreenContent>
     </>
@@ -148,7 +182,8 @@ function GitExplorerBranchesColumn(props: {
   const registry = useContext(RegistryContext);
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
-  const active = useGitExplorerActive();
+  // The list route never holds navigation focus while its detail page is open beside it.
+  const active = useAppForeground();
   const { revision, ...params } = props.params;
   const target = gitExplorerTarget(params);
   const overview = useActiveGitQuery(gitExplorerEnvironment.overview(target), active);

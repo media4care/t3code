@@ -14,6 +14,7 @@ export function WorkspaceEmptyDetail(props: {
 }) {
   const pullRequests = props.tab === "pullRequests";
   const settings = props.tab === "settings";
+  const repositories = props.tab === "gitExplorer";
   if (props.tab === "usage") return <View className="flex-1 bg-screen" />;
   return (
     <View
@@ -51,20 +52,24 @@ export function WorkspaceEmptyDetail(props: {
           <Text className="text-center text-xl font-t3-bold">
             {settings
               ? "Select a setting"
-              : pullRequests
-                ? "Select a pull request"
-                : "Select a thread"}
+              : repositories
+                ? "Select a repository"
+                : pullRequests
+                  ? "Select a pull request"
+                  : "Select a thread"}
           </Text>
           <Text className="text-center text-base text-foreground-muted">
             {settings
               ? "Choose a page from the sidebar."
-              : pullRequests
-                ? "Choose a pull request from the sidebar to review it."
-                : Platform.OS === "android"
-                  ? "Choose a thread from the sidebar or start a new thread."
-                  : "Choose a thread from the sidebar or start a new task."}
+              : repositories
+                ? "Choose a repository from the sidebar to explore its history."
+                : pullRequests
+                  ? "Choose a pull request from the sidebar to review it."
+                  : Platform.OS === "android"
+                    ? "Choose a thread from the sidebar or start a new thread."
+                    : "Choose a thread from the sidebar or start a new task."}
           </Text>
-          {props.onStartNewTask && !pullRequests && !settings ? (
+          {props.onStartNewTask && !pullRequests && !settings && !repositories ? (
             Platform.OS === "android" ? (
               <NewThreadButton extended className="mt-2" onPress={props.onStartNewTask} />
             ) : (
