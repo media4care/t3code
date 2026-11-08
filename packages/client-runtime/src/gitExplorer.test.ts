@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 
 import {
   formatGitExplorerSync,
+  gitExplorerBranchRows,
+  gitExplorerFolderExpanded,
   layoutGitGraph,
   gitExplorerEmphasizedRefs,
   gitExplorerUpstreamMergeSummary,
@@ -314,5 +316,94 @@ describe("Git Explorer upstream status", () => {
     expect(
       formatGitExplorerSync({ ...tracked, upstreamMissing: true, ahead: null, behind: null }),
     ).toBe("Upstream missing");
+  });
+});
+
+describe("Git Explorer branch folders", () => {
+  const refs: GitExplorerRef[] = [
+    "main",
+    "feature/z",
+    "feature/api/a",
+    "feature/api/b",
+    "fix/login",
+  ].map((shortName) => ({
+    name: `refs/heads/${shortName}`,
+    shortName,
+    kind: "local",
+    hash: "a".repeat(40),
+    upstream: null,
+    ahead: null,
+    behind: null,
+    upstreamMissing: false,
+  }));
+
+  it("starts with folders collapsed and nests slash-separated branches once expanded", () => {
+    expect(gitExplorerBranchRows(refs, () => false).map((row) => row.label)).toEqual([
+      "feature",
+      "fix",
+      "main",
+    ]);
+    const rows = gitExplorerBranchRows(refs, () => true);
+    expect(rows.map((row) => [row.kind, row.label, row.depth])).toEqual([
+      ["folder", "feature", 0],
+      ["folder", "api", 1],
+      ["branch", "a", 2],
+      ["branch", "b", 2],
+      ["branch", "z", 1],
+      ["folder", "fix", 0],
+      ["branch", "login", 1],
+      ["branch", "main", 0],
+    ]);
+    expect(rows.filter((row) => row.kind === "branch").map((row) => row.reference.name)).toEqual([
+      "refs/heads/feature/api/a",
+      "refs/heads/feature/api/b",
+      "refs/heads/feature/z",
+      "refs/heads/fix/login",
+      "refs/heads/main",
+    ]);
+  });
+
+  it("expands only the requested folders", () => {
+    const expanded = new Set(["feature"]);
+    expect(
+      gitExplorerBranchRows(refs, (path) => expanded.has(path)).map((row) => row.label),
+    ).toEqual(["feature", "api", "z", "fix", "main"]);
+    expanded.add("feature/api");
+    expect(
+      gitExplorerBranchRows(refs, (path) => expanded.has(path)).map((row) => row.label),
+    ).toEqual(["feature", "api", "a", "b", "z", "fix", "main"]);
+  });
+
+  it("opens the folders holding the checked-out branch until the user collapses them", () => {
+    const expanded = (toggled: ReadonlySet<string>) =>
+      gitExplorerBranchRows(refs, (path) =>
+        gitExplorerFolderExpanded(path, "feature/api/a", toggled.has(path)),
+      ).map((row) => row.label);
+    expect(expanded(new Set())).toEqual(["feature", "api", "a", "b", "z", "fix", "main"]);
+    expect(expanded(new Set(["feature/api"]))).toEqual(["feature", "api", "z", "fix", "main"]);
+    expect(expanded(new Set(["fix"]))).toEqual([
+      "feature",
+      "api",
+      "a",
+      "b",
+      "z",
+      "fix",
+      "login",
+      "main",
+    ]);
+    expect(gitExplorerFolderExpanded("feat", "feature/api/a", false)).toBe(false);
+  });
+
+  it("groups remote branches beneath the remote without changing their ref names", () => {
+    const remote: GitExplorerRef = {
+      ...refs[0]!,
+      kind: "remote",
+      name: "refs/remotes/origin/feature/api",
+      shortName: "origin/feature/api",
+    };
+    expect(gitExplorerBranchRows([remote], () => true, "origin/")).toEqual([
+      { kind: "folder", path: "feature", label: "feature", depth: 0 },
+      { kind: "branch", reference: remote, label: "api", depth: 1 },
+    ]);
   });
 });
