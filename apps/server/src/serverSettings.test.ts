@@ -1311,7 +1311,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
   );
 
   it.effect(
-    "uses the same secret lifecycle for provider config, environment, host tokens, and quota keys",
+    "uses the same secret lifecycle for provider config, environment, host tokens, quota keys, and release environments",
     () =>
       Effect.gen(function* () {
         const service = yield* ServerSettingsModule.ServerSettingsService;
@@ -1354,6 +1354,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
               maxConcurrentSessions: 2,
             },
           ],
+          releaseEnvironments: {
+            "github.com/acme/app": [
+              { name: "RELEASE_TOKEN", value: "release-secret", sensitive: true },
+            ],
+          },
         });
         const values = [
           "config-secret",
@@ -1363,6 +1368,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           "gitcafe-secret",
           "quota-secret",
           "expo-secret",
+          "release-secret",
         ];
         const client = ServerSettingsModule.redactServerSettingsForClient(saved, {
           secretReferences: true,
@@ -1380,6 +1386,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           sourceControlHosts: client.sourceControlHosts,
           usageLimitSources: client.usageLimitSources,
           easDeviceHosts: client.easDeviceHosts,
+          releaseEnvironments: client.releaseEnvironments,
         });
         for (const value of values) assert.include(JSON.stringify(echoed), value);
         const renamed = yield* service.updateProviderInstance({
@@ -1431,6 +1438,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           }),
           sourceControlHostSecretName({ kind: "gitcafe", field: "token", serverHost: null }),
           "usage-limit-source-aHVi",
+          "release-env-Z2l0aHViLmNvbS9hY21lL2FwcA-UkVMRUFTRV9UT0tFTg",
         ];
         for (const name of secretNames) {
           assert.isTrue(Option.isSome(yield* store.get(name)), name);
@@ -1463,6 +1471,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             gitcafe: { token: "" },
           },
           usageLimitSources: { [UsageLimitSourceId.make("hub")]: null },
+          releaseEnvironments: { "github.com/acme/app": null },
         });
         for (const name of secretNames) {
           assert.isTrue(Option.isNone(yield* store.get(name)));

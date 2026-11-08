@@ -47,6 +47,7 @@ import {
 } from "./preview.ts";
 import {
   ProviderInstanceConfig,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ProviderDriverKind,
 } from "./providerInstance.ts";
@@ -1367,6 +1368,10 @@ export const ServerSettings = Schema.Struct({
   secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Variables a project's release command runs with, keyed by `ReleasesSnapshot.environmentKey`. */
+  releaseEnvironments: Schema.Record(TrimmedNonEmptyString, ProviderInstanceEnvironment).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1710,6 +1715,10 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   secretProviders: Schema.optionalKey(
     Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
+  ),
+  // Replaces each key's whole list; null removes it.
+  releaseEnvironments: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, Schema.NullOr(ProviderInstanceEnvironment)),
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 

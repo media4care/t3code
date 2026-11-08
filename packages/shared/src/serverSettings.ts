@@ -385,6 +385,7 @@ export function applyServerSettingsPatch(
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
     secretProviders: secretProvidersPatch,
+    releaseEnvironments: releaseEnvironmentsPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
@@ -600,6 +601,14 @@ export function applyServerSettingsPatch(
       : {}),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
+      : {}),
+    ...(releaseEnvironmentsPatch !== undefined
+      ? {
+          releaseEnvironments: mergeSettingsEntries(
+            current.releaseEnvironments,
+            releaseEnvironmentsPatch,
+          ),
+        }
       : {}),
     ...(usagePriceOverridesPatch !== undefined
       ? {
