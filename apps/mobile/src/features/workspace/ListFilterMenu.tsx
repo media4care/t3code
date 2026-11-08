@@ -1,8 +1,14 @@
-import { Pressable } from "react-native";
+import { Platform, Pressable } from "react-native";
 import { Chip } from "../../components/ui/Chip";
 import { Menu } from "../../components/ui/Menu";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+
+// A 12dp inset keeps 16dp chips concentric with Android's 28dp ScreenContent corner.
+export const LIST_FILTER_ROW_STYLE =
+  Platform.OS === "android"
+    ? { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, gap: 8 }
+    : { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 10, gap: 8 };
 
 export function ListFilterMenu(props: {
   readonly label: string;

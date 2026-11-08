@@ -118,6 +118,7 @@ export interface Preferences {
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
+  readonly gitExplorerProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -198,6 +199,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
+    gitExplorerProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -329,6 +331,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isThreadProject(parsed.lastThreadProject)) {
     preferences.lastThreadProject = parsed.lastThreadProject;
+  }
+  if (isThreadProject(parsed.gitExplorerProject)) {
+    preferences.gitExplorerProject = parsed.gitExplorerProject;
   }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(

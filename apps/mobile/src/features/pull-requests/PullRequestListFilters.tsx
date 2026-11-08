@@ -4,7 +4,7 @@ import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@t3tools/cont
 import { Atom } from "effect/reactivity";
 import { Platform, ScrollView } from "react-native";
 import type { MenuProps } from "../../components/ui/Menu.types";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { LIST_FILTER_ROW_STYLE as ROW_STYLE, ListFilterMenu } from "../workspace/ListFilterMenu";
 import { environmentProjects } from "../../state/projects";
 import { environmentThreadShells } from "../../state/threads";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
@@ -27,11 +27,6 @@ const SORTS = {
   created: "Newest created",
   oldest: "Oldest updated",
 } as const;
-// A 12dp inset keeps 16dp chips concentric with Android's 28dp ScreenContent corner.
-const ROW_STYLE =
-  Platform.OS === "android"
-    ? { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, gap: 8 }
-    : { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 10, gap: 8 };
 const id = (field: string, value: string) => JSON.stringify([field, value]);
 function choices(field: string, options: Readonly<Record<string, string>>, selected: string) {
   return Object.entries(options).map(([value, title]) => ({

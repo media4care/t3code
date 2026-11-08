@@ -1,6 +1,6 @@
-import { use, useContext, useRef, useState } from "react";
-import { FlatList, Platform, Pressable, View } from "react-native";
-import { RegistryContext } from "@effect/atom-react";
+import { use, useContext, useRef, useState, type ReactNode } from "react";
+import { FlatList, Platform, Pressable, ScrollView, View } from "react-native";
+import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   CommonActions,
   StackActions,
@@ -9,11 +9,13 @@ import {
 } from "@react-navigation/native";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
+import { AsyncResult } from "effect/reactivity";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { Chip } from "../../components/ui/Chip";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -23,6 +25,7 @@ import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useProject, useProjects } from "../../state/entities";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
@@ -33,6 +36,8 @@ import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useGitExplorerSync } from "./useGitExplorerSync";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { LIST_FILTER_ROW_STYLE, ListFilterMenu } from "../workspace/ListFilterMenu";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
   THREAD_LIST_V2_SIDEBAR_ROW_STYLE,
@@ -71,96 +76,147 @@ function useBranchesInListColumn() {
 }
 
 export function GitRepositoriesScreen(props: { readonly workspace?: boolean }) {
-  const navigation = useNavigation();
-  const projects = useProjects();
-  const { savedConnectionsById } = useSavedRemoteConnections();
-  const insets = useSafeAreaInsets();
-  const workspace = useWorkspaceTabs();
   const primaryColumn = use(NativePrimaryColumnContext);
   const branchesInListColumn = useBranchesInListColumn();
   const openRoute = primaryColumn?.gitExplorerRoute;
   const openParams = openRoute ? readRouteParams(openRoute.params) : null;
   if (props.workspace && branchesInListColumn && openRoute && openParams)
     return <GitExplorerBranchesColumn routeKey={openRoute.key} params={openParams} />;
-  const sidebar = props.workspace === true && primaryColumn !== null;
+  // The iPad list column picks the repository for the page beside it. Everywhere else the
+  // explorer opens on a repository and its repository chip switches it.
+  if (props.workspace && primaryColumn !== null) return <GitRepositoriesColumn />;
+  return <GitExplorerHome workspace={props.workspace === true} />;
+}
+
+function GitRepositoriesColumn() {
+  const navigation = useNavigation();
+  const projects = useProjects();
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  const insets = useSafeAreaInsets();
+  const workspace = useWorkspaceTabs();
   return (
-    <>
-      {props.workspace && Platform.OS === "ios" ? null : (
-        <AppBar
-          title="Git Explorer"
-          subtitle="Choose a repository"
-          sidebar={!props.workspace}
-          onBack={props.workspace ? undefined : () => navigation.goBack()}
-        />
-      )}
-      <ScreenContent>
-        <FlatList
-          className={sidebar ? "bg-drawer" : undefined}
-          data={projects}
-          keyExtractor={(item) => JSON.stringify([item.environmentId, item.id])}
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={{
-            paddingBottom: props.workspace
-              ? Math.max(insets.bottom, workspace?.bottomClearance ?? 0)
-              : insets.bottom,
-          }}
-          ListEmptyComponent={
-            <EmptyState
-              variant="plain"
-              title="No projects available"
-              detail="Connect an environment and add a project to explore its repository."
-            />
-          }
-          renderItem={({ item }) => {
-            const row = (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Explore Git history for ${item.title}`}
-                style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : undefined}
-                className={
-                  sidebar
-                    ? "gap-1 bg-drawer active:bg-thread-hover"
-                    : "min-h-20 gap-1 border-b border-border-subtle px-5 py-4"
-                }
-                onPress={() =>
-                  navigation.navigate("GitExplorer", {
-                    environmentId: item.environmentId,
-                    projectId: item.id,
-                  })
-                }
-              >
-                <Text
-                  numberOfLines={1}
-                  className={
-                    sidebar
-                      ? "text-base font-t3-medium text-drawer-foreground"
-                      : "font-t3-semibold text-foreground"
-                  }
-                >
-                  {item.title}
-                </Text>
-                <Text
-                  numberOfLines={1}
-                  className={
-                    sidebar
-                      ? "text-xs text-drawer-foreground-muted"
-                      : "text-xs text-foreground-muted"
-                  }
-                >
-                  {savedConnectionsById[item.environmentId]?.environmentLabel ?? "Environment"} ·{" "}
-                  {item.workspaceRoot}
-                </Text>
-              </Pressable>
-            );
-            return sidebar ? (
-              <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>{row}</View>
-            ) : (
-              row
-            );
-          }}
-        />
-      </ScreenContent>
-    </>
+    <ScreenContent>
+      <FlatList
+        className="bg-drawer"
+        data={projects}
+        keyExtractor={(item) => JSON.stringify([item.environmentId, item.id])}
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{
+          paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0),
+        }}
+        ListEmptyComponent={
+          <EmptyState
+            variant="plain"
+            title="No projects available"
+            detail="Connect an environment and add a project to explore its repository."
+          />
+        }
+        renderItem={({ item }) => (
+          <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Explore Git history for ${item.title}`}
+              style={THREAD_LIST_V2_SIDEBAR_ROW_STYLE}
+              className="gap-1 bg-drawer active:bg-thread-hover"
+              onPress={() =>
+                navigation.navigate("GitExplorer", {
+                  environmentId: item.environmentId,
+                  projectId: item.id,
+                })
+              }
+            >
+              <Text numberOfLines={1} className="text-base font-t3-medium text-drawer-foreground">
+                {item.title}
+              </Text>
+              <Text numberOfLines={1} className="text-xs text-drawer-foreground-muted">
+                {savedConnectionsById[item.environmentId]?.environmentLabel ?? "Environment"} ·{" "}
+                {item.workspaceRoot}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+      />
+    </ScreenContent>
+  );
+}
+
+function GitExplorerHome(props: { readonly workspace: boolean }) {
+  const navigation = useNavigation();
+  const projects = useProjects().filter((project) => !project.isScratch);
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const saved = AsyncResult.isSuccess(preferences)
+    ? preferences.value.gitExplorerProject
+    : undefined;
+  const project =
+    projects.find(
+      (item) => item.environmentId === saved?.environmentId && item.id === saved.projectId,
+    ) ?? projects[0];
+  const scope = project ? JSON.stringify([project.environmentId, project.id]) : "";
+  const [view, setView] = useState({
+    scope,
+    worktreePath: undefined as string | undefined,
+    revision: null as string | null,
+  });
+  if (!project)
+    return (
+      <>
+        {props.workspace && Platform.OS === "ios" ? null : (
+          <AppBar
+            title="Git Explorer"
+            sidebar={!props.workspace}
+            onBack={props.workspace ? undefined : () => navigation.goBack()}
+          />
+        )}
+        <ScreenContent>
+          <EmptyState
+            variant="plain"
+            title="No projects available"
+            detail="Connect an environment and add a project to explore its repository."
+          />
+        </ScreenContent>
+      </>
+    );
+  const current = view.scope === scope ? view : { scope, worktreePath: undefined, revision: null };
+  const multipleEnvironments = new Set(projects.map((item) => item.environmentId)).size > 1;
+  const repository = (
+    <ListFilterMenu
+      label={project.title}
+      accessibilityLabel="Choose repository"
+      actions={projects.map((item) => {
+        const id = JSON.stringify([item.environmentId, item.id]);
+        return {
+          id,
+          title: item.title,
+          ...(multipleEnvironments
+            ? { subtitle: savedConnectionsById[item.environmentId]?.environmentLabel }
+            : {}),
+          state: id === scope ? ("on" as const) : ("off" as const),
+        };
+      })}
+      onSelect={(id) => {
+        const next = projects.find((item) => JSON.stringify([item.environmentId, item.id]) === id);
+        if (next)
+          savePreferences({
+            gitExplorerProject: { environmentId: next.environmentId, projectId: next.id },
+          });
+      }}
+    />
+  );
+  return (
+    <GitExplorerRepository
+      key={JSON.stringify([project.environmentId, project.id, current.worktreePath])}
+      params={{
+        environmentId: project.environmentId,
+        projectId: project.id,
+        ...(current.worktreePath ? { worktreePath: current.worktreePath } : {}),
+      }}
+      selectedRevision={current.revision}
+      onSelectRevision={(revision) => setView({ ...current, revision })}
+      onWorktreeChange={(worktreePath) => setView({ scope, worktreePath, revision: null })}
+      home={{ workspace: props.workspace, repository }}
+    />
   );
 }
 
@@ -269,9 +325,13 @@ function GitExplorerRepository(props: {
   readonly selectedRevision: string | null;
   readonly onSelectRevision: (revision: string | null) => void;
   readonly onWorktreeChange: (path: string) => void;
+  /** The tab's explorer: a chip row holds the repository picker and the actions. */
+  readonly home?: { readonly workspace: boolean; readonly repository: ReactNode };
 }) {
   const navigation = useNavigation();
-  const { params } = props;
+  const { params, home } = props;
+  const { themeAppearance } = useAppearancePreferences();
+  const workspace = useWorkspaceTabs();
   const project = useProject({
     environmentId: EnvironmentId.make(params.environmentId),
     projectId: ProjectId.make(params.projectId),
@@ -316,6 +376,22 @@ function GitExplorerRepository(props: {
       (ref.name === overview.headBranch || ref.shortName === overview.headBranch),
   );
   const worktreeName = overview?.selectedWorktreePath.split("/").at(-1);
+  // Submodule worktrees are not selectable; the parent worktree stays fixed.
+  const worktrees =
+    overview && !params.submodulePath
+      ? overview.worktrees
+          .filter((worktree) => !worktree.bare)
+          .map((worktree) => ({
+            id: worktree.path,
+            title: worktree.branch?.replace(/^refs\/heads\//, "") ?? "Detached HEAD",
+            subtitle: worktree.path,
+            selected: worktree.path === overview.selectedWorktreePath,
+            onPress: () => props.onWorktreeChange(worktree.path),
+          }))
+      : [];
+  const subtitle = params.submodulePath
+    ? `${project?.title ?? "Repository"} › ${params.submodulePath}`
+    : (project?.title ?? "Repository");
   const openSubmodule = (path: string) =>
     navigation.dispatch(
       StackActions.push("GitExplorer", {
@@ -325,68 +401,124 @@ function GitExplorerRepository(props: {
         submodulePath: params.submodulePath ? `${params.submodulePath}/${path}` : path,
       }),
     );
+  const pullLabel = `Pull ${overview?.headBranch ?? "current branch"} (fast-forward only)${sync.pullUnavailable ? `. ${sync.pullUnavailable}` : ""}`;
+  const fetchLabel = `Fetch all remotes${sync.unavailable ? `. ${sync.unavailable}` : ""}`;
   return (
     <>
-      <AppBar
-        title="Git Explorer"
-        subtitle={
-          params.submodulePath
-            ? `${project?.title ?? "Repository"} › ${params.submodulePath}`
-            : (project?.title ?? "Repository")
-        }
-        onBack={() => navigation.goBack()}
-        actions={[
-          {
-            accessibilityLabel: "Refresh Git Explorer",
-            icon: "arrow.clockwise",
-            onPress: explorer.refresh,
-            disabled: explorer.overview.isPending,
-          },
-          {
-            accessibilityLabel: `Pull ${overview?.headBranch ?? "current branch"} (fast-forward only)${sync.pullUnavailable ? `. ${sync.pullUnavailable}` : ""}`,
-            icon: "arrow.down",
-            onPress: () => void sync.execute("pull"),
-            disabled: sync.pullUnavailable !== null,
-            loading: sync.pending === "pull",
-          },
-          {
-            accessibilityLabel: `Fetch all remotes${sync.unavailable ? `. ${sync.unavailable}` : ""}`,
-            icon: "arrow.down.circle",
-            onPress: () => void sync.execute("fetch"),
-            disabled: sync.unavailable !== null,
-            loading: sync.pending === "fetch",
-          },
-        ]}
-        menus={
-          // Submodule worktrees are not selectable; the parent worktree stays fixed.
-          overview && !params.submodulePath
-            ? [
-                {
-                  title: "Review worktree",
-                  icon: "point.topleft.down.curvedto.point.bottomright.up",
-                  items: overview.worktrees
-                    .filter((worktree) => !worktree.bare)
-                    .map((worktree) => ({
-                      id: worktree.path,
-                      title: worktree.branch?.replace(/^refs\/heads\//, "") ?? "Detached HEAD",
-                      subtitle: worktree.path,
-                      selected: worktree.path === overview.selectedWorktreePath,
-                      onPress: () => props.onWorktreeChange(worktree.path),
-                    })),
-                },
-              ]
-            : []
-        }
-      />
+      {home ? (
+        // The workspace header belongs to the tab bar's toolbar on iOS.
+        home.workspace && Platform.OS === "ios" ? null : (
+          <AppBar
+            title="Git Explorer"
+            subtitle={subtitle}
+            sidebar={!home.workspace}
+            onBack={home.workspace ? undefined : () => navigation.goBack()}
+          />
+        )
+      ) : (
+        <AppBar
+          title="Git Explorer"
+          subtitle={subtitle}
+          onBack={() => navigation.goBack()}
+          actions={[
+            {
+              accessibilityLabel: "Refresh Git Explorer",
+              icon: "arrow.clockwise",
+              onPress: explorer.refresh,
+              disabled: explorer.overview.isPending,
+            },
+            {
+              accessibilityLabel: pullLabel,
+              icon: "arrow.down",
+              onPress: () => void sync.execute("pull"),
+              disabled: sync.pullUnavailable !== null,
+              loading: sync.pending === "pull",
+            },
+            {
+              accessibilityLabel: fetchLabel,
+              icon: "arrow.down.circle",
+              onPress: () => void sync.execute("fetch"),
+              disabled: sync.unavailable !== null,
+              loading: sync.pending === "fetch",
+            },
+          ]}
+          menus={
+            worktrees.length
+              ? [
+                  {
+                    title: "Review worktree",
+                    icon: "point.topleft.down.curvedto.point.bottomright.up",
+                    items: worktrees,
+                  },
+                ]
+              : []
+          }
+        />
+      )}
       <ScreenContent>
         <View
           className="flex-1 bg-sheet-solid"
           onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
           style={{
             paddingTop: Platform.OS === "ios" ? safeArea.top : 0,
-            paddingBottom: safeArea.bottom,
+            paddingBottom: home?.workspace
+              ? Math.max(safeArea.bottom, workspace?.bottomClearance ?? 0)
+              : safeArea.bottom,
           }}
         >
+          {home ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ flexGrow: 0 }}
+              contentContainerStyle={LIST_FILTER_ROW_STYLE}
+            >
+              {home.repository}
+              {worktrees.length > 1 ? (
+                <ListFilterMenu
+                  label={
+                    // Git lists the main worktree first; its folder only repeats the repository.
+                    worktrees[0]?.selected ? "Main worktree" : (worktreeName ?? "Worktree")
+                  }
+                  accessibilityLabel="Review worktree"
+                  actions={worktrees.map((worktree) => ({
+                    id: worktree.id,
+                    title: worktree.title,
+                    subtitle: worktree.subtitle,
+                    state: worktree.selected ? ("on" as const) : ("off" as const),
+                  }))}
+                  onSelect={props.onWorktreeChange}
+                />
+              ) : null}
+              <Chip
+                label="Refresh"
+                icon="arrow.clockwise"
+                glass
+                colorScheme={themeAppearance}
+                accessibilityLabel="Refresh Git Explorer"
+                onPress={explorer.refresh}
+                disabled={explorer.overview.isPending}
+              />
+              <Chip
+                label={sync.pending === "pull" ? "Pulling…" : "Pull"}
+                icon="arrow.down"
+                glass
+                colorScheme={themeAppearance}
+                accessibilityLabel={pullLabel}
+                onPress={() => void sync.execute("pull")}
+                disabled={sync.pullUnavailable !== null}
+              />
+              <Chip
+                label={sync.pending === "fetch" ? "Fetching…" : "Fetch"}
+                icon="arrow.down.circle"
+                glass
+                colorScheme={themeAppearance}
+                accessibilityLabel={fetchLabel}
+                onPress={() => void sync.execute("fetch")}
+                disabled={sync.unavailable !== null}
+              />
+            </ScrollView>
+          ) : null}
           {explorer.overview.error ? (
             <EmptyState
               variant="plain"
