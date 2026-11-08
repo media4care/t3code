@@ -21,6 +21,7 @@ import {
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { InsightsFriction } from "./InsightsFriction";
 import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
@@ -86,9 +87,9 @@ export function InsightsDashboard({
             color: "text-warning-foreground bg-warning/8",
           },
           {
-            label: "Human requests",
+            label: "Agent questions",
             value: metrics.humanRequests,
-            hint: "Questions & approvals",
+            hint: "Asked through question & approval tools",
             icon: MessageCircleQuestionIcon,
             color: "text-info-foreground bg-info/8",
           },
@@ -356,6 +357,12 @@ export function InsightsDashboard({
           </p>
         </section>
       )}
+
+      <InsightsFriction
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
 
       <InsightsReviewedThreads
         environmentId={environmentId}

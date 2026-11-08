@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   InsightRecommendation,
   InsightsReport,
+  InsightTask,
   InsightsSettings,
   ProjectId,
   ServerProvider,
@@ -159,13 +160,21 @@ export function insightImplementationUrl(reference: string | null) {
  * The threads a review sampled, from each run's evidence: most recent first, with how many of
  * the review's findings cite them. Recommendations carry their evidence ids even in a snapshot.
  */
+/**
+ * What a review sampled: one row per task (a root thread with its child threads) when the report
+ * measured tasks, else one per thread, with how many findings cite its evidence.
+ */
 export function reviewedInsightThreads(
-  report: Pick<InsightsReport, "evidence" | "wins">,
+  report: Pick<InsightsReport, "evidence" | "wins" | "tasks">,
   recommendations: ReadonlyArray<Pick<InsightRecommendation, "evidenceIds">>,
 ) {
   const findings = [...report.wins, ...recommendations].map(
     (finding) => new Set(finding.evidenceIds),
   );
+  const taskOf = new Map<string, InsightTask>();
+  for (const task of report.tasks ?? [])
+    for (const threadId of [task.rootThreadId, ...task.threadIds])
+      taskOf.set(`${task.environmentId ?? ""}\n${threadId}`, task);
   const threads = new Map<
     string,
     {
@@ -175,23 +184,26 @@ export function reviewedInsightThreads(
       title: string;
       runs: number;
       lastActivityAt: string;
+      task: InsightTask | null;
       evidenceIds: string[];
     }
   >();
   for (const entry of report.evidence) {
-    const key = `${entry.environmentId ?? ""}\n${entry.threadId}`;
+    const task = taskOf.get(`${entry.environmentId ?? ""}\n${entry.threadId}`) ?? null;
+    const key = `${entry.environmentId ?? ""}\n${task?.rootThreadId ?? entry.threadId}`;
     const thread = threads.get(key) ?? {
       environmentId: entry.environmentId ?? null,
-      threadId: entry.threadId,
-      projectId: entry.projectId,
-      title: entry.title,
-      runs: 0,
-      lastActivityAt: entry.occurredAt,
+      threadId: task?.rootThreadId ?? entry.threadId,
+      projectId: task?.projectId ?? entry.projectId,
+      title: task?.title ?? entry.title,
+      runs: task?.runs ?? 0,
+      lastActivityAt: task?.lastActivityAt ?? entry.occurredAt,
+      task,
       evidenceIds: [],
     };
     thread.evidenceIds.push(entry.id);
-    if (entry.kind === "run") thread.runs++;
-    if (entry.occurredAt > thread.lastActivityAt) thread.lastActivityAt = entry.occurredAt;
+    if (!task && entry.kind === "run") thread.runs++;
+    if (!task && entry.occurredAt > thread.lastActivityAt) thread.lastActivityAt = entry.occurredAt;
     threads.set(key, thread);
   }
   return [...threads.values()]
@@ -201,3 +213,48 @@ export function reviewedInsightThreads(
     }))
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
 }
+
+/**
+ * Failures that keep coming back: across tasks, or repeated within one. Harmless ones and
+ * failures that printed no error are left out; they have nothing to act on.
+ */
+export function recurringInsightFriction(
+  report: Pick<InsightsReport, "evidence" | "friction">,
+  recommendations: ReadonlyArray<Pick<InsightRecommendation, "id" | "title" | "evidenceIds">>,
+) {
+  return (report.friction ?? [])
+    .filter(
+      (cluster) =>
+        !cluster.harmless &&
+        cluster.signature !== "(no error output)" &&
+        (cluster.tasks > 1 || cluster.maxPerTask > 1),
+    )
+    .slice(0, 6)
+    .map((cluster) => {
+      const example = report.evidence.find((entry) => entry.id === cluster.evidenceIds[0]);
+      return {
+        ...cluster,
+        recommendation:
+          recommendations.find((recommendation) =>
+            recommendation.evidenceIds.some((id) => cluster.evidenceIds.includes(id)),
+          ) ?? null,
+        example: example
+          ? { environmentId: example.environmentId ?? null, threadId: example.threadId }
+          : null,
+      };
+    });
+}
+
+const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
+
+/** A task's measures in a line; failures already counted as harmless are left out. */
+export const insightTaskMeasures = (task: InsightTask) =>
+  [
+    count(task.followUps, "follow-up", "follow-ups"),
+    task.interrupts ? count(task.interrupts, "interrupt", "interrupts") : null,
+    task.agentQuestions ? count(task.agentQuestions, "question", "questions") : null,
+    count(task.failedTools - task.harmlessFailures, "failed tool", "failed tools"),
+    task.latestRunStatus === "completed" ? null : `last run ${task.latestRunStatus}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");

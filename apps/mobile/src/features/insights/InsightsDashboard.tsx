@@ -11,6 +11,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { InsightsFriction } from "./InsightsFriction";
 import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
@@ -109,9 +110,9 @@ export function InsightsDashboard({
               icon: "exclamationmark.triangle",
             },
             {
-              label: "Human requests",
+              label: "Agent questions",
               value: metrics.humanRequests,
-              hint: "Questions & approvals",
+              hint: "Asked through question & approval tools",
               icon: "bubble.left",
             },
             {
@@ -313,6 +314,11 @@ export function InsightsDashboard({
         </View>
       )}
 
+      <InsightsFriction
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
       <InsightsReviewedThreads
         environmentId={environmentId}
         report={report}

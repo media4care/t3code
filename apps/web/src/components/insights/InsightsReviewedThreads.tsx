@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { EnvironmentId, InsightRecommendation, InsightsReport } from "@t3tools/contracts";
-import { reviewedInsightThreads } from "@t3tools/client-runtime/insights";
+import { insightTaskMeasures, reviewedInsightThreads } from "@t3tools/client-runtime/insights";
 import { MessagesSquareIcon } from "lucide-react";
 import { useState } from "react";
 import { useProjects } from "../../state/entities";
@@ -23,17 +23,20 @@ export function InsightsReviewedThreads({
   const threads = reviewedInsightThreads(report, recommendations);
   if (!threads.length) return null;
   const shown = expanded ? threads : threads.slice(0, INITIAL_ROWS);
+  const byTask = report.tasks !== undefined;
   return (
     <section className="rounded-xl border border-border bg-card p-5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <MessagesSquareIcon className="size-4 text-primary" aria-hidden />
-          <h3 className="text-sm font-semibold">Threads sampled</h3>
+          <h3 className="text-sm font-semibold">{byTask ? "Tasks sampled" : "Threads sampled"}</h3>
         </div>
         <Badge variant="secondary">{threads.length}</Badge>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        The threads whose runs this review sampled, most recent first.
+        {byTask
+          ? "Each task is a thread with its subagent threads. Follow-ups count only messages you wrote."
+          : "The threads whose runs this review sampled, most recent first."}
       </p>
       <ul className="mt-3 divide-y divide-border">
         {shown.map((thread) => {
@@ -65,7 +68,20 @@ export function InsightsReviewedThreads({
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
+                  {thread.task && (
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                      {insightTaskMeasures(thread.task)}
+                    </span>
+                  )}
                 </span>
+                {thread.task?.pullRequest && (
+                  <Badge
+                    variant={thread.task.pullRequest === "merged" ? "success" : "secondary"}
+                    size="sm"
+                  >
+                    PR {thread.task.pullRequest}
+                  </Badge>
+                )}
                 {thread.citedBy > 0 && (
                   <Badge variant="info" size="sm">
                     Cited by {thread.citedBy} {thread.citedBy === 1 ? "finding" : "findings"}

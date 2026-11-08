@@ -190,8 +190,8 @@ const seed = Effect.fn("test.insights.seed")(function* (count = 1) {
       VALUES (${run}, 'work', ${index}, 'codex', 'completed', ${timestamp}, ${timestamp}, '{"modelSelection":{"instanceId":"codex","model":"gpt-6-astra"}}')`;
     yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
       VALUES (${`event-${index}`}, 'thread', 'work', ${index}, 'run.completed', ${timestamp}, 'server', '{}', ${`{"runId":"${run}"}`}, 2)`;
-    yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
-      VALUES (${`item-${index}`}, 'work', ${run}, ${index}, 'assistant_message', 'completed', ${timestamp}, '{"text":"Tests passed; the deployment remains unverified."}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES (${`message-${index}`}, 'work', ${run}, 'assistant', 0, ${timestamp}, ${timestamp}, '{"createdBy":"agent","text":"Tests passed; the deployment remains unverified."}')`;
   }
 });
 
@@ -225,11 +225,8 @@ it.effect(
     Effect.gen(function* () {
       yield* seed(12);
       const sql = yield* SqlClient.SqlClient;
-      const longItemIds = [1, 2].map(
-        (index) => `turn-item:runtime-request:${"nested%3A".repeat(40)}:${index}`,
-      );
-      for (const [index, id] of longItemIds.entries()) {
-        yield* sql`UPDATE orchestration_v2_projection_turn_items SET turn_item_id = ${id} WHERE turn_item_id = ${`item-${index + 1}`}`;
+      for (const index of [1, 2]) {
+        yield* sql`UPDATE orchestration_v2_projection_messages SET message_id = ${`message:${"nested%3A".repeat(40)}:${index}`} WHERE message_id = ${`message-${index}`}`;
       }
       const service = yield* Insights.InsightsService;
       const first = yield* service.collect(analyst);
@@ -237,9 +234,7 @@ it.effect(
       assert.isTrue(first.report.hasMore);
       assert.equal(first.report.throughSequence, 10);
       assert.isFalse(first.report.evidence.some((e) => e.threadId === analyst));
-      const longEvidence = first.report.evidence.filter((e) =>
-        longItemIds.includes(e.itemId ?? ""),
-      );
+      const longEvidence = first.report.evidence.filter((e) => e.id.startsWith("sha256:"));
       assert.equal(longEvidence.length, 2);
       assert.notEqual(longEvidence[0]!.id, longEvidence[1]!.id);
       assert.isTrue(first.report.evidence.every((e) => e.id.length <= 300));
@@ -380,27 +375,96 @@ it.effect("tracks a restarted analyst and prevents a second analysis during its 
   }).pipe(Effect.provide(layer)),
 );
 
-it.effect("counts dynamic tools and nonzero exits, and keeps failure evidence in the packet", () =>
-  Effect.gen(function* () {
-    yield* seed();
-    const sql = yield* SqlClient.SqlClient;
-    for (const [id, type, status, payload] of [
-      ["dynamic", "dynamic_tool", "failed", '{"toolName":"database","output":"Unavailable"}'],
-      [
-        "command",
-        "command_execution",
-        "completed",
-        '{"input":"verify","output":"Failed","exitCode":1}',
-      ],
-      ["expected", "command_execution", "completed", '{"input":"test","exitCode":0}'],
-    ]) {
-      yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
-        VALUES (${id}, 'work', 'run-1', 2, ${type}, ${status}, ${timestamp}, ${payload})`;
-    }
-    const packet = yield* (yield* Insights.InsightsService).collect(analyst);
-    assert.equal(packet.report.metrics.toolFailures, 2);
-    assert.isTrue(packet.report.evidence.some((e) => e.id === "item:dynamic"));
-  }).pipe(Effect.provide(layer)),
+it.effect(
+  "groups child threads under their task, separates the user's messages from agents', and clusters failing tools",
+  () =>
+    Effect.gen(function* () {
+      yield* seed();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES ('child', 'project', 'child', 'codex', 'full-access', 'default', ${timestamp}, ${timestamp},
+          '{"lineage":{"parentThreadId":"work","rootThreadId":"work","relationshipToParent":"subagent"},"pullRequests":[{"snapshot":{"state":"merged"}}]}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json)
+        VALUES ('child-run', 'child', 1, 'codex', 'failed', ${timestamp}, ${timestamp}, '{"modelSelection":{"instanceId":"codex","model":"gpt-6-astra"}}')`;
+      yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
+        VALUES ('child-event', 'thread', 'child', 1, 'run.completed', ${timestamp}, 'server', '{}', '{"runId":"child-run"}', 2)`;
+      for (const [id, run, createdBy, at, text] of [
+        ["brief", "run-1", "user", "2026-10-30T09:00:00.000Z", "Fix the deploy."],
+        ["follow-up", "run-1", "user", "2026-10-30T11:00:00.000Z", "Also check staging."],
+        ["delegated", "child-run", "agent", timestamp, "Check the staging logs."],
+      ] as const)
+        yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+          VALUES (${id}, ${run === "run-1" ? "work" : "child"}, ${run}, 'user', 0, ${at}, ${at}, ${JSON.stringify({ createdBy, text })})`;
+      for (const [id, run, type, status, payload] of [
+        [
+          "dynamic",
+          "run-1",
+          "dynamic_tool",
+          "failed",
+          '{"toolName":"database","output":"Unavailable"}',
+        ],
+        [
+          "command",
+          "run-1",
+          "command_execution",
+          "completed",
+          '{"input":"sed -n 1,9p a.ts","output":"sed: a.ts: No such file or directory","exitCode":1}',
+        ],
+        [
+          "child-command",
+          "child-run",
+          "command_execution",
+          "completed",
+          '{"input":"sed -n 1,9p b.ts","output":"sed: b.ts: No such file or directory","exitCode":1}',
+        ],
+        ["expected", "run-1", "command_execution", "completed", '{"input":"test","exitCode":0}'],
+      ] as const) {
+        yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+          VALUES (${id}, ${run === "run-1" ? "work" : "child"}, ${run}, 2, ${type}, ${status}, ${timestamp}, ${payload})`;
+      }
+      const service = yield* Insights.InsightsService;
+      const { report } = yield* service.collect(analyst);
+      assert.equal(report.metrics.toolFailures, 3);
+      assert.deepInclude(report.tasks?.[0], {
+        rootThreadId: ThreadId.make("work"),
+        threadIds: [ThreadId.make("work"), ThreadId.make("child")],
+        runs: 2,
+        followUps: 1,
+        failedTools: 3,
+        latestRunStatus: "failed",
+        pullRequest: "merged",
+      });
+      assert.deepEqual(
+        report.friction?.map(({ key, failures, tasks, maxPerTask, evidenceIds }) => ({
+          key,
+          failures,
+          tasks,
+          maxPerTask,
+          evidenceIds,
+        })),
+        [
+          {
+            key: "sed · exit 1 · sed: <path>: No such file or directory",
+            failures: 2,
+            tasks: 1,
+            maxPerTask: 2,
+            evidenceIds: ["item:command", "item:child-command"],
+          },
+          {
+            key: "database · exit ? · (no error output)",
+            failures: 1,
+            tasks: 1,
+            maxPerTask: 1,
+            evidenceIds: ["item:dynamic"],
+          },
+        ],
+      );
+      const text = (id: string) => report.evidence.find((e) => e.id === id)?.text ?? "";
+      assert.match(text("message:brief"), /^Task brief/);
+      assert.match(text("message:follow-up"), /^Follow-up the user wrote/);
+      assert.match(text("message:delegated"), /not the user/);
+      assert.isUndefined((yield* service.snapshot()).reports[0]?.tasks);
+    }).pipe(Effect.provide(layer)),
 );
 
 it.effect(
@@ -423,7 +487,7 @@ it.effect(
         recommendationId: id,
         outcome: "improved" as const,
         explanation: "The deployment has been verified.",
-        evidenceIds: ["item:item-1"],
+        evidenceIds: ["message:message-1"],
       };
       const payload = {
         ...submission(next.report.id, "run:run-1"),
@@ -441,7 +505,7 @@ it.effect(
       });
       const later = "2026-10-30T13:00:00.000Z";
       yield* TestClock.setTime(Date.parse(later));
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET updated_at = ${later} WHERE turn_item_id = 'item-1'`;
+      yield* sql`UPDATE orchestration_v2_projection_messages SET created_at = ${later} WHERE message_id = 'message-1'`;
       yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
       VALUES ('later', 'thread', 'work', 3, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-1"}', 2)`;
       const after = yield* service.collect(analyst);

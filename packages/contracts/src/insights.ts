@@ -132,6 +132,46 @@ export const InsightSkillUsage = Schema.Struct({
 });
 export type InsightSkillUsage = typeof InsightSkillUsage.Type;
 
+/** Failing tool calls that failed the same way: program, exit code and normalized diagnostic. */
+export const InsightFrictionCluster = Schema.Struct({
+  key: ShortText,
+  family: ShortText,
+  exitCode: Schema.NullOr(Schema.Int),
+  signature: ShortText,
+  /** A lone search that found nothing, or a process stopped by a signal. */
+  harmless: Schema.Boolean,
+  failures: NonNegativeInt,
+  tasks: NonNegativeInt,
+  /** Most failures of this kind within one task. */
+  maxPerTask: NonNegativeInt,
+  evidenceIds: Schema.Array(ShortText).check(Schema.isMaxLength(3)),
+});
+export type InsightFrictionCluster = typeof InsightFrictionCluster.Type;
+
+/** One task (a root thread with its child threads) as measured over a review's sampled runs. */
+export const InsightTask = Schema.Struct({
+  rootThreadId: ThreadId,
+  projectId: ProjectId,
+  title: Schema.String,
+  threadIds: Schema.Array(ThreadId).check(Schema.isMaxLength(50)),
+  runs: NonNegativeInt,
+  /** Messages the user wrote after the task's first one; agent-written messages are excluded. */
+  followUps: NonNegativeInt,
+  interrupts: NonNegativeInt,
+  agentQuestions: NonNegativeInt,
+  failedTools: NonNegativeInt,
+  harmlessFailures: NonNegativeInt,
+  frictionKeys: Schema.Array(ShortText).check(Schema.isMaxLength(20)),
+  firstActivityAt: IsoDateTime,
+  lastActivityAt: IsoDateTime,
+  latestRunStatus: Schema.String,
+  /** A linked PR's state when the report was made (merged before open), not during the window. */
+  pullRequest: Schema.NullOr(Schema.Literals(["open", "merged", "closed"])),
+  /** Set when the task lives in a linked environment rather than the report's own. */
+  environmentId: Schema.optionalKey(EnvironmentId),
+});
+export type InsightTask = typeof InsightTask.Type;
+
 export const InsightsProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
@@ -154,6 +194,9 @@ export const InsightsEvidenceResult = Schema.Struct({
   metrics: InsightsMetrics,
   /** Absent from environments that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
+  /** Absent from environments that predate task measures. */
+  tasks: Schema.optionalKey(Schema.Array(InsightTask)),
+  friction: Schema.optionalKey(Schema.Array(InsightFrictionCluster)),
   evidence: Schema.Array(InsightEvidence),
   throughSequence: NonNegativeInt,
   hasMore: Schema.Boolean,
@@ -172,6 +215,10 @@ export const InsightsReport = Schema.Struct({
   metrics: InsightsMetrics,
   /** Most-loaded first; absent from reports that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
+  /** Most recently active first; absent from reports that predate task measures. */
+  tasks: Schema.optionalKey(Schema.Array(InsightTask)),
+  /** Most failures first; absent from reports that predate friction clusters. */
+  friction: Schema.optionalKey(Schema.Array(InsightFrictionCluster)),
   evidence: Schema.Array(InsightEvidence),
   recommendationIds: Schema.Array(Schema.String),
   scopeKey: Schema.String,

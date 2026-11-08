@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import {
   insightsLinkedEnvironments,
+  recurringInsightFriction,
   reviewedInsightThreads,
   setLinkedInsightsProject,
   insightImplementationStatus,
@@ -138,6 +139,71 @@ describe("reviewed threads", () => {
       [null, "work", 2, "2026-11-02T08:00:00.000Z", 2],
       [null, "fix", 1, "2026-11-01T10:00:00.000Z", 1],
       [studio, "fix", 1, "2026-10-30T10:00:00.000Z", 0],
+    ]);
+    const task = {
+      rootThreadId: ThreadId.make("work"),
+      projectId: ProjectId.make("app"),
+      title: "Ship the fix",
+      threadIds: [ThreadId.make("work"), ThreadId.make("child")],
+      runs: 3,
+      followUps: 1,
+      interrupts: 0,
+      agentQuestions: 0,
+      failedTools: 0,
+      harmlessFailures: 0,
+      frictionKeys: [],
+      firstActivityAt: "2026-11-01T08:00:00.000Z",
+      lastActivityAt: "2026-11-03T08:00:00.000Z",
+      latestRunStatus: "completed",
+      pullRequest: "merged" as const,
+    };
+    const grouped = reviewedInsightThreads(
+      {
+        evidence: [
+          evidence("run:1", "work", "run", "2026-11-01T08:00:00.000Z"),
+          evidence("run:4", "child", "run", "2026-11-03T08:00:00.000Z"),
+        ],
+        wins: [],
+        tasks: [task],
+      },
+      [{ evidenceIds: ["run:4"] }],
+    );
+    expect(grouped.map((t) => [t.threadId, t.title, t.runs, t.citedBy, t.task])).toEqual([
+      ["work", "Ship the fix", 3, 1, task],
+    ]);
+  });
+});
+
+describe("recurring friction", () => {
+  it("keeps failures that recur across or within tasks and have an error to act on", () => {
+    const cluster = (key: string, overrides: object) => ({
+      key,
+      family: "sed",
+      exitCode: 1,
+      signature: "No such file",
+      harmless: false,
+      failures: 2,
+      tasks: 2,
+      maxPerTask: 1,
+      evidenceIds: [],
+      ...overrides,
+    });
+    const friction = recurringInsightFriction(
+      {
+        evidence: [],
+        friction: [
+          cluster("across", {}),
+          cluster("within", { tasks: 1, maxPerTask: 2, evidenceIds: ["item:x"] }),
+          cluster("once", { failures: 1, tasks: 1 }),
+          cluster("harmless", { harmless: true }),
+          cluster("silent", { signature: "(no error output)" }),
+        ],
+      },
+      [{ id: "rec", title: "Quote separators", evidenceIds: ["item:x"] }],
+    );
+    expect(friction.map((entry) => [entry.key, entry.recommendation?.title ?? null])).toEqual([
+      ["across", null],
+      ["within", "Quote separators"],
     ]);
   });
 });
