@@ -186,6 +186,8 @@ export type ReleaseStatusDocument = typeof ReleaseStatusDocument.Type;
 
 export const ReleasesSnapshot = Schema.Struct({
   configured: Schema.Boolean,
+  /** The `releaseEnvironments` setting the command runs with; clones of one repository share it. */
+  environmentKey: TrimmedNonEmptyString,
   configurationError: Schema.NullOr(Schema.String),
   refreshMinutes: Schema.Number,
   running: Schema.Boolean,

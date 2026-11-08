@@ -8,6 +8,7 @@ import {
   type ReleasesRefreshInput,
   type ReleasesSnapshot,
 } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Clock from "effect/Clock";
@@ -24,6 +25,8 @@ import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 const ERROR_LIMIT = 2000;
@@ -60,6 +63,9 @@ const make = Effect.gen(function* () {
   const processes = yield* ProcessRunner.ProcessRunner;
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
+  const identities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const secrets = yield* SecretResolver.SecretResolver;
   const scope = yield* Effect.scope;
   const updates = yield* PubSub.sliding<ProjectId>(64);
   // Release status is cheap to rebuild and only matters while someone looks at it.
@@ -87,12 +93,42 @@ const make = Effect.gen(function* () {
     return (yield* decodeConfig(contents)).releases ?? null;
   });
 
+  // Clones and worktrees of one repository share its release environment.
+  const environmentKey = Effect.fn("ReleasesService.environmentKey")(function* (
+    projectId: ProjectId,
+    root: string,
+  ) {
+    return (yield* identities.resolve(root))?.canonicalKey ?? `project:${projectId}`;
+  });
+
+  const commandEnvironment = Effect.fn("ReleasesService.commandEnvironment")(function* (
+    key: string,
+  ) {
+    const variables = (yield* settings.getSettings).releaseEnvironments[key] ?? [];
+    const references = variables.flatMap((variable) =>
+      typeof variable.value === "string" ? [] : [variable.value],
+    );
+    const secretValues = references.length === 0 ? [] : yield* secrets.read(references);
+    const env: Record<string, string> = {};
+    const unreadable: Array<string> = [];
+    let index = 0;
+    for (const variable of variables) {
+      const value = typeof variable.value === "string" ? variable.value : secretValues[index++];
+      if (value === undefined) unreadable.push(variable.name);
+      else env[variable.name] = value;
+    }
+    if (unreadable.length > 0)
+      return yield* Effect.fail(`Could not read the secret for ${unreadable.join(", ")}.`);
+    return env;
+  });
+
   const snapshot = Effect.fn("ReleasesService.snapshot")(function* (projectId: ProjectId) {
     const root = yield* workspace(projectId);
     const config = yield* configuration(root).pipe(Effect.result);
     const state = stateOf(projectId);
     return {
       configured: config._tag === "Success" && config.success !== null,
+      environmentKey: yield* environmentKey(projectId, root),
       configurationError: config._tag === "Failure" ? tail(config.failure.message) : null,
       refreshMinutes:
         (config._tag === "Success" ? config.success?.refreshMinutes : undefined) ??
@@ -104,13 +140,15 @@ const make = Effect.gen(function* () {
   });
 
   const run = Effect.fn("ReleasesService.run")(
-    function* (root: string, config: ReleasesConfiguration) {
+    function* (projectId: ProjectId, root: string, config: ReleasesConfiguration) {
+      const env = yield* commandEnvironment(yield* environmentKey(projectId, root));
       const result = yield* processes.run({
         command: platform === "win32" ? "cmd.exe" : environment.SHELL || "/bin/sh",
         args: platform === "win32" ? ["/d", "/s", "/c", config.command] : ["-lc", config.command],
         cwd: config.cwd ? path.join(root, config.cwd) : root,
         timeout: "10 minutes",
         maxOutputBytes: MAX_OUTPUT,
+        env,
       });
       if (result.code !== 0)
         return yield* Effect.fail(
@@ -141,7 +179,7 @@ const make = Effect.gen(function* () {
     states.set(input.projectId, { ...state, running: true });
     yield* PubSub.publish(updates, input.projectId);
     const startedAt = DateTime.formatIso(yield* DateTime.now);
-    return run(root, config).pipe(
+    return run(input.projectId, root, config).pipe(
       Effect.result,
       Effect.flatMap((outcome) =>
         Effect.gen(function* () {

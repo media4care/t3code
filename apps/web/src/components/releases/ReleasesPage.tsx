@@ -21,6 +21,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
+import { ReleaseEnvironmentSection } from "./ReleaseEnvironmentSection";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
@@ -277,6 +278,12 @@ function ProjectReleases(props: {
           ) : null}
           <ReleaseServiceTable services={document.services} now={now} />
         </>
+      ) : null}
+      {snapshot && configured ? (
+        <ReleaseEnvironmentSection
+          environmentId={environmentId}
+          environmentKey={snapshot.environmentKey}
+        />
       ) : null}
     </>
   );

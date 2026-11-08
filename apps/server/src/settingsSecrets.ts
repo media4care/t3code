@@ -93,28 +93,55 @@ export function mapSettingsSecrets(
     return next;
   };
 
-  return mapSecretFieldGroups(settings, mapFields, (instanceId, environment) =>
-    environment.map((variable) => {
-      const { valueRedacted: _omit, ...rest } = variable;
-      // A secret reference is not itself secret; storage sees the value cleared.
-      const reference = typeof variable.value === "string" ? undefined : variable.value;
-      const result = map({
-        secretName: `provider-env-${encode(instanceId)}-${encode(variable.name)}`,
-        kind: "environment",
-        value: typeof variable.value === "string" ? variable.value : "",
-        redacted: reference === undefined && variable.valueRedacted === true,
-        sensitive: variable.sensitive,
-        providerInstanceId: instanceId,
-        environmentVariable: variable.name,
-      });
-      if (reference !== undefined) return { ...rest, value: reference };
-      return {
-        ...rest,
-        value: result.value,
-        ...(result.redacted ? { valueRedacted: true } : {}),
-      };
-    }),
+  const mapped = mapSecretFieldGroups(settings, mapFields, (instanceId, environment) =>
+    mapEnvironmentSecrets(
+      environment,
+      map,
+      (name) => `provider-env-${encode(instanceId)}-${encode(name)}`,
+      instanceId,
+    ),
   );
+  return {
+    ...mapped,
+    releaseEnvironments: Object.fromEntries(
+      Object.entries(settings.releaseEnvironments).map(([key, environment]) => [
+        key,
+        mapEnvironmentSecrets(
+          environment,
+          map,
+          (name) => `release-env-${encode(key)}-${encode(name)}`,
+        ),
+      ]),
+    ),
+  };
+}
+
+function mapEnvironmentSecrets(
+  environment: ProviderEnvironment,
+  map: (secret: SettingsSecret) => SecretValue,
+  secretName: (variableName: string) => string,
+  providerInstanceId?: string,
+): ProviderEnvironment {
+  return environment.map((variable) => {
+    const { valueRedacted: _omit, ...rest } = variable;
+    // A secret reference is not itself secret; storage sees the value cleared.
+    const reference = typeof variable.value === "string" ? undefined : variable.value;
+    const result = map({
+      secretName: secretName(variable.name),
+      kind: "environment",
+      value: typeof variable.value === "string" ? variable.value : "",
+      redacted: reference === undefined && variable.valueRedacted === true,
+      sensitive: variable.sensitive,
+      ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
+      environmentVariable: variable.name,
+    });
+    if (reference !== undefined) return { ...rest, value: reference };
+    return {
+      ...rest,
+      value: result.value,
+      ...(result.redacted ? { valueRedacted: true } : {}),
+    };
+  });
 }
 
 /**

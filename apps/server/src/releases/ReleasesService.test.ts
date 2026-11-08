@@ -1,6 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, type ReleaseStatusDocument, type ReleasesSnapshot } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  SecretProviderId,
+  type ReleaseStatusDocument,
+  type ReleasesSnapshot,
+  type ServerSettings,
+} from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +20,8 @@ import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettingsService from "../serverSettings.ts";
 import * as Releases from "./ReleasesService.ts";
 
 const projectId = ProjectId.make("releases-test");
@@ -26,7 +36,14 @@ const document: ReleaseStatusDocument = {
   services: [],
 };
 
-const fixture = Effect.fn("Releases.test.fixture")(function* (script: string) {
+const fixture = Effect.fn("Releases.test.fixture")(function* (
+  script: string,
+  options: {
+    readonly canonicalKey?: string;
+    readonly releaseEnvironments?: ServerSettings["releaseEnvironments"];
+    readonly secrets?: Readonly<Record<string, string>>;
+  } = {},
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-releases-test-" });
@@ -58,7 +75,34 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (script: string) {
           : Option.none(),
       ),
   });
-  const context = yield* Layer.build(Layer.fresh(Releases.layer.pipe(Layer.provide(projectLayer))));
+  const identityLayer = Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+    resolve: () =>
+      Effect.succeed(
+        options.canonicalKey === undefined
+          ? null
+          : {
+              canonicalKey: options.canonicalKey,
+              locator: { source: "git-remote", remoteName: "origin", remoteUrl: "git@x:y.git" },
+            },
+      ),
+  });
+  const settingsLayer = Layer.mock(ServerSettingsService.ServerSettingsService)({
+    getSettings: Effect.succeed({
+      ...DEFAULT_SERVER_SETTINGS,
+      releaseEnvironments: options.releaseEnvironments ?? {},
+    }),
+  });
+  const secretsLayer = Layer.mock(SecretResolver.SecretResolver)({
+    read: (references) =>
+      Effect.succeed(references.map((reference) => options.secrets?.[reference.reference])),
+  });
+  const context = yield* Layer.build(
+    Layer.fresh(
+      Releases.layer.pipe(
+        Layer.provide(Layer.mergeAll(projectLayer, identityLayer, settingsLayer, secretsLayer)),
+      ),
+    ),
+  );
   return { service: Context.get(context, Releases.ReleasesService), root, fs, path };
 });
 
@@ -117,6 +161,57 @@ describe("ReleasesService", () => {
       const snapshot = yield* finishedAfter(service, first);
       assert.deepStrictEqual(snapshot.document, document);
       assert.include(snapshot.lastRun?.error ?? "", "schemaVersion");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("runs the command with the release environment of the project's repository", () =>
+    Effect.gen(function* () {
+      const canonicalKey = "github.com/acme/app";
+      const { service } = yield* fixture(
+        `if (process.env.RELEASE_TOKEN !== "plain" || process.env.STORE_KEY !== "from-vault") {
+          console.error("missing " + process.env.RELEASE_TOKEN + " " + process.env.STORE_KEY);
+          process.exit(1);
+        }
+        console.log(JSON.stringify(${encodeJson(document)}));`,
+        {
+          canonicalKey,
+          releaseEnvironments: {
+            [canonicalKey]: [
+              { name: "RELEASE_TOKEN", value: "plain", sensitive: true },
+              {
+                name: "STORE_KEY",
+                value: { provider: SecretProviderId.make("vault"), reference: "store" },
+                sensitive: true,
+              },
+            ],
+            [`project:${projectId}`]: [{ name: "RELEASE_TOKEN", value: "other", sensitive: false }],
+          },
+          secrets: { store: "from-vault" },
+        },
+      );
+      const snapshot = yield* service.read({ projectId });
+      assert.strictEqual(snapshot.environmentKey, canonicalKey);
+      assert.strictEqual(snapshot.lastRun?.error, null);
+      assert.deepStrictEqual(snapshot.document, document);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("fails the run when a release secret cannot be read", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture(`console.log(JSON.stringify(${encodeJson(document)}));`, {
+        releaseEnvironments: {
+          [`project:${projectId}`]: [
+            {
+              name: "STORE_KEY",
+              value: { provider: SecretProviderId.make("vault"), reference: "gone" },
+              sensitive: true,
+            },
+          ],
+        },
+      });
+      const snapshot = yield* service.read({ projectId });
+      assert.strictEqual(snapshot.environmentKey, `project:${projectId}`);
+      assert.include(snapshot.lastRun?.error ?? "", "STORE_KEY");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
