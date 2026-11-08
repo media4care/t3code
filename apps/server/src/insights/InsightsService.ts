@@ -1008,22 +1008,47 @@ const make = Effect.gen(function* () {
               (h, index, history) =>
                 h.status === "implemented" && history[index - 1]?.status !== "implemented",
             )?.at;
-            // One observation counts once per trial, however many reports see the run again.
-            const assessed = new Set(
-              existing.assessments
-                .filter((previous) => implementationAt && previous.createdAt > implementationAt)
-                .flatMap((previous) => previous.evidence.map((evidence) => evidence.id)),
-            );
-            if (
-              !implementationAt ||
-              current.createdAt <= implementationAt ||
-              assessment.evidenceIds.some((id) => assessed.has(id)) ||
-              (assessment.outcome !== "insufficient_evidence" &&
-                assessment.evidenceIds.some(
-                  (id) => evidenceById.get(id)!.occurredAt <= implementationAt,
-                ))
-            )
+            if (!implementationAt || current.createdAt <= implementationAt)
               return yield* new InsightsError({ reason: "invalid_evidence" });
+            // insufficient_evidence may cite earlier work as context; it measures nothing.
+            if (assessment.outcome !== "insufficient_evidence") {
+              // One observation counts once per trial, however many reports see the run again.
+              const assessed = new Set(
+                existing.assessments
+                  .filter(
+                    (previous) =>
+                      previous.outcome !== "insufficient_evidence" &&
+                      previous.createdAt > implementationAt,
+                  )
+                  .flatMap((previous) => previous.evidence.map((evidence) => evidence.id)),
+              );
+              const cited = assessment.evidenceIds.map((id) => evidenceById.get(id)!);
+              const localRunIds = cited.flatMap((evidence) =>
+                evidence.runId && !evidence.environmentId ? [evidence.runId] : [],
+              );
+              // A run that began before the trial ran without the change, whenever it ended.
+              const runStarts = new Map(
+                localRunIds.length
+                  ? (yield* sql<{
+                      run_id: string;
+                      started_at: string;
+                    }>`SELECT run_id, COALESCE(json_extract(payload_json, '$.startedAt'), requested_at) AS started_at
+                      FROM orchestration_v2_projection_runs WHERE ${sql.in("run_id", localRunIds)}`).map(
+                      (row) => [row.run_id, row.started_at] as const,
+                    )
+                  : [],
+              );
+              if (
+                cited.some(
+                  (evidence) =>
+                    assessed.has(evidence.id) ||
+                    ((!evidence.environmentId && evidence.runId
+                      ? runStarts.get(evidence.runId)
+                      : undefined) ?? evidence.occurredAt) <= implementationAt,
+                )
+              )
+                return yield* new InsightsError({ reason: "invalid_evidence" });
+            }
             yield* saveRecommendation({
               ...existing,
               updatedAt: at,

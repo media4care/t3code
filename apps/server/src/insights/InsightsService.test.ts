@@ -509,7 +509,7 @@ it.effect(
 );
 
 it.effect(
-  "rejects improvement claims using pre-change evidence, then accepts later observations",
+  "rejects measurements from runs begun before the trial, then accepts later observations",
   () =>
     Effect.gen(function* () {
       yield* seed();
@@ -540,21 +540,38 @@ it.effect(
         "invalid_evidence",
       );
       assert.equal((yield* service.recommendation(id)).assessments.length, 0);
-      yield* service.submit(analyst, {
-        ...payload,
-        assessments: [{ ...assessment, outcome: "insufficient_evidence", evidenceIds: [] }],
-      });
+      const boundary = {
+        ...assessment,
+        outcome: "insufficient_evidence" as const,
+        evidenceIds: ["run:run-1"],
+      };
+      yield* service.submit(analyst, { ...payload, assessments: [boundary] });
       const later = "2026-10-30T13:00:00.000Z";
       yield* TestClock.setTime(Date.parse(later));
       yield* sql`UPDATE orchestration_v2_projection_messages SET created_at = ${later} WHERE message_id = 'message-1'`;
       yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
       VALUES ('later', 'thread', 'work', 3, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-1"}', 2)`;
+      const straddling = yield* service.collect(analyst);
+      const straddlingPayload = { ...payload, reportId: straddling.report.id };
+      assert.equal(
+        (yield* Effect.flip(service.submit(analyst, straddlingPayload))).reason,
+        "invalid_evidence",
+      );
+      yield* service.submit(analyst, { ...straddlingPayload, assessments: [boundary] });
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json)
+      VALUES ('run-2', 'work', 2, 'codex', 'completed', ${later}, ${later}, '{"modelSelection":{"instanceId":"codex","model":"gpt-6-astra"}}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES ('message-2', 'work', 'run-2', 'assistant', 0, ${later}, ${later}, '{"createdBy":"agent","text":"Deployed version verified."}')`;
+      yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
+      VALUES ('after', 'thread', 'work', 4, 'run.completed', ${later}, 'server', '{}', '{"runId":"run-2"}', 2)`;
       const after = yield* service.collect(analyst);
-      const proposal = submission(after.report.id, "run:run-1").recommendations[0]!;
+      const proposal = submission(after.report.id, "run:run-2").recommendations[0]!;
+      const observed = { ...assessment, evidenceIds: ["message:message-2"] };
       yield* service.submit(analyst, {
         ...payload,
         reportId: after.report.id,
         recommendations: [{ ...proposal, validation: "Count fewer tool calls." }],
+        assessments: [observed],
       });
       const assessed = yield* service.recommendation(id);
       assert.equal(assessed.assessments.at(-1)?.outcome, "improved");
@@ -562,11 +579,16 @@ it.effect(
       assert.deepInclude(assessed.trial, { validation: "Check subsequent deployment evidence." });
       yield* TestClock.adjust("1 hour");
       yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
-      VALUES ('again', 'thread', 'work', 4, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-1"}', 2)`;
+      VALUES ('again', 'thread', 'work', 5, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-2"}', 2)`;
       const again = yield* service.collect(analyst);
       assert.equal(
-        (yield* Effect.flip(service.submit(analyst, { ...payload, reportId: again.report.id })))
-          .reason,
+        (yield* Effect.flip(
+          service.submit(analyst, {
+            ...payload,
+            reportId: again.report.id,
+            assessments: [observed],
+          }),
+        )).reason,
         "invalid_evidence",
       );
     }).pipe(Effect.provide(layer)),
