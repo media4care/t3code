@@ -236,25 +236,6 @@ export function usePullRequestListFilters(props: {
       title: value.filters.checks ? `${CHECKS[value.filters.checks]} checks` : "Checks",
       subactions: choices("checks", CHECKS, value.filters.checks ?? "all"),
     },
-    {
-      id: "projects",
-      title:
-        projects.find(
-          (project) =>
-            project.id === value.projectId && project.environmentId === value.projectEnvironmentId,
-        )?.title ?? "Project",
-      subactions: choices(
-        "project",
-        Object.fromEntries([
-          ["", "All projects"],
-          ...projects.map((project) => [
-            JSON.stringify([project.environmentId, project.id]),
-            project.title,
-          ]),
-        ]),
-        value.projectId ? JSON.stringify([value.projectEnvironmentId, value.projectId]) : "",
-      ),
-    },
     { id: "sort", title: SORTS[value.sort], subactions: choices("sort", SORTS, value.sort) },
   ];
   const reset = (withEnvironment: boolean): MenuProps["actions"][number] => ({
@@ -278,6 +259,17 @@ export function usePullRequestListFilters(props: {
       ...props.environments.map((environment) => [environment.id, environment.label]),
     ]),
     props.environmentId ?? "",
+  );
+  const projectActions = choices(
+    "project",
+    Object.fromEntries([
+      ["", "All repositories"],
+      ...projects.map((project) => [
+        JSON.stringify([project.environmentId, project.id]),
+        project.title,
+      ]),
+    ]),
+    value.projectId ? JSON.stringify([value.projectEnvironmentId, value.projectId]) : "",
   );
   const stateActions = choices("state", STATES, value.state);
   const involvementActions = choices("involvement", INVOLVEMENT, value.involvement);
@@ -313,6 +305,7 @@ export function usePullRequestListFilters(props: {
       ? {
           actions: [
             { id: "environment", title: "Environment", subactions: environmentActions },
+            { id: "projects", title: "Repository", subactions: projectActions },
             { id: "state", title: "State", subactions: stateActions },
             { id: "involvement", title: "Involvement", subactions: involvementActions },
             { id: "labels", title: "Labels", subactions: labelActions },
@@ -336,6 +329,14 @@ export function usePullRequestListFilters(props: {
             ?.label ?? "All environments")
         : null,
     environmentActions,
+    projectLabel: value.projectId
+      ? (projects.find(
+          (project) =>
+            project.id === value.projectId && project.environmentId === value.projectEnvironmentId,
+        )?.title ?? "Repository")
+      : "Repository",
+    projectActions,
+    projectActive: Boolean(value.projectId),
     state: value.state,
     stateActions,
     involvement: value.involvement,
@@ -383,6 +384,13 @@ export function PullRequestListFilters(props: {
           onSelect={select}
         />
       ) : null}
+      <ListFilterMenu
+        label={props.filters.projectLabel}
+        active={props.filters.projectActive}
+        accessibilityLabel="Filter by repository"
+        actions={props.filters.projectActions}
+        onSelect={select}
+      />
       <ListFilterMenu
         label={STATES[props.filters.state]}
         active={props.filters.state !== "open"}

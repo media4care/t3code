@@ -107,6 +107,7 @@ export function GitExplorerBranchRow(props: {
   const current =
     ref.kind === "local" &&
     (ref.shortName === props.overview.headBranch || ref.name === props.overview.headBranch);
+  const color = GIT_EXPLORER_COLORS[props.color % GIT_EXPLORER_COLORS.length]!.value;
   const slash = props.displayName.lastIndexOf("/");
   const prefix = props.displayName.slice(0, slash + 1);
   const leaf = props.displayName.slice(slash + 1);
@@ -173,16 +174,32 @@ export function GitExplorerBranchRow(props: {
         />
       ) : null}
       {!props.selection ? (
-        <View
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: 5,
-            backgroundColor: GIT_EXPLORER_COLORS[props.color % GIT_EXPLORER_COLORS.length]!.value,
-            borderWidth: current ? 2 : 0,
-            borderColor: "white",
-          }}
-        />
+        <View style={{ width: 14, height: 14 }} className="items-center justify-center">
+          <View
+            style={
+              current
+                ? {
+                    width: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    borderWidth: 1.5,
+                    borderColor: color,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }
+                : undefined
+            }
+          >
+            <View
+              style={{
+                width: current ? 7 : 6,
+                height: current ? 7 : 6,
+                borderRadius: 3.5,
+                backgroundColor: color,
+              }}
+            />
+          </View>
+        </View>
       ) : null}
       {current && !sidebar ? (
         <View
@@ -197,7 +214,7 @@ export function GitExplorerBranchRow(props: {
           className={sidebar ? "text-base" : "text-[12px] leading-[16px]"}
         >
           {prefix ? <Text className={mutedForeground}>{prefix}</Text> : null}
-          <Text className={cn("font-t3-medium", foreground, current && "font-t3-semibold")}>
+          <Text className={cn(current ? "font-t3-bold" : "font-t3-medium", foreground)}>
             {leaf}
           </Text>
         </Text>
