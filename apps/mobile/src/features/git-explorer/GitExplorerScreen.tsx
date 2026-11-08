@@ -1,4 +1,4 @@
-import { use, useContext, useState } from "react";
+import { use, useContext, useRef, useState } from "react";
 import { FlatList, Platform, Pressable, View } from "react-native";
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -17,6 +17,8 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { cn } from "../../lib/cn";
+import { WorkspacePaneDivider } from "../layout/workspace-pane-divider";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
@@ -36,6 +38,9 @@ import {
   THREAD_LIST_V2_SIDEBAR_ROW_STYLE,
 } from "../threads/thread-list-v2-row-appearance";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
+
+const HISTORY_MIN_HEIGHT = 120;
+const REVIEW_MIN_HEIGHT = 140;
 
 type GitExplorerRouteParams = GitExplorerParams & { readonly revision?: string | undefined };
 
@@ -283,6 +288,17 @@ function GitExplorerRepository(props: {
   const branchesInListColumn = useBranchesInListColumn();
   const [reviewVisible, setReviewVisible] = useState(false);
   const [branchesVisible, setBranchesVisible] = useState(false);
+  const [paneHeight, setPaneHeight] = useState(0);
+  const [preferredReviewHeight, setPreferredReviewHeight] = useState<number | null>(null);
+  const resizeStartHeight = useRef(0);
+  const [fileListWidth, setFileListWidth] = useState(190);
+  const reviewHeight = Math.max(
+    REVIEW_MIN_HEIGHT,
+    Math.min(
+      preferredReviewHeight ?? Math.round(paneHeight * 0.46),
+      paneHeight - HISTORY_MIN_HEIGHT,
+    ),
+  );
   const split = width >= 700;
   const branchRail = width >= 850 && !branchesInListColumn;
   const branchesPinned = branchRail || branchesInListColumn;
@@ -449,9 +465,12 @@ function GitExplorerRepository(props: {
                     />
                   </View>
                 ) : null}
-                <View className="min-h-0 min-w-0 flex-1">
+                <View
+                  className="min-h-0 min-w-0 flex-1"
+                  onLayout={(event) => setPaneHeight(event.nativeEvent.layout.height)}
+                >
                   {split || !reviewVisible ? (
-                    <View style={{ flex: split ? 1.15 : 1, minHeight: split ? 140 : undefined }}>
+                    <View className="min-h-0 flex-1">
                       <GitExplorerGraph
                         commits={explorer.commits}
                         overview={overview}
@@ -467,8 +486,25 @@ function GitExplorerRepository(props: {
                       />
                     </View>
                   ) : null}
+                  {split ? (
+                    <WorkspacePaneDivider
+                      axis="y"
+                      accessibilityLabel="Resize review pane"
+                      currentWidth={reviewHeight}
+                      resizeDirection={-1}
+                      onResizeStart={() => {
+                        resizeStartHeight.current = reviewHeight;
+                      }}
+                      onResizeBy={(delta) =>
+                        setPreferredReviewHeight(resizeStartHeight.current + delta)
+                      }
+                    />
+                  ) : null}
                   {split || reviewVisible ? (
-                    <View className="min-h-0 flex-1 border-t border-border">
+                    <View
+                      style={split ? { height: reviewHeight } : undefined}
+                      className={cn("min-h-0 border-t border-border", !split && "flex-1")}
+                    >
                       <GitExplorerChanges
                         key={selectedRevision ?? "working-tree"}
                         params={params}
@@ -476,6 +512,8 @@ function GitExplorerRepository(props: {
                         revision={selectedRevision}
                         split={split}
                         active={explorer.active}
+                        fileListWidth={fileListWidth}
+                        onFileListWidthChange={setFileListWidth}
                         onBack={() => setReviewVisible(false)}
                       />
                     </View>
