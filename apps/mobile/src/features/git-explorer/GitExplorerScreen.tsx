@@ -12,6 +12,7 @@ import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppBar } from "../../components/ui/AppBar";
+import type { AppBarMenu } from "../../components/ui/AppBar.types";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -27,11 +28,11 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
-import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
 import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
+import { useGitExplorerSync } from "./useGitExplorerSync";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import {
   THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
@@ -278,6 +279,7 @@ function GitExplorerRepository(props: {
   });
   const explorer = useGitExplorer(params);
   const overview = explorer.overview.data;
+  const sync = useGitExplorerSync(params, overview, explorer.refresh);
   const commitMenu = useGitExplorerCommitMenu({
     params,
     overview,
@@ -334,17 +336,46 @@ function GitExplorerRepository(props: {
             : (project?.title ?? "Repository")
         }
         onBack={() => navigation.goBack()}
-        actions={[
+        menus={[
           {
-            accessibilityLabel: "Refresh Git Explorer",
+            title: "Sync",
             icon: "arrow.clockwise",
-            onPress: explorer.refresh,
-            disabled: explorer.overview.isPending,
+            items: [
+              {
+                id: "fetch",
+                title: sync.pending === "fetch" ? "Fetching…" : "Fetch all remotes",
+                icon: "arrow.down.circle",
+                subtitle:
+                  sync.unavailable ??
+                  (overview?.lastFetchAt
+                    ? `Last fetched ${new Date(overview.lastFetchAt).toLocaleString()}`
+                    : "Last fetch unknown"),
+                disabled: sync.unavailable !== null,
+                onPress: () => void sync.execute("fetch"),
+              },
+              {
+                id: "pull",
+                title:
+                  sync.pending === "pull"
+                    ? "Pulling…"
+                    : `Pull ${overview?.headBranch ?? "current branch"}`,
+                icon: "arrow.down",
+                subtitle: sync.pullUnavailable ?? "Fast-forward only",
+                disabled: sync.pullUnavailable !== null,
+                onPress: () => void sync.execute("pull"),
+              },
+              {
+                id: "refresh",
+                title: "Refresh",
+                icon: "arrow.clockwise",
+                subtitle: "Reread local Git without fetching",
+                disabled: explorer.overview.isPending,
+                onPress: explorer.refresh,
+              },
+            ],
           },
-        ]}
-        menus={
           // Submodule worktrees are not selectable; the parent worktree stays fixed.
-          overview && !params.submodulePath
+          ...(overview && !params.submodulePath
             ? [
                 {
                   title: "Review worktree",
@@ -358,10 +389,10 @@ function GitExplorerRepository(props: {
                       selected: worktree.path === overview.selectedWorktreePath,
                       onPress: () => props.onWorktreeChange(worktree.path),
                     })),
-                },
+                } satisfies AppBarMenu,
               ]
-            : []
-        }
+            : []),
+        ]}
       />
       <ScreenContent>
         <View
@@ -427,11 +458,6 @@ function GitExplorerRepository(props: {
                     : "Fetch unknown"}{" "}
                   · local refs
                 </Text>
-                <GitExplorerSyncControls
-                  params={params}
-                  overview={overview}
-                  onRefresh={explorer.refresh}
-                />
               </View>
               {!branchesPinned && branchesVisible ? (
                 <View style={{ height: 240 }} className="border-b border-border bg-card">
