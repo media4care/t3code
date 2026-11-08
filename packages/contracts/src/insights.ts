@@ -172,6 +172,31 @@ export const InsightTask = Schema.Struct({
 });
 export type InsightTask = typeof InsightTask.Type;
 
+const InsightDecisionFields = {
+  /** `briefing`: how the user briefs and steers agents. `toolkit`: a change to skills, tools or setup. */
+  kind: Schema.Literals(["briefing", "toolkit"]),
+  title: ShortText,
+  /** What to do differently. */
+  action: Text,
+  /** The chain behind it: the brief, what the agent did, the correction, the outcome. */
+  why: Text,
+  evidenceIds: Schema.Array(ShortText).check(Schema.isMinLength(1), Schema.isMaxLength(6)),
+};
+
+/** One of the few things a review asks the user to decide or change. */
+export const InsightDecision = Schema.Struct({
+  ...InsightDecisionFields,
+  /** The recommendation a toolkit decision is carried out through. */
+  recommendationId: Schema.optionalKey(Schema.String),
+});
+export type InsightDecision = typeof InsightDecision.Type;
+
+export const InsightDecisionBrief = Schema.Struct({
+  headline: ShortText,
+  decisions: Schema.Array(InsightDecision).check(Schema.isMaxLength(3)),
+});
+export type InsightDecisionBrief = typeof InsightDecisionBrief.Type;
+
 export const InsightsProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
@@ -210,6 +235,8 @@ export const InsightsReport = Schema.Struct({
   createdAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
   summary: Schema.String,
+  /** Absent from reports that predate decision briefs, and from analyses that found nothing to decide. */
+  brief: Schema.optionalKey(InsightDecisionBrief),
   wins: Schema.Array(Schema.Struct({ text: Text, evidenceIds: Schema.Array(ShortText) })),
   limitations: Schema.Array(Text),
   metrics: InsightsMetrics,
@@ -258,6 +285,18 @@ export type InsightsSnapshot = typeof InsightsSnapshot.Type;
 export const InsightsSubmitInput = Schema.Struct({
   reportId: ShortText,
   summary: Text,
+  brief: Schema.optionalKey(
+    Schema.Struct({
+      headline: ShortText,
+      decisions: Schema.Array(
+        Schema.Struct({
+          ...InsightDecisionFields,
+          /** Required for toolkit decisions: a key from this submission or an existing recommendation. */
+          recommendationKey: Schema.optionalKey(ShortText),
+        }),
+      ).check(Schema.isMaxLength(3)),
+    }),
+  ),
   wins: Schema.Array(
     Schema.Struct({
       text: Text,

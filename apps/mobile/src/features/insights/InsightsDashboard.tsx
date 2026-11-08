@@ -11,6 +11,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { InsightsDecisionBrief } from "./InsightsDecisionBrief";
 import { InsightsFriction } from "./InsightsFriction";
 import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
@@ -94,6 +95,11 @@ export function InsightsDashboard({
   });
   return (
     <View className="gap-4">
+      <InsightsDecisionBrief
+        environmentId={environmentId}
+        report={report}
+        onOpenRecommendation={onOpenRecommendation}
+      />
       <View className="flex-row flex-wrap gap-3">
         {(
           [

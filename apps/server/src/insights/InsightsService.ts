@@ -926,10 +926,17 @@ const make = Effect.gen(function* () {
       if (current.status === "completed") return current;
       if (current.status !== "analyzing") return yield* new InsightsError({ reason: "not_found" });
       const evidenceById = new Map(current.evidence.map((e) => [e.id, e]));
-      const references = [...input.wins, ...input.recommendations, ...input.assessments];
+      const decisions = input.brief?.decisions ?? [];
+      const references = [
+        ...input.wins,
+        ...input.recommendations,
+        ...input.assessments,
+        ...decisions,
+      ];
       const keys = input.recommendations.map((r) => insightKey(r.key));
       if (
         references.some((r) => r.evidenceIds.some((id) => !evidenceById.has(id))) ||
+        decisions.some((d) => (d.kind === "toolkit") !== (d.recommendationKey !== undefined)) ||
         keys.some((key) => !key) ||
         new Set(keys).size !== keys.length ||
         new Set(input.assessments.map((a) => a.recommendationId)).size !== input.assessments.length
@@ -969,6 +976,25 @@ const make = Effect.gen(function* () {
             yield* saveRecommendation(value);
             ids.push(value.id);
           }
+          const recommendationIds = new Map(keys.map((key, index) => [key, ids[index]!]));
+          const brief = input.brief && {
+            headline: input.brief.headline,
+            decisions: yield* Effect.forEach(
+              input.brief.decisions,
+              Effect.fnUntraced(function* ({ recommendationKey, ...decision }) {
+                if (recommendationKey === undefined) return decision;
+                const key = insightKey(recommendationKey);
+                const recommendationId =
+                  recommendationIds.get(key) ??
+                  (yield* sql<{
+                    id: string;
+                  }>`SELECT id FROM insights_recommendations WHERE insight_key = ${key}`)[0]?.id;
+                if (!recommendationId)
+                  return yield* new InsightsError({ reason: "invalid_evidence" });
+                return { ...decision, recommendationId };
+              }),
+            ),
+          };
           for (const assessment of input.assessments) {
             const existing = yield* recommendation(assessment.recommendationId);
             if (
@@ -1010,6 +1036,7 @@ const make = Effect.gen(function* () {
             status: "completed",
             completedAt: at,
             summary: input.summary,
+            ...(brief ? { brief } : {}),
             wins: input.wins,
             limitations: [...current.limitations, ...input.limitations],
             recommendationIds: ids,

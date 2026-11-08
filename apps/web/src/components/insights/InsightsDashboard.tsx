@@ -21,6 +21,7 @@ import {
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { InsightsDecisionBrief } from "./InsightsDecisionBrief";
 import { InsightsFriction } from "./InsightsFriction";
 import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
@@ -70,6 +71,11 @@ export function InsightsDashboard({
   });
   return (
     <div className="space-y-4">
+      <InsightsDecisionBrief
+        environmentId={environmentId}
+        report={report}
+        onOpenRecommendation={onOpenRecommendation}
+      />
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
           {

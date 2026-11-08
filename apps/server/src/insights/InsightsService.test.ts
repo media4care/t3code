@@ -240,9 +240,31 @@ it.effect(
       assert.isTrue(first.report.evidence.every((e) => e.id.length <= 300));
       assert.equal((yield* service.collect(analyst)).report.id, first.report.id);
       assert.deepEqual((yield* service.report(first.report.id)).evidence, first.report.evidence);
+      const decision = {
+        title: "Name the deployment check",
+        action: "Say which deployment check counts as done.",
+        why: "The brief left verification open and the agent stopped at passing tests.",
+        evidenceIds: [longEvidence[0]!.id],
+      };
+      const briefed = (decisions: NonNullable<InsightsSubmitInput["brief"]>["decisions"]) => ({
+        ...submission(first.report.id, longEvidence[0]!.id),
+        brief: { headline: "Deployments are left unverified.", decisions },
+      });
+      assert.equal(
+        (yield* Effect.flip(service.submit(analyst, briefed([{ ...decision, kind: "toolkit" }]))))
+          .reason,
+        "invalid_evidence",
+      );
       const completed = yield* service.submit(
         analyst,
-        submission(first.report.id, longEvidence[0]!.id),
+        briefed([
+          { ...decision, kind: "briefing" },
+          { ...decision, kind: "toolkit", recommendationKey: "Deployment verification" },
+        ]),
+      );
+      assert.deepEqual(
+        completed.brief?.decisions.map((d) => d.recommendationId ?? null),
+        [null, completed.recommendationIds[0]],
       );
       const recommendation = yield* service.recommendation(completed.recommendationIds[0]!);
       assert.deepEqual(recommendation.evidence, [longEvidence[0]!]);
@@ -250,6 +272,25 @@ it.effect(
       assert.equal(next.report.metrics.runs, 2);
       assert.equal(next.report.fromSequence, 10);
       assert.isFalse(next.report.hasMore);
+      const reprioritized = yield* service.submit(analyst, {
+        ...submission(next.report.id, next.report.evidence[0]!.id),
+        recommendations: [],
+        brief: {
+          headline: "Verify deployments next.",
+          decisions: [
+            {
+              ...decision,
+              kind: "toolkit",
+              evidenceIds: [next.report.evidence[0]!.id],
+              recommendationKey: "deployment-verification",
+            },
+          ],
+        },
+      });
+      assert.equal(
+        reprioritized.brief?.decisions[0]?.recommendationId,
+        completed.recommendationIds[0],
+      );
     }).pipe(Effect.provide(layer)),
 );
 
