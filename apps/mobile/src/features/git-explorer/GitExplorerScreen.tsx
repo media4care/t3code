@@ -257,9 +257,11 @@ function GitExplorerBranchesColumn(props: {
       />
     </View>
   );
+  // The header stays while the repository loads or fails, so its chip can still switch away.
   if (!overview.data)
     return (
-      <View className="flex-1 bg-drawer">
+      <ScrollView className="flex-1 bg-drawer" contentInsetAdjustmentBehavior="automatic">
+        {header}
         {overview.error ? (
           <EmptyState
             variant="plain"
@@ -273,7 +275,7 @@ function GitExplorerBranchesColumn(props: {
             <AppActivityIndicator />
           </View>
         )}
-      </View>
+      </ScrollView>
     );
   return (
     <GitExplorerBranches
