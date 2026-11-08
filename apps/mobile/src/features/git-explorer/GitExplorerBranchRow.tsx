@@ -43,6 +43,7 @@ export function GitExplorerBranchRow(props: {
   readonly color: number;
   readonly branch: GitExplorerRef;
   readonly displayName: string;
+  readonly depth?: number;
   readonly statusBranches?: readonly string[];
   readonly overview: GitExplorerOverviewResult;
   readonly params: GitExplorerParams;
@@ -149,10 +150,13 @@ export function GitExplorerBranchRow(props: {
         if (event.nativeEvent.actionName === "delete") requestDelete();
       }}
       onPress={() => (props.selection ? props.selection.onToggle() : props.onSelect(ref.hash))}
-      style={sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight }}
+      style={[
+        sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight },
+        { paddingLeft: 12 + (props.depth ?? 0) * 14 },
+      ]}
       className={cn(
         "flex-row items-center",
-        sidebar ? "gap-2" : "gap-1 px-3",
+        sidebar ? "gap-2" : "gap-1 pr-3",
         sidebar
           ? highlighted
             ? "bg-thread-selected"

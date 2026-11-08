@@ -5,6 +5,9 @@ import {
   gitExplorerUpstreamMergeSummary,
   formatGitExplorerSync,
   gitExplorerEmphasizedRefs,
+  gitExplorerBranchRows,
+  gitExplorerFolderExpanded,
+  type GitExplorerBranchTreeRow,
 } from "@t3tools/client-runtime/git-explorer";
 import type {
   EnvironmentId,
@@ -49,7 +52,6 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { gitExplorerBranchRows, type GitExplorerBranchRow } from "./gitExplorerBranches.logic";
 import { GitExplorerHint } from "./GitExplorerHint";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
 
@@ -133,7 +135,7 @@ function BranchFolderRow({
   onToggle,
   actions,
 }: {
-  row: Extract<GitExplorerBranchRow, { kind: "folder" }>;
+  row: Extract<GitExplorerBranchTreeRow, { kind: "folder" }>;
   collapsed: boolean;
   onToggle: (path: string) => void;
   actions?: BranchActions;
@@ -495,7 +497,7 @@ function ReferenceRow({
 function LocalBranchChunk({
   rows,
   colors,
-  collapsed,
+  isExpanded,
   onToggle,
   environmentId,
   input,
@@ -506,9 +508,9 @@ function LocalBranchChunk({
   actions,
   selection,
 }: {
-  rows: readonly GitExplorerBranchRow[];
+  rows: readonly GitExplorerBranchTreeRow[];
   colors: ReadonlyMap<string, number>;
-  collapsed: ReadonlySet<string>;
+  isExpanded: (path: string) => boolean;
   onToggle: (path: string) => void;
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
@@ -552,7 +554,7 @@ function LocalBranchChunk({
             <div key={`folder:${row.path}`} style={{ paddingInlineStart: row.depth * 12 }}>
               <BranchFolderRow
                 row={row}
-                collapsed={collapsed.has(row.path)}
+                collapsed={!isExpanded(row.path)}
                 onToggle={onToggle}
                 actions={actions}
               />
@@ -794,22 +796,23 @@ export function GitExplorerBranches({
   const referenceColors = gitExplorerReferenceColors(overview.refs);
   const matches = (reference: GitExplorerRef) =>
     reference.shortName.toLocaleLowerCase().includes(filter);
-  const [collapsedLocal, setCollapsedLocal] = useState<ReadonlySet<string>>(new Set());
-  const [collapsedRemote, setCollapsedRemote] = useState<ReadonlySet<string>>(new Set());
+  const [toggledLocal, setToggledLocal] = useState<ReadonlySet<string>>(new Set());
+  const [expandedRemote, setExpandedRemote] = useState<ReadonlySet<string>>(new Set());
   const toggleFolder = (current: ReadonlySet<string>, path: string) => {
     const next = new Set(current);
     if (next.has(path)) next.delete(path);
     else next.add(path);
     return next;
   };
-  const visibleLocalFolders = filter ? new Set<string>() : collapsedLocal;
-  const visibleRemoteFolders = filter ? new Set<string>() : collapsedRemote;
+  const isLocalExpanded = (path: string) =>
+    filter !== "" || gitExplorerFolderExpanded(path, overview.headBranch, toggledLocal.has(path));
+  const isRemoteExpanded = (path: string) => filter !== "" || expandedRemote.has(path);
   const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
   const localRefs = overview.refs.filter(
     (reference) => reference.kind === "local" && matches(reference),
   );
-  const localRows = gitExplorerBranchRows(localRefs, visibleLocalFolders);
-  const localChunks: GitExplorerBranchRow[][] = [];
+  const localRows = gitExplorerBranchRows(localRefs, isLocalExpanded);
+  const localChunks: GitExplorerBranchTreeRow[][] = [];
   for (let offset = 0; offset < localRows.length; offset += 32) {
     localChunks.push(localRows.slice(offset, offset + 32));
   }
@@ -918,8 +921,8 @@ export function GitExplorerBranches({
               key={rows[0]!.kind === "branch" ? rows[0]!.reference.name : rows[0]!.path}
               rows={rows}
               colors={referenceColors}
-              collapsed={visibleLocalFolders}
-              onToggle={(path) => setCollapsedLocal((current) => toggleFolder(current, path))}
+              isExpanded={isLocalExpanded}
+              onToggle={(path) => setToggledLocal((current) => toggleFolder(current, path))}
               environmentId={environmentId}
               input={input}
               overview={overview}
@@ -955,11 +958,7 @@ export function GitExplorerBranches({
               <div className="ml-3.5 border-l border-border/70 pl-1">
                 {gitExplorerBranchRows(
                   references,
-                  new Set(
-                    [...visibleRemoteFolders]
-                      .filter((path) => path.startsWith(`${prefix}/`))
-                      .map((path) => path.slice(prefix.length + 1)),
-                  ),
+                  (path) => isRemoteExpanded(`${prefix}/${path}`),
                   `${prefix}/`,
                 ).map((row) => (
                   <div
@@ -969,11 +968,9 @@ export function GitExplorerBranches({
                     {row.kind === "folder" ? (
                       <BranchFolderRow
                         row={row}
-                        collapsed={visibleRemoteFolders.has(`${prefix}/${row.path}`)}
+                        collapsed={!isRemoteExpanded(`${prefix}/${row.path}`)}
                         onToggle={(path) =>
-                          setCollapsedRemote((current) =>
-                            toggleFolder(current, `${prefix}/${path}`),
-                          )
+                          setExpandedRemote((current) => toggleFolder(current, `${prefix}/${path}`))
                         }
                       />
                     ) : (

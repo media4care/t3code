@@ -7,7 +7,11 @@ import type {
   GitExplorerStash,
   GitExplorerSubmodule,
 } from "@t3tools/contracts";
-import { describeGitExplorerSubmodule } from "@t3tools/client-runtime/git-explorer";
+import {
+  describeGitExplorerSubmodule,
+  gitExplorerBranchRows,
+  gitExplorerFolderExpanded,
+} from "@t3tools/client-runtime/git-explorer";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -42,9 +46,17 @@ type BranchRow =
       readonly section?: CollapsibleSection;
     }
   | {
+      readonly kind: "folder";
+      readonly id: string;
+      readonly label: string;
+      readonly depth: number;
+      readonly expanded: boolean;
+    }
+  | {
       readonly kind: "ref";
       readonly ref: GitExplorerRef;
       readonly displayName: string;
+      readonly depth: number;
       readonly statusBranches?: readonly string[];
     }
   | { readonly kind: "stash"; readonly stash: GitExplorerStash }
@@ -81,6 +93,14 @@ export function GitExplorerBranches(props: {
       else next.add(section);
       return next;
     });
+  const [toggledFolders, setToggledFolders] = useState<ReadonlySet<string>>(new Set());
+  const toggleFolder = (id: string) =>
+    setToggledFolders((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const localReferences = props.overview.refs.filter((ref) => ref.kind === "local");
   const selectedReferences = localReferences.filter((ref) => selected.get(ref.name) === ref.hash);
   const toggle = (ref: GitExplorerRef) => {
@@ -97,18 +117,40 @@ export function GitExplorerBranches(props: {
     const local = props.overview.refs
       .filter((ref) => ref.kind === "local")
       .sort((left, right) => left.name.localeCompare(right.name));
-    const batches: string[][] = [];
-    for (let index = 0; index < local.length; index += 32)
-      batches.push(local.slice(index, index + 32).map((ref) => ref.name));
+    const batches = new Map<string, readonly string[]>();
+    for (let index = 0; index < local.length; index += 32) {
+      const batch = local.slice(index, index + 32).map((ref) => ref.name);
+      for (const name of batch) batches.set(name, batch);
+    }
+    const tree = (
+      refs: readonly GitExplorerRef[],
+      scope: string,
+      headBranch: string | null,
+      prefix = "",
+    ) => {
+      const isExpanded = (path: string) =>
+        gitExplorerFolderExpanded(path, headBranch, toggledFolders.has(`${scope}${path}`));
+      return gitExplorerBranchRows(refs, isExpanded, prefix).map((row): BranchRow => {
+        if (row.kind === "folder")
+          return {
+            kind: "folder",
+            id: `${scope}${row.path}`,
+            label: row.label,
+            depth: row.depth,
+            expanded: isExpanded(row.path),
+          };
+        const statusBranches = batches.get(row.reference.name);
+        return {
+          kind: "ref",
+          ref: row.reference,
+          displayName: row.label,
+          depth: row.depth,
+          ...(statusBranches ? { statusBranches } : {}),
+        };
+      });
+    };
     result.push({ kind: "heading", id: "local", label: "Branches", detail: String(local.length) });
-    result.push(
-      ...local.map((ref, index): BranchRow => ({
-        kind: "ref",
-        ref,
-        displayName: ref.shortName,
-        statusBranches: batches[Math.floor(index / 32)],
-      })),
-    );
+    result.push(...tree(local, "local:", props.overview.headBranch));
     if (local.length === 0)
       result.push({ kind: "empty", id: "no-local", label: "No local branches" });
     const remotes = new Map<string, GitExplorerRef[]>();
@@ -121,13 +163,7 @@ export function GitExplorerBranches(props: {
     }
     for (const [remote, refs] of remotes) {
       result.push({ kind: "heading", id: `remote:${remote}`, label: remote, detail: "Remote" });
-      result.push(
-        ...refs.map((ref): BranchRow => ({
-          kind: "ref",
-          ref,
-          displayName: ref.shortName.slice(remote.length + 1) || ref.shortName,
-        })),
-      );
+      result.push(...tree(refs, `remote:${remote}/`, null, `${remote}/`));
     }
     const tags = props.overview.refs.filter((ref) => ref.kind === "tag");
     result.push({
@@ -139,7 +175,12 @@ export function GitExplorerBranches(props: {
     });
     if (!collapsed.has("tags")) {
       result.push(
-        ...tags.map((ref): BranchRow => ({ kind: "ref", ref, displayName: ref.shortName })),
+        ...tags.map((ref): BranchRow => ({
+          kind: "ref",
+          ref,
+          displayName: ref.shortName,
+          depth: 0,
+        })),
       );
       if (tags.length === 0) result.push({ kind: "empty", id: "no-tags", label: "No tags" });
     }
@@ -170,7 +211,14 @@ export function GitExplorerBranches(props: {
         );
     }
     return result;
-  }, [props.overview.refs, props.overview.stashes, props.overview.submodules, collapsed]);
+  }, [
+    props.overview.refs,
+    props.overview.stashes,
+    props.overview.submodules,
+    props.overview.headBranch,
+    collapsed,
+    toggledFolders,
+  ]);
   if (deleting)
     return (
       <GitExplorerBranchDeletion
@@ -364,6 +412,41 @@ export function GitExplorerBranches(props: {
               </Pressable>
             );
           }
+          if (item.kind === "folder")
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${item.id.slice(item.id.indexOf(":") + 1)} branch folder`}
+                accessibilityState={{ expanded: item.expanded }}
+                onPress={() => toggleFolder(item.id)}
+                style={[
+                  sidebar ? THREAD_LIST_V2_SIDEBAR_ROW_STYLE : { height: rowHeight },
+                  { paddingLeft: 12 + item.depth * 14 },
+                ]}
+                className={cn(
+                  "flex-row items-center gap-1.5 pr-3",
+                  sidebar ? "bg-drawer active:bg-thread-hover" : "bg-card",
+                )}
+              >
+                <SymbolView
+                  name={item.expanded ? "chevron.down" : "chevron.right"}
+                  size={10}
+                  tintColorClassName="accent-icon-muted"
+                />
+                <SymbolView name="folder.fill" size={13} tintColorClassName="accent-icon-muted" />
+                <Text
+                  numberOfLines={1}
+                  className={cn(
+                    "min-w-0 flex-1 font-t3-medium",
+                    sidebar
+                      ? "text-base text-drawer-foreground"
+                      : "text-[12px] leading-[16px] text-foreground",
+                  )}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
           if (item.kind === "empty")
             return (
               <View
@@ -433,6 +516,7 @@ export function GitExplorerBranches(props: {
               branch={item.ref}
               color={colors.get(item.ref.hash) ?? 0}
               displayName={item.displayName}
+              depth={item.depth}
               statusBranches={item.statusBranches}
               overview={props.overview}
               params={props.params}
