@@ -188,11 +188,26 @@ function detailRoute(
   );
 }
 
+function gitExplorerRoute(
+  state: { readonly routes: readonly RouteLike[] },
+  repository: { readonly environmentId: string; readonly projectId: string },
+): RouteLike {
+  return (
+    state.routes.findLast(
+      (route) =>
+        route.name === "GitExplorer" &&
+        stringParam(route.params, "environmentId") === repository.environmentId &&
+        stringParam(route.params, "projectId") === repository.projectId &&
+        stringParam(route.params, "submodulePath") === undefined,
+    ) ?? { name: "GitExplorer", params: repository }
+  );
+}
+
 /**
  * The root stack for opening a workspace tab. With columns the detail column must show
- * something, so the tab reopens the page it last showed (Settings falls back to its default);
- * without columns the tab opens on its list. Routes already on screen keep their keys, and
- * `overlays` (open sheets) stay on top.
+ * something, so the tab reopens the page it last showed (Settings falls back to its default,
+ * Git Explorer opens `gitExplorer`); without columns the tab opens on its list. Routes already
+ * on screen keep their keys, and `overlays` (open sheets) stay on top.
  */
 export function workspaceTabNavigationState<
   State extends { readonly routes: readonly RouteLike[] },
@@ -204,6 +219,7 @@ export function workspaceTabNavigationState<
     readonly columns: boolean;
     readonly check: WorkspaceSelectionCheck;
     readonly overlays?: readonly RouteLike[];
+    readonly gitExplorer?: { readonly environmentId: string; readonly projectId: string };
   },
 ) {
   const overlays = options.overlays ?? [];
@@ -219,10 +235,13 @@ export function workspaceTabNavigationState<
     return { ...settings, index: routes.length - 1, routes };
   }
   const home = state.routes.find((route) => route.name === "Home") ?? { name: "Home" };
-  const detail =
-    options.columns && (tab === "threads" || tab === "pullRequests")
+  const detail = !options.columns
+    ? undefined
+    : tab === "threads" || tab === "pullRequests"
       ? detailRoute(state, tab, selections, options.check)
-      : undefined;
+      : tab === "gitExplorer" && options.gitExplorer
+        ? gitExplorerRoute(state, options.gitExplorer)
+        : undefined;
   const routes = [...[home, ...(detail ? [detail] : [])].map(keyed), ...overlays];
   return { ...state, index: routes.length - 1, routes };
 }

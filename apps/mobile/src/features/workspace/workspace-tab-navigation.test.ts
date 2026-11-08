@@ -20,6 +20,7 @@ const pullRequest = {
 };
 const settings = { key: "settings", name: "Settings" };
 const available = { thread: () => true, pullRequest: () => true };
+type RouteLikeForTest = { key: string; name: string; params?: object };
 const names = (state: { routes: readonly { name: string }[] }) =>
   state.routes.map((route) => route.name);
 
@@ -103,12 +104,26 @@ describe("opening a workspace tab", () => {
     ]);
   });
 
-  it("opens Git Explorer without restoring a remembered detail page", () => {
-    const state = { routes: [home, thread] };
+  it("opens Git Explorer on its repository beside the list, keeping an open one", () => {
+    const repository = { environmentId: "env", projectId: "project" };
+    const explorer = { key: "explorer", name: "GitExplorer", params: repository };
+    const submodule = {
+      key: "submodule",
+      name: "GitExplorer",
+      params: { ...repository, submodulePath: "lib" },
+    };
     const selections = { threads: thread.params, pullRequests: pullRequest.params };
-    expect(names(workspaceTabNavigationState(state, "gitExplorer", selections, columns))).toEqual([
-      "Home",
+    const open = (routes: readonly RouteLikeForTest[], gitExplorer?: typeof repository) =>
+      workspaceTabNavigationState({ routes }, "gitExplorer", selections, {
+        ...columns,
+        gitExplorer,
+      }).routes;
+    expect(open([home, thread], repository)).toMatchObject([
+      home,
+      { name: "GitExplorer", params: repository },
     ]);
+    expect(open([home, explorer, submodule], repository)).toEqual([home, explorer]);
+    expect(open([home, thread], undefined).map((route) => route.name)).toEqual(["Home"]);
   });
 
   it("keeps the route that is already open, so re-selecting a tab doesn't rebuild it", () => {
