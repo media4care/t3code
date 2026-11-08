@@ -21,7 +21,7 @@ const layer = it.layer(
 const timestamp = "2026-11-01T10:00:00.000Z";
 
 layer("ThreadEngineeringLoop", (it) => {
-  it.effect("lists the worksheets each thread wrote a stage into, from its own checkout", () =>
+  it.effect("lists the worksheets each thread wrote a stage into, not ones it only read", () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const sql = yield* SqlClient.SqlClient;
@@ -45,12 +45,12 @@ layer("ThreadEngineeringLoop", (it) => {
         fileName: `${worktree}/.agent-work/NG-1/engineering-loop.md`,
         diffStr: "-Stage: Testing\n+Stage: Review",
       });
-      yield* item("resume", "in-worktree", "command_execution", {
-        input: "cat .agent-work/NG-2/engineering-loop.md",
-        output: "Stage: QA",
+      yield* item("rewrite", "in-worktree", "command_execution", {
+        input: "cat > .agent-work/NG-2/engineering-loop.md <<'EOF'\n# NG-2\nStage: QA\nEOF",
       });
-      yield* item("read-only", "in-worktree", "command_execution", {
-        input: "ls .agent-work/NG-3/engineering-loop.md",
+      yield* item("read", "in-worktree", "command_execution", {
+        input: "cat .agent-work/NG-3/engineering-loop.md",
+        output: "Stage: Plan",
       });
       yield* item("root-edit", "in-root", "file_change", {
         fileName: `${root}/.agent-work/NG-1/engineering-loop.md`,

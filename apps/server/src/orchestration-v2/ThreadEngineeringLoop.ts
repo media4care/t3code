@@ -57,8 +57,8 @@ export class ThreadEngineeringLoop extends Context.Service<
   ThreadEngineeringLoop,
   {
     /**
-     * Worksheets this thread wrote a `Stage:` into, read from its checkout as they are now,
-     * most recently written first.
+     * Worksheets this thread wrote a `Stage:` into, as they are now in its checkout (not as the
+     * thread left them), most recently written first.
      */
     readonly list: (
       threadId: ThreadId,
@@ -100,12 +100,19 @@ export const layer = Layer.effect(
       );
       const cwd = checkout[0]?.cwd;
       if (!cwd) return [];
+      // A tool's input, or a file change, carrying a `Stage:` writes it; a read only returns one.
       const writes = yield* sql<{ readonly around: string }>`
-        SELECT substr(payload_json, MAX(1, instr(payload_json, '/engineering-loop.md') - 200), 220) AS around
-        FROM orchestration_v2_projection_turn_items
-        WHERE thread_id = ${threadId}
-          AND type IN ('file_change', 'command_execution', 'dynamic_tool')
-          AND instr(payload_json, '/engineering-loop.md') > 0 AND instr(payload_json, 'Stage: ') > 0
+        WITH written AS (
+          SELECT updated_at, CASE WHEN type = 'file_change' THEN payload_json
+            ELSE json_extract(payload_json, '$.input') END AS text
+          FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${threadId}
+            AND type IN ('file_change', 'command_execution', 'dynamic_tool')
+            AND instr(payload_json, '/engineering-loop.md') > 0
+        )
+        SELECT substr(text, MAX(1, instr(text, '/engineering-loop.md') - 200), 220) AS around
+        FROM written
+        WHERE instr(text, '/engineering-loop.md') > 0 AND instr(text, 'Stage: ') > 0
         ORDER BY updated_at DESC LIMIT 200
       `.pipe(
         NodeSqliteClient.readOnly,

@@ -431,23 +431,9 @@ export function resolveAgentMapConversation(
   };
 }
 
-/** The agents-toolkit engineering loop's stages in order; Blocked, Aborted and Done sit beside them. */
-export const ENGINEERING_LOOP_STAGES = [
-  "Plan",
-  "PoC",
-  "Delivery plan",
-  "Implementation",
-  "Testing",
-  "Review",
-  "QA",
-  "Human review",
-] as const;
-
 /** Where a worksheet's ticket stands. A ticket can return to a stage after repairs. */
 export function engineeringLoopProgress(ticket: EngineeringLoopTicket) {
-  const stages: readonly string[] = ENGINEERING_LOOP_STAGES;
   return {
-    position: ticket.stage === "Done" ? stages.length : stages.indexOf(ticket.stage),
     inLoop: ticket.stage !== "Done" && ticket.stage !== "Aborted",
     enteredAt: ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at ?? null,
   };
@@ -479,9 +465,12 @@ export function createThreadAgentMapAtoms<R, ER>(input: {
     label: "environment-data:thread-agent-map:engineering-loop",
     tag: WS_METHODS.threadEngineeringLoopList,
     staleTimeMs: 0,
-    // Any new turn item may have rewritten a worksheet.
+    // Checked for every open thread, so it refreshes per run rather than per turn item.
     refreshTrigger: ({ environmentId, input: { threadId } }) =>
-      Atom.make((get) => get(input.threadIndexAtom(environmentId)).get(threadId)?.itemCount),
+      Atom.make((get) => {
+        const thread = get(input.threadIndexAtom(environmentId)).get(threadId);
+        return `${thread?.latestRunId}:${thread?.latestRunCompletedAt?.epochMilliseconds}`;
+      }),
   });
   const nodes = Atom.family((key: string) => {
     const ref = parseThreadKey(key);

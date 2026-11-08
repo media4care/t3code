@@ -524,18 +524,13 @@ describe("engineering loop progress", () => {
       ],
     };
     expect(engineeringLoopProgress(ticket)).toEqual({
-      position: 5,
       inLoop: true,
       enteredAt: "2026-10-30T08:00:00.000Z",
     });
     expect(engineeringLoopProgress({ ...ticket, stage: "Blocked" })).toEqual({
-      position: -1,
       inLoop: true,
       enteredAt: null,
     });
-    expect(engineeringLoopProgress({ ...ticket, stage: "Done" })).toMatchObject({
-      position: 8,
-      inLoop: false,
-    });
+    expect(engineeringLoopProgress({ ...ticket, stage: "Done" }).inLoop).toBe(false);
   });
 });

@@ -39,7 +39,9 @@ export function ThreadAgentMapControl({ threadRef }: { threadRef: ScopedThreadRe
     (thread) => thread?.projection.subagents,
   );
   const [open, setOpen] = useState(false);
-  if (!subagents?.length) return null;
+  // A thread can run the engineering loop without delegating; its loop alone earns the button.
+  const loop = useThreadLoop(subagents?.length ? null : threadRef).data?.tickets;
+  if (!subagents?.length && !loop?.length) return null;
   return (
     <>
       <Button size="sm" variant="ghost" onClick={() => setOpen(true)} aria-label="Open agent map">

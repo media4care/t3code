@@ -199,6 +199,7 @@ import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadAgentCount, useThreadTurnSubagents } from "./ThreadAgentsSheet";
+import { useThreadLoop } from "./ThreadAgentMap";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import { ThreadGuestShareBar } from "./ThreadGuestShareBar";
@@ -482,11 +483,16 @@ function ThreadDetailBody(
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentCount = useThreadAgentCount(props.selectedThreadDetailRef);
+  // A thread can run the engineering loop without delegating; its loop alone earns the pill.
+  const loopTickets = useThreadLoop(agentCount === 0 ? props.selectedThreadDetailRef : null).data
+    ?.tickets;
   const agentsSegment =
     resolveSubagentPillSegment(turnSubagents) ??
-    (agentCount === 0
-      ? null
-      : { label: "Agents", accessibilityLabel: "Agents from earlier turns" });
+    (agentCount > 0
+      ? { label: "Agents", accessibilityLabel: "Agents from earlier turns" }
+      : loopTickets?.length
+        ? { label: "Agents", accessibilityLabel: "Agents and engineering loop" }
+        : null);
   const defaultComposerEditorRef = useRef<ComposerEditorHandle>(null);
   const composerEditorRef = props.draftMode?.editorRef ?? defaultComposerEditorRef;
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);

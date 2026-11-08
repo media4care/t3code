@@ -2,7 +2,6 @@ import {
   agentMapMetadata,
   agentMapEmptyDetail,
   agentMapStatus,
-  ENGINEERING_LOOP_STAGES,
   engineeringLoopProgress,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
@@ -85,7 +84,7 @@ export function AgentMapSkills({
   );
 }
 
-/** The engineering-loop worksheets a thread wrote: stage, progress through the stages, next action. */
+/** The engineering-loop worksheets a thread wrote: stage, next action and timing. */
 export function AgentMapLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLoopTicket> }) {
   return (
     <ul className="space-y-3">
@@ -101,18 +100,6 @@ export function AgentMapLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLo
               <Badge variant={progress.inLoop ? "info" : "secondary"} size="sm">
                 {ticket.stage}
               </Badge>
-            </div>
-            <div className="mt-2 flex gap-0.5" aria-hidden>
-              {ENGINEERING_LOOP_STAGES.map((stage, index) => (
-                <span
-                  key={stage}
-                  className={cn(
-                    "h-1 flex-1 rounded-full bg-muted",
-                    index < progress.position && "bg-info/40",
-                    index === progress.position && "bg-info",
-                  )}
-                />
-              ))}
             </div>
             {ticket.next ? (
               <p className="mt-1.5 line-clamp-2 break-words text-muted-foreground">

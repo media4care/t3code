@@ -28,7 +28,7 @@ export function InsightsReviewedThreads({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <MessagesSquareIcon className="size-4 text-primary" aria-hidden />
-          <h3 className="text-sm font-semibold">Threads reviewed</h3>
+          <h3 className="text-sm font-semibold">Threads sampled</h3>
         </div>
         <Badge variant="secondary">{threads.length}</Badge>
       </div>

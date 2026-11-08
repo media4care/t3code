@@ -4,7 +4,6 @@ import {
   agentMapStatus,
   agentMapEmptyDetail,
   agentMapOutput,
-  ENGINEERING_LOOP_STAGES,
   engineeringLoopProgress,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
@@ -47,11 +46,11 @@ function useThreadSkills(target: ScopedThreadRef | null) {
   return useEnvironmentQuery(target === null ? null : threadAgentMaps.skillsAtom(target));
 }
 
-function useThreadLoop(target: ScopedThreadRef | null) {
+export function useThreadLoop(target: ScopedThreadRef | null) {
   return useEnvironmentQuery(target === null ? null : threadAgentMaps.engineeringLoopAtom(target));
 }
 
-/** The engineering-loop worksheets a thread wrote: stage, progress through the stages, next action. */
+/** The engineering-loop worksheets a thread wrote: stage, next action and timing. */
 function AgentLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLoopTicket> }) {
   return (
     <View className="gap-3">
@@ -64,18 +63,6 @@ function AgentLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLoopTicket> 
                 <Text className="font-t3-semibold text-sm">{ticket.ticket}</Text> {ticket.title}
               </Text>
               <Chip label={ticket.stage} size="small" selected={progress.inLoop} />
-            </View>
-            <View className="flex-row gap-0.5">
-              {ENGINEERING_LOOP_STAGES.map((stage, index) => (
-                <View
-                  key={stage}
-                  className={cn(
-                    "h-1.5 flex-1 rounded-full bg-subtle-strong",
-                    index < progress.position && "bg-primary/45",
-                    index === progress.position && "bg-primary",
-                  )}
-                />
-              ))}
             </View>
             {ticket.next ? (
               <Text numberOfLines={2} className="text-xs text-foreground-muted">

@@ -27,7 +27,7 @@ export function InsightsReviewedThreads({
   return (
     <View className="gap-3 rounded-2xl border border-border-subtle bg-surface p-4">
       <View className="flex-row items-center justify-between gap-2">
-        <Text className="font-t3-semibold text-sm text-foreground">Threads reviewed</Text>
+        <Text className="font-t3-semibold text-sm text-foreground">Threads sampled</Text>
         <Text className="text-xs text-foreground-muted">{threads.length}</Text>
       </View>
       <Text className="text-xs text-foreground-muted">
