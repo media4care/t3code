@@ -11,7 +11,9 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
-import { InsightsEngineeringLoop } from "./InsightsEngineeringLoop";
+import { InsightsDecisionBrief } from "./InsightsDecisionBrief";
+import { InsightsFriction } from "./InsightsFriction";
+import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
 const OUTCOMES = [
@@ -93,6 +95,11 @@ export function InsightsDashboard({
   });
   return (
     <View className="gap-4">
+      <InsightsDecisionBrief
+        environmentId={environmentId}
+        report={report}
+        onOpenRecommendation={onOpenRecommendation}
+      />
       <View className="flex-row flex-wrap gap-3">
         {(
           [
@@ -109,9 +116,9 @@ export function InsightsDashboard({
               icon: "exclamationmark.triangle",
             },
             {
-              label: "Human requests",
+              label: "Agent questions",
               value: metrics.humanRequests,
-              hint: "Questions & approvals",
+              hint: "Asked through question & approval tools",
               icon: "bubble.left",
             },
             {
@@ -249,8 +256,11 @@ export function InsightsDashboard({
           <Button label="View all" tone="text" onPress={() => onOpenHistory()} />
         </View>
         <Text className="font-t3-semibold text-2xl text-foreground">
-          {snapshot.recommendations.filter((r) => r.status === "implemented").length} /{" "}
-          {snapshot.recommendations.length}{" "}
+          {
+            snapshot.recommendations.filter((r) => insightImplementationStatus(r) === "implemented")
+              .length
+          }{" "}
+          / {snapshot.recommendations.length}{" "}
           <Text className="text-sm text-foreground-muted">implemented</Text>
         </Text>
         {counts.map((entry) => (
@@ -313,13 +323,16 @@ export function InsightsDashboard({
         </View>
       )}
 
-      {report.engineeringLoop?.length ? (
-        <InsightsEngineeringLoop
-          environmentId={environmentId}
-          tickets={report.engineeringLoop}
-          asOf={report.createdAt}
-        />
-      ) : null}
+      <InsightsFriction
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
+      <InsightsReviewedThreads
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
 
       {recent.length > 1 && (
         <View className="gap-3 rounded-2xl border border-border-subtle bg-surface p-4">

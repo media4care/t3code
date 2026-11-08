@@ -2,10 +2,11 @@ import {
   agentMapMetadata,
   agentMapEmptyDetail,
   agentMapStatus,
+  engineeringLoopProgress,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
 import { subagentDetailPreview } from "@t3tools/client-runtime/state/subagent-display";
-import type { ServerProvider } from "@t3tools/contracts";
+import type { EngineeringLoopTicket, ServerProvider } from "@t3tools/contracts";
 import {
   BotIcon,
   CheckIcon,
@@ -13,6 +14,7 @@ import {
   CircleDashedIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
+  RouteIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -20,6 +22,7 @@ import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
+import { RelativeTime } from "../RelativeTime";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { AgentElapsed } from "./AgentElapsed";
 
@@ -81,16 +84,55 @@ export function AgentMapSkills({
   );
 }
 
+/** The engineering-loop worksheets a thread wrote: stage, next action and timing. */
+export function AgentMapLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLoopTicket> }) {
+  return (
+    <ul className="space-y-3">
+      {tickets.map((ticket) => {
+        const progress = engineeringLoopProgress(ticket);
+        return (
+          <li key={ticket.ticket} className="min-w-0 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <RouteIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="min-w-0 truncate">
+                <span className="font-medium">{ticket.ticket}</span> {ticket.title}
+              </span>
+              <Badge variant={progress.inLoop ? "info" : "secondary"} size="sm">
+                {ticket.stage}
+              </Badge>
+            </div>
+            {ticket.next ? (
+              <p className="mt-1.5 line-clamp-2 break-words text-muted-foreground">
+                Next: {ticket.next}
+              </p>
+            ) : null}
+            <p className="mt-1 text-2xs text-muted-foreground">
+              {progress.enteredAt ? (
+                <>
+                  Entered {ticket.stage} <RelativeTime timestamp={progress.enteredAt} /> ·{" "}
+                </>
+              ) : null}
+              Updated <RelativeTime timestamp={ticket.updatedAt} />
+            </p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function AgentMapCard({
   node,
   provider,
   skills = [],
+  loop = [],
   selected,
   onSelect,
 }: {
   node: ThreadAgentMapNode;
   provider: ServerProvider | undefined;
   skills?: ReadonlyArray<string>;
+  loop?: ReadonlyArray<EngineeringLoopTicket>;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -138,6 +180,20 @@ export function AgentMapCard({
           <AgentMapSkills skills={skills} limit={CARD_SKILL_LIMIT} />
         </span>
       ) : null}
+      {loop.length > 0 ? (
+        <span className="mt-2 flex flex-wrap gap-1">
+          {loop.map((ticket) => (
+            <Badge
+              key={ticket.ticket}
+              variant={engineeringLoopProgress(ticket).inLoop ? "info" : "secondary"}
+              size="sm"
+            >
+              <RouteIcon aria-hidden />
+              {ticket.ticket} · {ticket.stage}
+            </Badge>
+          ))}
+        </span>
+      ) : null}
       <span className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <AgentMapStatus node={node} />
         <span className="text-2xs text-muted-foreground">{node.kind}</span>
@@ -154,6 +210,7 @@ export function AgentMapCard({
 export function ThreadAgentMap(props: {
   readonly title: string;
   readonly skills?: ReadonlyArray<string>;
+  readonly loop?: ReadonlyArray<EngineeringLoopTicket>;
   readonly nodes: ReadonlyArray<ThreadAgentMapNode>;
   readonly providerFor: (node: ThreadAgentMapNode) => ServerProvider | undefined;
   readonly renderCard?: (
@@ -325,15 +382,24 @@ export function ThreadAgentMap(props: {
         />
         <div
           data-agent-node="root"
-          className="flex w-fit max-w-full items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 @min-[560px]/agent-map:mx-auto"
+          className={cn(
+            "flex w-fit max-w-full items-start gap-3 rounded-2xl border border-border bg-card px-4 py-3 @min-[560px]/agent-map:mx-auto",
+            props.loop?.some((ticket) => engineeringLoopProgress(ticket).inLoop) &&
+              "border-info/60 ring-2 ring-inset ring-info/10",
+          )}
         >
-          <GitBranchIcon className="size-5 shrink-0 text-muted-foreground" />
+          <GitBranchIcon className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{props.title}</div>
             <div className="text-2xs text-muted-foreground">This thread</div>
             {props.skills?.length ? (
               <div className="mt-1.5">
                 <AgentMapSkills skills={props.skills} limit={CARD_SKILL_LIMIT} />
+              </div>
+            ) : null}
+            {props.loop?.length ? (
+              <div className="mt-3 w-72 max-w-full border-t border-border pt-3">
+                <AgentMapLoop tickets={props.loop} />
               </div>
             ) : null}
           </div>

@@ -76,3 +76,4 @@ export * from "./secretReference.ts";
 export * from "./settingsSecretValue.ts";
 export * from "./clientRpcPermissions.ts";
 export * from "./insights.ts";
+export * from "./engineeringLoop.ts";

@@ -4,6 +4,7 @@ import * as Qa from "./qa/QaService.ts";
 import * as Releases from "./releases/ReleasesService.ts";
 import * as Insights from "./insights/InsightsService.ts";
 import * as ThreadSkills from "./orchestration-v2/ThreadSkills.ts";
+import * as ThreadEngineeringLoop from "./orchestration-v2/ThreadEngineeringLoop.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -718,6 +719,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(Releases.ReleasesService)({}),
   Layer.mock(Insights.InsightsService)({}),
   Layer.mock(ThreadSkills.ThreadSkills)({}),
+  Layer.mock(ThreadEngineeringLoop.ThreadEngineeringLoop)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(SecretResolver.SecretResolver)({}),
   Layer.mock(GuestShareService.GuestShareService)({}),

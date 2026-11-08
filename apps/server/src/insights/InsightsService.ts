@@ -16,7 +16,9 @@ import {
   ScheduledTaskId,
   ThreadId,
   type InsightEvidence,
+  type InsightFrictionCluster,
   type InsightSkillUsage,
+  type InsightTask,
   type InsightsProject,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
@@ -31,6 +33,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import type * as Types from "effect/Types";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -47,8 +50,8 @@ import {
   insightKey,
   sumInsightSkills,
 } from "./insightsEvidence.ts";
-import { MAX_LOOP_TICKETS, makeLoopWorksheetReader } from "./engineeringLoop.ts";
 import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
+import { frictionSignature, mergeFrictionClusters } from "./toolFriction.ts";
 
 const TASK_ID = ScheduledTaskId.make("insights:daily");
 /** Excerpt characters one packet may carry, shared between this environment and linked ones. */
@@ -119,7 +122,6 @@ const make = Effect.gen(function* () {
   const digest = yield* Digest.Digest;
   const random = yield* SecureRandom.SecureRandom;
   const threadSkills = yield* ThreadSkills.ThreadSkills;
-  const readLoopWorksheets = yield* makeLoopWorksheetReader;
   const updates = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -170,7 +172,7 @@ const make = Effect.gen(function* () {
       ORDER BY r.requested_at DESC, r.ordinal DESC LIMIT 1`;
     const reports = yield* sql<{
       payload_json: string;
-    }>`SELECT json_remove(json_set(payload_json, '$.evidence', json('[]')), '$.engineeringLoop') AS payload_json FROM insights_reports ORDER BY created_at DESC LIMIT 30`;
+    }>`SELECT json_remove(json_set(payload_json, '$.evidence', json('[]')), '$.tasks', '$.friction') AS payload_json FROM insights_reports ORDER BY created_at DESC LIMIT 30`;
     const recs = yield* sql<{
       payload_json: string;
     }>`SELECT json_set(payload_json, '$.evidence', json('[]'), '$.history', json('[]'), '$.assessments', json(COALESCE((SELECT json_group_array(json_set(value, '$.evidence', json('[]'))) FROM json_each(json_extract(payload_json, '$.assessments'))), '[]'))) AS payload_json FROM insights_recommendations ORDER BY updated_at DESC LIMIT 251`;
@@ -333,64 +335,6 @@ const make = Effect.gen(function* () {
     sql<InsightsProject>`SELECT project_id AS projectId, title, workspace_root AS workspaceRoot
       FROM projection_projects WHERE deleted_at IS NULL AND ${projectIds.length ? sql.in("project_id", projectIds) : sql`1 = 1`}`;
 
-  /** Engineering-loop worksheets in the projects' checkouts and their threads' recent worktrees. */
-  const loopTickets = Effect.fn("InsightsService.loopTickets")(function* (input: {
-    readonly projectIds: ReadonlyArray<ProjectId>;
-    readonly projects: ReadonlyArray<InsightsProject>;
-    readonly since: string;
-    readonly excludeThreadId: ThreadId | null;
-  }) {
-    const inScope = input.projectIds.length ? sql.in("t.project_id", input.projectIds) : sql`1 = 1`;
-    const worktrees = yield* sql<{
-      thread_id: ThreadId;
-      project_id: ProjectId;
-      root: string;
-    }>`SELECT t.thread_id, t.project_id, json_extract(t.payload_json, '$.worktreePath') AS root
-      FROM orchestration_v2_projection_threads t
-      WHERE t.deleted_at IS NULL AND ${inScope} AND t.updated_at >= ${input.since}
-        AND json_extract(t.payload_json, '$.worktreePath') IS NOT NULL
-      ORDER BY t.updated_at DESC LIMIT 100`;
-    const worktreeOf = new Map<string, { threadId: ThreadId; projectId: ProjectId }>();
-    for (const row of worktrees)
-      if (!worktreeOf.has(row.root))
-        worktreeOf.set(row.root, { threadId: row.thread_id, projectId: row.project_id });
-    const worksheets = yield* readLoopWorksheets(
-      [
-        ...input.projects.map((project) => ({
-          root: project.workspaceRoot,
-          projectId: project.projectId,
-        })),
-        ...[...worktreeOf].map(([root, { projectId }]) => ({ root, projectId })),
-      ],
-      input.since,
-    );
-    if (!worksheets.length) return [];
-    // Outside a worktree, the thread that last wrote a `Stage:` into the worksheet ran the loop.
-    const writes = yield* sql<{
-      thread_id: ThreadId;
-      around: string;
-    }>`SELECT i.thread_id,
-      substr(i.payload_json, MAX(1, instr(i.payload_json, '/engineering-loop.md') - 200), 220) AS around
-      FROM orchestration_v2_projection_turn_items i
-      JOIN orchestration_v2_projection_threads t ON t.thread_id = i.thread_id
-      WHERE t.deleted_at IS NULL AND ${inScope} AND i.updated_at >= ${input.since}
-        AND ${input.excludeThreadId === null ? sql`1 = 1` : sql`i.thread_id <> ${input.excludeThreadId}`}
-        AND i.type IN ('file_change', 'command_execution', 'dynamic_tool')
-        AND instr(i.payload_json, '/engineering-loop.md') > 0 AND instr(i.payload_json, 'Stage: ') > 0
-      ORDER BY i.updated_at DESC LIMIT 500`;
-    const writer = new Map<string, ThreadId>();
-    for (const row of writes) {
-      const ticket = [
-        ...row.around.matchAll(/\.agent-work\/([^/"\\\s]+)\/engineering-loop\.md/g),
-      ].at(-1)?.[1];
-      if (ticket && !writer.has(ticket)) writer.set(ticket, row.thread_id);
-    }
-    return worksheets.map(({ root, ...ticket }) => ({
-      ...ticket,
-      threadId: worktreeOf.get(root)?.threadId ?? writer.get(ticket.ticket) ?? null,
-    }));
-  });
-
   /** Activity in `projectIds` (all when empty) after `fromSequence`, as bounded evidence. */
   const gather = Effect.fn("InsightsService.gather")(function* (
     input: InsightsEvidenceInput & { readonly excludeThreadId: ThreadId | null },
@@ -413,7 +357,9 @@ const make = Effect.gen(function* () {
       started_at: string | null;
       completed_at: string | null;
       sequence: number;
+      root_thread_id: ThreadId;
     }>`SELECT r.run_id, r.thread_id, t.project_id, t.title, r.status,
+      COALESCE(json_extract(t.payload_json, '$.lineage.rootThreadId'), r.thread_id) AS root_thread_id,
       json_extract(r.payload_json, '$.modelSelection') AS selection,
       json_extract(r.payload_json, '$.startedAt') AS started_at, r.completed_at, changed.sequence
       FROM (SELECT json_extract(metadata_json, '$.runId') AS run_id, MAX(sequence) AS sequence FROM orchestration_events
@@ -432,10 +378,22 @@ const make = Effect.gen(function* () {
     const metrics = { ...emptyInsightsMetrics() };
     const evidence: InsightEvidence[] = [];
     const skillUsage: InsightSkillUsage[] = [];
-    const excerptLimit = Math.max(
-      160,
-      Math.min(2200, Math.floor(input.characterBudget / Math.max(1, runs.length) / 32)),
-    );
+    const sampledRuns = new Set(runs.map((run) => run.run_id));
+    const tasks = new Map<
+      ThreadId,
+      Types.Mutable<Omit<InsightTask, "threadIds" | "frictionKeys" | "pullRequest">> & {
+        threadIds: Set<ThreadId>;
+        frictionKeys: Set<string>;
+        briefId: string | null;
+      }
+    >();
+    const friction = new Map<
+      string,
+      Types.Mutable<Omit<InsightFrictionCluster, "tasks" | "maxPerTask" | "evidenceIds">> & {
+        perTask: Map<ThreadId, number>;
+        evidenceIds: string[];
+      }
+    >();
     for (const run of runs) {
       metrics.runs++;
       if (run.status === "completed") metrics.completed++;
@@ -455,9 +413,10 @@ const make = Effect.gen(function* () {
         projectId: run.project_id,
         title: run.title,
       };
-      const counts = yield* sql<{ failures: number; requests: number }>`SELECT
+      const counts = yield* sql<{ failures: number; requests: number; interrupts: number }>`SELECT
         SUM(CASE WHEN type IN ('dynamic_tool', 'command_execution') AND (status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1) THEN 1 ELSE 0 END) AS failures,
-        SUM(CASE WHEN type IN ('user_input_request', 'approval_request') THEN 1 ELSE 0 END) AS requests
+        SUM(CASE WHEN type IN ('user_input_request', 'approval_request') THEN 1 ELSE 0 END) AS requests,
+        SUM(CASE WHEN type = 'run_interrupt_request' THEN 1 ELSE 0 END) AS interrupts
         FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}`;
       metrics.toolFailures += counts[0]?.failures ?? 0;
       metrics.humanRequests += counts[0]?.requests ?? 0;
@@ -478,26 +437,188 @@ const make = Effect.gen(function* () {
         kind: "run",
         text: `Status: ${run.status}; model selection: ${run.selection}; started: ${run.started_at}; ended: ${run.completed_at}; tool failures: ${counts[0]?.failures ?? 0}; user/approval requests: ${counts[0]?.requests ?? 0}; recorded tokens: ${usage[0]?.tokens ?? "unknown"}${skills.length ? `; skills loaded: ${skills.join(", ")}` : ""}. Completion is not verified task success.`,
       });
-      const items = yield* sql<{
+      let task = tasks.get(run.root_thread_id);
+      if (!task) {
+        const root = yield* sql<{
+          title: string;
+          project_id: ProjectId;
+        }>`SELECT title, project_id FROM orchestration_v2_projection_threads WHERE thread_id = ${run.root_thread_id}`;
+        const brief = yield* sql<{
+          id: string;
+          run_id: string | null;
+          text: string;
+          created_at: string;
+        }>`SELECT message_id AS id, run_id, created_at, substr(COALESCE(json_extract(payload_json, '$.text'), ''), 1, 5000) AS text
+          FROM orchestration_v2_projection_messages WHERE thread_id = ${run.root_thread_id} AND role = 'user' AND streaming = 0
+            AND COALESCE(json_extract(payload_json, '$.createdBy'), 'user') = 'user'
+          ORDER BY created_at, message_id LIMIT 1`;
+        const first = brief[0];
+        task = {
+          rootThreadId: run.root_thread_id,
+          projectId: root[0]?.project_id ?? run.project_id,
+          title: root[0]?.title ?? run.title,
+          threadIds: new Set(),
+          runs: 0,
+          followUps: 0,
+          interrupts: 0,
+          agentQuestions: 0,
+          failedTools: 0,
+          harmlessFailures: 0,
+          frictionKeys: new Set(),
+          firstActivityAt: run.started_at ?? identity.occurredAt,
+          lastActivityAt: identity.occurredAt,
+          latestRunStatus: run.status,
+          briefId: first?.id ?? null,
+        };
+        tasks.set(run.root_thread_id, task);
+        if (first)
+          evidence.push({
+            ...identity,
+            threadId: run.root_thread_id,
+            runId: first.run_id,
+            projectId: task.projectId,
+            title: task.title,
+            occurredAt: first.created_at,
+            id: `message:${first.id}`,
+            itemId: null,
+            kind: "message",
+            text: `Task brief, the user's first message in this task${first.run_id && sampledRuns.has(first.run_id) ? "" : " (context from before this review's activity)"}: ${first.text}`,
+          });
+      }
+      task.threadIds.add(run.thread_id);
+      task.runs++;
+      task.interrupts += counts[0]?.interrupts ?? 0;
+      task.agentQuestions += counts[0]?.requests ?? 0;
+      task.failedTools += counts[0]?.failures ?? 0;
+      if ((run.started_at ?? identity.occurredAt) < task.firstActivityAt)
+        task.firstActivityAt = run.started_at ?? identity.occurredAt;
+      if (identity.occurredAt >= task.lastActivityAt) {
+        task.lastActivityAt = identity.occurredAt;
+        task.latestRunStatus = run.status;
+      }
+      const prompts = yield* sql<{
         id: string;
-        type: string;
-        status: string;
+        created_by: string;
         text: string;
-        occurred_at: string;
-      }>`SELECT turn_item_id AS id, type, status, updated_at AS occurred_at,
-        substr(COALESCE(json_extract(payload_json, '$.text'), json_extract(payload_json, '$.output'), json_extract(payload_json, '$.input'), json_extract(payload_json, '$.questions'), json_extract(payload_json, '$.prompt'), ''), 1, 5000) AS text
-        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}
-          AND type IN ('user_message', 'assistant_message', 'dynamic_tool', 'command_execution', 'user_input_request', 'approval_request')
-        ORDER BY CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1 THEN 0 WHEN type = 'user_message' THEN 1 WHEN type = 'assistant_message' THEN 2 ELSE 3 END, ordinal DESC LIMIT 8`;
-      for (const item of items)
+        created_at: string;
+      }>`SELECT message_id AS id, COALESCE(json_extract(payload_json, '$.createdBy'), 'user') AS created_by, created_at,
+        substr(COALESCE(json_extract(payload_json, '$.text'), ''), 1, 5000) AS text
+        FROM orchestration_v2_projection_messages WHERE run_id = ${run.run_id} AND role = 'user' AND streaming = 0
+        ORDER BY created_at DESC, message_id DESC`;
+      task.followUps += prompts.filter(
+        (prompt) => prompt.created_by === "user" && prompt.id !== task.briefId,
+      ).length;
+      for (const prompt of prompts.slice(0, 4)) {
+        if (prompt.id === task.briefId) continue;
+        // What the agent said right before the user wrote, which the message usually answers.
+        const answered = yield* sql<{
+          id: string;
+          text: string;
+          created_at: string;
+        }>`SELECT message_id AS id, created_at, substr(COALESCE(json_extract(payload_json, '$.text'), ''), 1, 5000) AS text
+          FROM orchestration_v2_projection_messages WHERE thread_id = ${run.thread_id} AND role = 'assistant' AND streaming = 0 AND created_at < ${prompt.created_at}
+          ORDER BY created_at DESC, message_id DESC LIMIT 1`;
+        if (answered[0] && !evidence.some((entry) => entry.id === `message:${answered[0]!.id}`))
+          evidence.push({
+            ...identity,
+            occurredAt: answered[0].created_at,
+            id: `message:${answered[0].id}`,
+            itemId: null,
+            kind: "message",
+            text: `Agent message the next user-side message replied to: ${answered[0].text}`,
+          });
         evidence.push({
           ...identity,
-          occurredAt: item.occurred_at,
-          id: `item:${item.id}`,
-          itemId: item.id,
-          kind: item.type.endsWith("message") ? "message" : "tool",
-          text: evidenceExcerpt(`${item.type} (${item.status}): ${item.text}`, excerptLimit),
+          occurredAt: prompt.created_at,
+          id: `message:${prompt.id}`,
+          itemId: null,
+          kind: "message",
+          text: `${prompt.created_by === "user" ? "Follow-up the user wrote" : "Message an agent sent on the user's side (not the user)"}: ${prompt.text}`,
         });
+      }
+      const final = yield* sql<{
+        id: string;
+        text: string;
+        created_at: string;
+      }>`SELECT message_id AS id, created_at, substr(COALESCE(json_extract(payload_json, '$.text'), ''), 1, 5000) AS text
+        FROM orchestration_v2_projection_messages WHERE run_id = ${run.run_id} AND role = 'assistant' AND streaming = 0
+        ORDER BY created_at DESC, message_id DESC LIMIT 1`;
+      if (final[0] && !evidence.some((entry) => entry.id === `message:${final[0]!.id}`))
+        evidence.push({
+          ...identity,
+          occurredAt: final[0].created_at,
+          id: `message:${final[0].id}`,
+          itemId: null,
+          kind: "message",
+          text: `The run's final agent reply: ${final[0].text}`,
+        });
+      const requests = yield* sql<{
+        id: string;
+        type: string;
+        text: string;
+        occurred_at: string;
+      }>`SELECT turn_item_id AS id, type, updated_at AS occurred_at,
+        substr(COALESCE(json_extract(payload_json, '$.questions'), json_extract(payload_json, '$.prompt'), json_extract(payload_json, '$.text'), ''), 1, 3000) AS text
+        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id}
+          AND type IN ('run_interrupt_request', 'user_input_request', 'approval_request')
+        ORDER BY ordinal DESC LIMIT 3`;
+      for (const request of requests)
+        evidence.push({
+          ...identity,
+          occurredAt: request.occurred_at,
+          id: `item:${request.id}`,
+          itemId: request.id,
+          kind: "tool",
+          text:
+            request.type === "run_interrupt_request"
+              ? "The user interrupted the run."
+              : `The agent asked the user (${request.type}): ${request.text}`,
+        });
+      const failures = yield* sql<{
+        id: string;
+        type: string;
+        tool_name: string | null;
+        command: string | null;
+        output: string;
+        exit_code: number | null;
+        occurred_at: string;
+      }>`SELECT turn_item_id AS id, type, updated_at AS occurred_at, json_extract(payload_json, '$.toolName') AS tool_name,
+        substr(CASE WHEN json_type(payload_json, '$.input') = 'text' THEN json_extract(payload_json, '$.input')
+          ELSE COALESCE(json_extract(payload_json, '$.input.command'), json_extract(payload_json, '$.input')) END, 1, 2000) AS command,
+        substr(COALESCE(json_extract(payload_json, '$.output'), ''), -2000) AS output, json_extract(payload_json, '$.exitCode') AS exit_code
+        FROM orchestration_v2_projection_turn_items WHERE run_id = ${run.run_id} AND type IN ('dynamic_tool', 'command_execution')
+          AND (status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) <> 0 OR json_extract(payload_json, '$.outputIndicatesFailure') = 1)
+        ORDER BY ordinal LIMIT 100`;
+      for (const failure of failures) {
+        const signature = frictionSignature({
+          toolName: failure.type === "dynamic_tool" ? failure.tool_name : null,
+          command: failure.command ?? "",
+          output: failure.output,
+          exitCode: failure.exit_code,
+        });
+        const cluster = friction.get(signature.key) ?? {
+          ...signature,
+          failures: 0,
+          perTask: new Map<ThreadId, number>(),
+          evidenceIds: [] as string[],
+        };
+        friction.set(signature.key, cluster);
+        cluster.failures++;
+        cluster.perTask.set(task.rootThreadId, (cluster.perTask.get(task.rootThreadId) ?? 0) + 1);
+        task.frictionKeys.add(signature.key);
+        if (signature.harmless) task.harmlessFailures++;
+        if (cluster.evidenceIds.length < 3) {
+          cluster.evidenceIds.push(`item:${failure.id}`);
+          evidence.push({
+            ...identity,
+            occurredAt: failure.occurred_at,
+            id: `item:${failure.id}`,
+            itemId: failure.id,
+            kind: "tool",
+            text: `Failed ${failure.type} (friction group "${signature.key}"): ${failure.command ?? ""}\n--- output (end) ---\n${failure.output}`,
+          });
+        }
+      }
       const children = yield* sql<{
         id: string;
         text: string;
@@ -513,7 +634,7 @@ const make = Effect.gen(function* () {
           id: `agent:${child.id}`,
           itemId: null,
           kind: "workflow",
-          text: evidenceExcerpt(child.text, excerptLimit),
+          text: child.text,
         });
       const attributions = yield* sql<{
         id: number;
@@ -527,20 +648,57 @@ const make = Effect.gen(function* () {
           id: `attribution:${attribution.id}`,
           itemId: null,
           kind: "attribution",
-          text: evidenceExcerpt(
-            `Agent-reported attribution: ${attribution.payload_json}`,
-            excerptLimit,
-          ),
+          text: `Agent-reported attribution: ${attribution.payload_json}`,
         });
     }
+    // Evidence shares the budget evenly, so a smaller sample keeps more of each excerpt.
+    const excerptLimit = Math.max(
+      160,
+      Math.min(2200, Math.floor(input.characterBudget / Math.max(1, evidence.length))),
+    );
     const projects = yield* projectsIn(input.projectIds);
+    const taskList = yield* Effect.forEach(
+      tasks.values(),
+      Effect.fnUntraced(function* ({ briefId: _briefId, ...task }) {
+        const threadIds = [...task.threadIds];
+        const states = yield* sql<{
+          state: string | null;
+        }>`SELECT json_extract(pr.value, '$.snapshot.state') AS state
+          FROM orchestration_v2_projection_threads t, json_each(t.payload_json, '$.pullRequests') pr
+          WHERE ${sql.in("t.thread_id", [...threadIds, task.rootThreadId])}`;
+        const pullRequest = (["merged", "open", "closed"] as const).find((state) =>
+          states.some((row) => row.state === state),
+        );
+        return {
+          ...task,
+          threadIds: threadIds.slice(0, 50),
+          frictionKeys: [...task.frictionKeys].slice(0, 20),
+          pullRequest: pullRequest ?? null,
+        };
+      }),
+    );
+    const clusters = yield* Effect.forEach(
+      friction.values(),
+      ({ perTask, evidenceIds, ...cluster }) =>
+        Effect.forEach(evidenceIds, boundedId).pipe(
+          Effect.map((ids) => ({
+            ...cluster,
+            tasks: perTask.size,
+            maxPerTask: Math.max(...perTask.values()),
+            evidenceIds: ids,
+          })),
+        ),
+    );
     return {
       projects,
       metrics,
       skills: sumInsightSkills([skillUsage]),
-      engineeringLoop: yield* loopTickets({ ...input, projects, since }),
+      tasks: taskList.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt)),
+      friction: mergeFrictionClusters([clusters]),
       evidence: yield* Effect.forEach(evidence, (entry) =>
-        boundedId(entry.id).pipe(Effect.map((id) => ({ ...entry, id }))),
+        boundedId(entry.id).pipe(
+          Effect.map((id) => ({ ...entry, id, text: evidenceExcerpt(entry.text, excerptLimit) })),
+        ),
       ),
       throughSequence,
       hasMore,
@@ -669,17 +827,23 @@ const make = Effect.gen(function* () {
         local.skills,
         ...reached.map((entry) => entry.result.skills),
       ]);
-      const engineeringLoop = [
-        ...local.engineeringLoop,
+      const linkedFriction = yield* Effect.forEach(reached, (entry) =>
+        Effect.forEach(entry.result.friction ?? [], (cluster) =>
+          Effect.forEach(cluster.evidenceIds, (id) =>
+            boundedId(`${entry.environmentId}/${id}`),
+          ).pipe(Effect.map((evidenceIds) => ({ ...cluster, evidenceIds }))),
+        ),
+      );
+      const friction = mergeFrictionClusters([local.friction, ...linkedFriction]);
+      const tasks = [
+        ...local.tasks,
         ...reached.flatMap((entry) =>
-          (entry.result.engineeringLoop ?? []).map((ticket) => ({
-            ...ticket,
+          (entry.result.tasks ?? []).map((task) => ({
+            ...task,
             environmentId: entry.environmentId,
           })),
         ),
-      ]
-        .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, MAX_LOOP_TICKETS);
+      ].sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
       const hasMore = local.hasMore || reached.some((entry) => entry.result.hasMore);
       const createdAt = local.createdAt;
       const actualRows = yield* sql<{
@@ -696,7 +860,7 @@ const make = Effect.gen(function* () {
           : "No new activity in the selected projects.",
         wins: [],
         limitations: [
-          "Evidence is sampled: up to 8 timeline items and 12 delegations per run. Inspect source threads before drawing conclusions.",
+          "Evidence is sampled: per task its brief, and per run up to 4 user-side messages with the agent message each replied to, the final reply, 3 interrupts or agent questions and 12 delegations. Failing tools are grouped by program, exit code and error, with up to 3 examples per group. Inspect source threads before drawing conclusions.",
           "Timings include waiting; tokens are shown only where recorded for the main agent of each run. Native child sessions may be missing; workflow totals are not added again. Agent-reported attribution is not independent verification.",
           "Skill counts are a lower bound from recorded native skill calls and supported explicit SKILL.md reads. Skills already in context or read through unsupported tools may be missing. Older linked environments may only report native skill calls.",
           ...(hasMore
@@ -717,7 +881,8 @@ const make = Effect.gen(function* () {
         ],
         metrics,
         skills,
-        engineeringLoop,
+        tasks,
+        friction,
         evidence: [...local.evidence, ...linkedEvidence],
         recommendationIds: [],
         scopeKey,
@@ -761,10 +926,17 @@ const make = Effect.gen(function* () {
       if (current.status === "completed") return current;
       if (current.status !== "analyzing") return yield* new InsightsError({ reason: "not_found" });
       const evidenceById = new Map(current.evidence.map((e) => [e.id, e]));
-      const references = [...input.wins, ...input.recommendations, ...input.assessments];
+      const decisions = input.brief?.decisions ?? [];
+      const references = [
+        ...input.wins,
+        ...input.recommendations,
+        ...input.assessments,
+        ...decisions,
+      ];
       const keys = input.recommendations.map((r) => insightKey(r.key));
       if (
         references.some((r) => r.evidenceIds.some((id) => !evidenceById.has(id))) ||
+        decisions.some((d) => (d.kind === "toolkit") !== (d.recommendationKey !== undefined)) ||
         keys.some((key) => !key) ||
         new Set(keys).size !== keys.length ||
         new Set(input.assessments.map((a) => a.recommendationId)).size !== input.assessments.length
@@ -795,6 +967,7 @@ const make = Effect.gen(function* () {
               deferredUntil: existing?.deferredUntil ?? null,
               implementationThreadId: existing?.implementationThreadId ?? null,
               implementationRef: existing?.implementationRef ?? null,
+              ...(existing?.trial ? { trial: existing.trial } : {}),
               evidence: proposal.evidenceIds.map((id) => evidenceById.get(id)!),
               assessments: existing?.assessments ?? [],
               history: existing?.history ?? [
@@ -804,6 +977,25 @@ const make = Effect.gen(function* () {
             yield* saveRecommendation(value);
             ids.push(value.id);
           }
+          const recommendationIds = new Map(keys.map((key, index) => [key, ids[index]!]));
+          const brief = input.brief && {
+            headline: input.brief.headline,
+            decisions: yield* Effect.forEach(
+              input.brief.decisions,
+              Effect.fnUntraced(function* ({ recommendationKey, ...decision }) {
+                if (recommendationKey === undefined) return decision;
+                const key = insightKey(recommendationKey);
+                const recommendationId =
+                  recommendationIds.get(key) ??
+                  (yield* sql<{
+                    id: string;
+                  }>`SELECT id FROM insights_recommendations WHERE insight_key = ${key}`)[0]?.id;
+                if (!recommendationId)
+                  return yield* new InsightsError({ reason: "invalid_evidence" });
+                return { ...decision, recommendationId };
+              }),
+            ),
+          };
           for (const assessment of input.assessments) {
             const existing = yield* recommendation(assessment.recommendationId);
             if (
@@ -816,15 +1008,47 @@ const make = Effect.gen(function* () {
               (h, index, history) =>
                 h.status === "implemented" && history[index - 1]?.status !== "implemented",
             )?.at;
-            if (
-              !implementationAt ||
-              current.createdAt <= implementationAt ||
-              (assessment.outcome !== "insufficient_evidence" &&
-                assessment.evidenceIds.some(
-                  (id) => evidenceById.get(id)!.occurredAt <= implementationAt,
-                ))
-            )
+            if (!implementationAt || current.createdAt <= implementationAt)
               return yield* new InsightsError({ reason: "invalid_evidence" });
+            // insufficient_evidence may cite earlier work as context; it measures nothing.
+            if (assessment.outcome !== "insufficient_evidence") {
+              // One observation counts once per trial, however many reports see the run again.
+              const assessed = new Set(
+                existing.assessments
+                  .filter(
+                    (previous) =>
+                      previous.outcome !== "insufficient_evidence" &&
+                      previous.createdAt > implementationAt,
+                  )
+                  .flatMap((previous) => previous.evidence.map((evidence) => evidence.id)),
+              );
+              const cited = assessment.evidenceIds.map((id) => evidenceById.get(id)!);
+              const localRunIds = cited.flatMap((evidence) =>
+                evidence.runId && !evidence.environmentId ? [evidence.runId] : [],
+              );
+              // A run that began before the trial ran without the change, whenever it ended.
+              const runStarts = new Map(
+                localRunIds.length
+                  ? (yield* sql<{
+                      run_id: string;
+                      started_at: string;
+                    }>`SELECT run_id, COALESCE(json_extract(payload_json, '$.startedAt'), requested_at) AS started_at
+                      FROM orchestration_v2_projection_runs WHERE ${sql.in("run_id", localRunIds)}`).map(
+                      (row) => [row.run_id, row.started_at] as const,
+                    )
+                  : [],
+              );
+              if (
+                cited.some(
+                  (evidence) =>
+                    assessed.has(evidence.id) ||
+                    ((!evidence.environmentId && evidence.runId
+                      ? runStarts.get(evidence.runId)
+                      : undefined) ?? evidence.occurredAt) <= implementationAt,
+                )
+              )
+                return yield* new InsightsError({ reason: "invalid_evidence" });
+            }
             yield* saveRecommendation({
               ...existing,
               updatedAt: at,
@@ -845,6 +1069,7 @@ const make = Effect.gen(function* () {
             status: "completed",
             completedAt: at,
             summary: input.summary,
+            ...(brief ? { brief } : {}),
             wins: input.wins,
             limitations: [...current.limitations, ...input.limitations],
             recommendationIds: ids,
@@ -872,16 +1097,20 @@ const make = Effect.gen(function* () {
         (input.deferredUntil === undefined || input.deferredUntil === previous.deferredUntil)
       )
         return previous;
+      const implementationRef =
+        input.implementationRef === undefined
+          ? previous.implementationRef
+          : input.implementationRef;
       const value: InsightRecommendation = {
         ...previous,
         status: input.status,
         note: input.note,
         updatedAt: at,
         deferredUntil: input.status === "deferred" ? (input.deferredUntil ?? null) : null,
-        implementationRef:
-          input.implementationRef === undefined
-            ? previous.implementationRef
-            : input.implementationRef,
+        implementationRef,
+        ...(input.status === "implemented" && previous.status !== "implemented"
+          ? { trial: { startedAt: at, validation: previous.validation, implementationRef } }
+          : {}),
         history: [...previous.history, { at, status: input.status, note: input.note }],
       };
       yield* saveRecommendation(value);

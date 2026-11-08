@@ -14,12 +14,15 @@ import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 
 const Text = TrimmedNonEmptyString.check(Schema.isMaxLength(12000));
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(300));
+/** `implemented` is a trial that later reviews assess; `kept` and `reverted` close it. */
 export const InsightStatus = Schema.Literals([
   "open",
   "accepted",
   "deferred",
   "dismissed",
   "implemented",
+  "kept",
+  "reverted",
 ]);
 export type InsightStatus = typeof InsightStatus.Type;
 export const InsightCategory = Schema.Literals([
@@ -94,6 +97,14 @@ export const InsightRecommendation = Schema.Struct({
   deferredUntil: Schema.NullOr(IsoDateTime),
   implementationThreadId: Schema.NullOr(ThreadId),
   implementationRef: Schema.NullOr(Schema.String),
+  /** The trial contract, frozen when it entered `implemented`; later proposals do not change it. */
+  trial: Schema.optionalKey(
+    Schema.Struct({
+      startedAt: IsoDateTime,
+      validation: Text,
+      implementationRef: Schema.NullOr(Schema.String),
+    }),
+  ),
   evidence: Schema.Array(InsightEvidence),
   assessments: Schema.Array(
     Schema.Struct({
@@ -132,23 +143,70 @@ export const InsightSkillUsage = Schema.Struct({
 });
 export type InsightSkillUsage = typeof InsightSkillUsage.Type;
 
-/** A ticket's engineering-loop worksheet, `.agent-work/<ticket>/engineering-loop.md`, as last written. */
-export const InsightLoopTicket = Schema.Struct({
-  ticket: ShortText,
-  title: Schema.String.check(Schema.isMaxLength(300)),
-  stage: ShortText,
-  next: Schema.String.check(Schema.isMaxLength(600)),
-  updatedAt: IsoDateTime,
-  /** Timestamped stage changes in recorded order; empty for worksheets that predate them. */
-  stageChanges: Schema.Array(Schema.Struct({ stage: ShortText, at: IsoDateTime })).check(
-    Schema.isMaxLength(40),
-  ),
+/** Failing tool calls that failed the same way: program, exit code and normalized diagnostic. */
+export const InsightFrictionCluster = Schema.Struct({
+  key: ShortText,
+  family: ShortText,
+  exitCode: Schema.NullOr(Schema.Int),
+  signature: ShortText,
+  /** A lone search that found nothing, or a process stopped by a signal. */
+  harmless: Schema.Boolean,
+  failures: NonNegativeInt,
+  tasks: NonNegativeInt,
+  /** Most failures of this kind within one task. */
+  maxPerTask: NonNegativeInt,
+  evidenceIds: Schema.Array(ShortText).check(Schema.isMaxLength(3)),
+});
+export type InsightFrictionCluster = typeof InsightFrictionCluster.Type;
+
+/** One task (a root thread with its child threads) as measured over a review's sampled runs. */
+export const InsightTask = Schema.Struct({
+  rootThreadId: ThreadId,
   projectId: ProjectId,
-  threadId: Schema.NullOr(ThreadId),
-  /** Set when the worksheet lives in a linked environment rather than the report's own. */
+  title: Schema.String,
+  threadIds: Schema.Array(ThreadId).check(Schema.isMaxLength(50)),
+  runs: NonNegativeInt,
+  /** Messages the user wrote after the task's first one; agent-written messages are excluded. */
+  followUps: NonNegativeInt,
+  interrupts: NonNegativeInt,
+  agentQuestions: NonNegativeInt,
+  failedTools: NonNegativeInt,
+  harmlessFailures: NonNegativeInt,
+  frictionKeys: Schema.Array(ShortText).check(Schema.isMaxLength(20)),
+  firstActivityAt: IsoDateTime,
+  lastActivityAt: IsoDateTime,
+  latestRunStatus: Schema.String,
+  /** A linked PR's state when the report was made (merged before open), not during the window. */
+  pullRequest: Schema.NullOr(Schema.Literals(["open", "merged", "closed"])),
+  /** Set when the task lives in a linked environment rather than the report's own. */
   environmentId: Schema.optionalKey(EnvironmentId),
 });
-export type InsightLoopTicket = typeof InsightLoopTicket.Type;
+export type InsightTask = typeof InsightTask.Type;
+
+const InsightDecisionFields = {
+  /** `briefing`: how the user briefs and steers agents. `toolkit`: a change to skills, tools or setup. */
+  kind: Schema.Literals(["briefing", "toolkit"]),
+  title: ShortText,
+  /** What to do differently. */
+  action: Text,
+  /** The chain behind it: the brief, what the agent did, the correction, the outcome. */
+  why: Text,
+  evidenceIds: Schema.Array(ShortText).check(Schema.isMinLength(1), Schema.isMaxLength(6)),
+};
+
+/** One of the few things a review asks the user to decide or change. */
+export const InsightDecision = Schema.Struct({
+  ...InsightDecisionFields,
+  /** The recommendation a toolkit decision is carried out through. */
+  recommendationId: Schema.optionalKey(Schema.String),
+});
+export type InsightDecision = typeof InsightDecision.Type;
+
+export const InsightDecisionBrief = Schema.Struct({
+  headline: ShortText,
+  decisions: Schema.Array(InsightDecision).check(Schema.isMaxLength(3)),
+});
+export type InsightDecisionBrief = typeof InsightDecisionBrief.Type;
 
 export const InsightsProject = Schema.Struct({
   projectId: ProjectId,
@@ -172,8 +230,9 @@ export const InsightsEvidenceResult = Schema.Struct({
   metrics: InsightsMetrics,
   /** Absent from environments that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
-  /** Absent from environments that predate engineering-loop worksheets. */
-  engineeringLoop: Schema.optionalKey(Schema.Array(InsightLoopTicket)),
+  /** Absent from environments that predate task measures. */
+  tasks: Schema.optionalKey(Schema.Array(InsightTask)),
+  friction: Schema.optionalKey(Schema.Array(InsightFrictionCluster)),
   evidence: Schema.Array(InsightEvidence),
   throughSequence: NonNegativeInt,
   hasMore: Schema.Boolean,
@@ -187,13 +246,17 @@ export const InsightsReport = Schema.Struct({
   createdAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
   summary: Schema.String,
+  /** Absent from reports that predate decision briefs, and from analyses that found nothing to decide. */
+  brief: Schema.optionalKey(InsightDecisionBrief),
   wins: Schema.Array(Schema.Struct({ text: Text, evidenceIds: Schema.Array(ShortText) })),
   limitations: Schema.Array(Text),
   metrics: InsightsMetrics,
   /** Most-loaded first; absent from reports that predate skill usage. */
   skills: Schema.optionalKey(Schema.Array(InsightSkillUsage)),
-  /** Tickets in the engineering loop when the report was gathered, most recently updated first. */
-  engineeringLoop: Schema.optionalKey(Schema.Array(InsightLoopTicket)),
+  /** Most recently active first; absent from reports that predate task measures. */
+  tasks: Schema.optionalKey(Schema.Array(InsightTask)),
+  /** Most failures first; absent from reports that predate friction clusters. */
+  friction: Schema.optionalKey(Schema.Array(InsightFrictionCluster)),
   evidence: Schema.Array(InsightEvidence),
   recommendationIds: Schema.Array(Schema.String),
   scopeKey: Schema.String,
@@ -233,6 +296,18 @@ export type InsightsSnapshot = typeof InsightsSnapshot.Type;
 export const InsightsSubmitInput = Schema.Struct({
   reportId: ShortText,
   summary: Text,
+  brief: Schema.optionalKey(
+    Schema.Struct({
+      headline: ShortText,
+      decisions: Schema.Array(
+        Schema.Struct({
+          ...InsightDecisionFields,
+          /** Required for toolkit decisions: a key from this submission or an existing recommendation. */
+          recommendationKey: Schema.optionalKey(ShortText),
+        }),
+      ).check(Schema.isMaxLength(3)),
+    }),
+  ),
   wins: Schema.Array(
     Schema.Struct({
       text: Text,

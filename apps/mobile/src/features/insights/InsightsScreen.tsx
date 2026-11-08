@@ -23,6 +23,8 @@ import {
   setLinkedInsightsProject,
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
+  insightTrial,
+  insightTrialSummary,
 } from "@t3tools/client-runtime/insights";
 import { useState, type ReactNode } from "react";
 import {
@@ -655,6 +657,8 @@ function DailyReview({
   );
 }
 
+const weekFromNow = () => new Date(Date.now() + 7 * 86400000).toISOString();
+
 function RecommendationDetail({
   environmentId,
   summary,
@@ -672,6 +676,8 @@ function RecommendationDetail({
   const [note, setNote] = useState(rec.note);
   const [reference, setReference] = useState(rec.implementationRef ?? "");
   const implementationUrl = insightImplementationUrl(rec.implementationRef);
+  const trial = insightTrial(rec);
+  const closed = rec.status === "kept" || rec.status === "reverted";
   const [busy, setBusy] = useState(false);
   const update = useAtomCommand(serverEnvironment.updateInsight);
   const implement = useAtomCommand(serverEnvironment.implementInsight);
@@ -689,7 +695,7 @@ function RecommendationDetail({
           status === "deferred"
             ? rec.status === "deferred"
               ? rec.deferredUntil
-              : new Date(Date.now() + 7 * 86400000).toISOString()
+              : weekFromNow()
             : null,
       },
     });
@@ -706,13 +712,29 @@ function RecommendationDetail({
   return (
     <View className="gap-4 border-t border-border-subtle p-4">
       <View className="gap-3 rounded-xl border border-border-subtle bg-surface p-4">
-        <Text className="font-t3-semibold text-sm text-foreground">Implementation</Text>
+        <Text className="font-t3-semibold text-sm text-foreground">
+          {trial ? "Trial" : "Implementation"}
+        </Text>
         <InsightImplementationBadge recommendation={rec} />
         <Text className="text-xs text-foreground-muted">
-          {rec.status === "implemented"
-            ? "Completion recorded. Later reviews assess whether the change helped."
-            : "Completion has not been recorded. Confirm it after checking the change."}
+          {trial
+            ? `${trial.startedAt ? `On trial since ${new Date(trial.startedAt).toLocaleDateString()}. ` : ""}${insightTrialSummary(trial)}`
+            : rec.status === "kept"
+              ? "Kept after its trial. Reviews no longer assess it."
+              : rec.status === "reverted"
+                ? "Reverted after its trial. Reviews no longer assess it."
+                : "Completion has not been recorded. Confirm it after checking the change."}
         </Text>
+        {trial ? (
+          <View className="gap-1">
+            <Text className="font-t3-medium text-xs text-foreground">
+              Criterion, as agreed when the trial started
+            </Text>
+            <Text selectable className="text-sm text-foreground-muted">
+              {trial.criterion}
+            </Text>
+          </View>
+        ) : null}
         <Text selectable className="text-xs text-foreground-muted">
           {rec.implementationRef || "No change reference recorded."}
         </Text>
@@ -738,7 +760,8 @@ function RecommendationDetail({
             }}
           />
         ) : (
-          rec.status !== "implemented" && (
+          !trial &&
+          rec.status !== "kept" && (
             <Button
               label="Start implementation"
               disabled={disabled || busy}
@@ -748,14 +771,28 @@ function RecommendationDetail({
             />
           )
         )}
-        <Button
-          label={rec.status === "implemented" ? "Reopen" : "Mark implemented"}
-          tone={rec.status === "implemented" ? "secondary" : "primary"}
-          disabled={disabled || busy}
-          onPress={() => {
-            void act(rec.status === "implemented" ? "open" : "implemented");
-          }}
-        />
+        {(trial
+          ? ([
+              ["kept", "Keep"],
+              ["accepted", "Revise"],
+              ["reverted", "Mark reverted"],
+            ] as const)
+          : closed
+            ? rec.status === "kept"
+              ? ([["implemented", "Reopen trial"]] as const)
+              : ([["open", "Reopen"]] as const)
+            : ([["implemented", "Mark implemented"]] as const)
+        ).map(([status, label]) => (
+          <Button
+            key={status}
+            label={label}
+            tone={status === "implemented" || status === "kept" ? "primary" : "secondary"}
+            disabled={disabled || busy}
+            onPress={() => {
+              void act(status);
+            }}
+          />
+        ))}
       </View>
       {rec.targetFile && (
         <Text selectable className="text-xs text-primary-text">
@@ -790,7 +827,7 @@ function RecommendationDetail({
         accessibilityLabel="Decision note"
         value={note}
         onChangeText={setNote}
-        placeholder="Decision note"
+        placeholder={trial ? "Why keep, revise, or revert it?" : "Decision note"}
         multiline
         className="min-h-16 rounded-xl border border-border-subtle p-3 text-foreground"
       />
@@ -809,11 +846,8 @@ function RecommendationDetail({
         }}
       />
       <View className="flex-row flex-wrap gap-2">
-        {(["accepted", "deferred", "dismissed", "open"] as const)
-          .filter(
-            (status) =>
-              status !== rec.status && !(status === "open" && rec.status === "implemented"),
-          )
+        {(trial ? [] : (["accepted", "deferred", "dismissed", "open"] as const))
+          .filter((status) => status !== rec.status && !(status === "open" && closed))
           .map((status) => (
             <Button
               key={status}

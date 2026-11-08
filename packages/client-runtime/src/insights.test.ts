@@ -8,10 +8,12 @@ import {
   type InsightsSettings,
 } from "@t3tools/contracts";
 import {
-  engineeringLoopBoard,
   insightsLinkedEnvironments,
+  recurringInsightFriction,
+  reviewedInsightThreads,
   setLinkedInsightsProject,
   insightImplementationStatus,
+  insightTrial,
   insightImplementationUrl,
   matchesInsightFilter,
 } from "./insights.ts";
@@ -26,6 +28,8 @@ describe("implementation tracking", () => {
     ["open", ThreadId.make("previous-implementation"), "not_implemented"],
     ["deferred", ThreadId.make("previous-implementation"), "not_implemented"],
     ["dismissed", ThreadId.make("previous-implementation"), "not_implemented"],
+    ["kept", ThreadId.make("implementation"), "implemented"],
+    ["reverted", ThreadId.make("implementation"), "not_implemented"],
   ] as const)("classifies %s with thread %s as %s", (status, implementationThreadId, expected) => {
     const recommendation = { status, implementationThreadId, deferredUntil: null };
     expect(insightImplementationStatus(recommendation)).toBe(expected);
@@ -51,6 +55,34 @@ describe("implementation tracking", () => {
     expect(matchesInsightFilter(recommendation, "deferred", 0)).toBe(true);
     expect(matchesInsightFilter(recommendation, "all", 0)).toBe(true);
     expect(matchesInsightFilter(recommendation, "implementation:started", 0)).toBe(false);
+  });
+
+  it("counts only assessments made since the current trial began", () => {
+    const assessment = (createdAt: string) => ({
+      reportId: createdAt,
+      createdAt,
+      outcome: "improved" as const,
+      explanation: "Fewer retries.",
+      evidence: [],
+    });
+    const trial = insightTrial({
+      status: "implemented",
+      validation: "Fewer retries, same coverage.",
+      history: [
+        { at: "2026-11-01T00:00:00.000Z", status: "implemented", note: "" },
+        { at: "2026-11-02T00:00:00.000Z", status: "accepted", note: "Revise" },
+        { at: "2026-11-03T00:00:00.000Z", status: "implemented", note: "" },
+        { at: "2026-11-03T01:00:00.000Z", status: "implemented", note: "Added the PR link" },
+      ],
+      assessments: [assessment("2026-11-01T12:00:00.000Z"), assessment("2026-11-04T00:00:00.000Z")],
+    });
+    expect(trial?.startedAt).toBe("2026-11-03T00:00:00.000Z");
+    expect(trial?.assessments.map((entry) => entry.createdAt)).toEqual([
+      "2026-11-04T00:00:00.000Z",
+    ]);
+    expect(
+      insightTrial({ status: "kept", validation: "", history: [], assessments: [] }),
+    ).toBeNull();
   });
 
   it.each([
@@ -98,31 +130,111 @@ describe("linked projects", () => {
   });
 });
 
-describe("engineering loop", () => {
-  it("counts tickets per stage and times a re-entered stage from its latest entry", () => {
-    const ticket = {
-      ticket: "NG-1",
-      title: "Inventory",
-      stage: "Review",
-      next: "",
-      updatedAt: "2026-11-02T08:00:00.000Z",
-      stageChanges: [
-        { stage: "Review", at: "2026-10-20T08:00:00.000Z" },
-        { stage: "Implementation", at: "2026-10-25T08:00:00.000Z" },
-        { stage: "Review", at: "2026-10-30T08:00:00.000Z" },
-      ],
+describe("reviewed threads", () => {
+  it("lists each sampled thread once per environment, newest first, with the findings citing it", () => {
+    const evidence = (
+      id: string,
+      threadId: string,
+      kind: "run" | "message",
+      occurredAt: string,
+      environmentId?: EnvironmentId,
+    ) => ({
+      id,
+      threadId: ThreadId.make(threadId),
+      runId: null,
+      itemId: null,
       projectId: ProjectId.make("app"),
-      threadId: null,
-    };
-    const board = engineeringLoopBoard(
-      [ticket, { ...ticket, ticket: "NG-2", stage: "Blocked", stageChanges: [] }],
-      "2026-11-02T09:00:00.000Z",
+      occurredAt,
+      title: threadId,
+      kind,
+      text: "",
+      ...(environmentId ? { environmentId } : {}),
+    });
+    const studio = EnvironmentId.make("studio");
+    const threads = reviewedInsightThreads(
+      {
+        evidence: [
+          evidence("run:1", "work", "run", "2026-11-01T08:00:00.000Z"),
+          evidence("item:1", "work", "message", "2026-11-01T09:00:00.000Z"),
+          evidence("run:2", "work", "run", "2026-11-02T08:00:00.000Z"),
+          evidence("run:3", "fix", "run", "2026-11-01T10:00:00.000Z"),
+          evidence("studio/run:3", "fix", "run", "2026-10-30T10:00:00.000Z", studio),
+        ],
+        wins: [{ text: "Tests first", evidenceIds: ["item:1"] }],
+      },
+      [{ evidenceIds: ["run:2", "run:3"] }, { evidenceIds: ["other"] }],
     );
-    expect(board.stages.find((entry) => entry.stage === "Review")?.count).toBe(1);
-    expect(board.elsewhere).toEqual([{ stage: "Blocked", count: 1 }]);
-    expect(board.rows.map((row) => [row.position, row.daysInStage, row.daysSinceUpdate])).toEqual([
-      [5, 3, 0],
-      [-1, null, 0],
+    expect(
+      threads.map((t) => [t.environmentId, t.threadId, t.runs, t.lastActivityAt, t.citedBy]),
+    ).toEqual([
+      [null, "work", 2, "2026-11-02T08:00:00.000Z", 2],
+      [null, "fix", 1, "2026-11-01T10:00:00.000Z", 1],
+      [studio, "fix", 1, "2026-10-30T10:00:00.000Z", 0],
+    ]);
+    const task = {
+      rootThreadId: ThreadId.make("work"),
+      projectId: ProjectId.make("app"),
+      title: "Ship the fix",
+      threadIds: [ThreadId.make("work"), ThreadId.make("child")],
+      runs: 3,
+      followUps: 1,
+      interrupts: 0,
+      agentQuestions: 0,
+      failedTools: 0,
+      harmlessFailures: 0,
+      frictionKeys: [],
+      firstActivityAt: "2026-11-01T08:00:00.000Z",
+      lastActivityAt: "2026-11-03T08:00:00.000Z",
+      latestRunStatus: "completed",
+      pullRequest: "merged" as const,
+    };
+    const grouped = reviewedInsightThreads(
+      {
+        evidence: [
+          evidence("run:1", "work", "run", "2026-11-01T08:00:00.000Z"),
+          evidence("run:4", "child", "run", "2026-11-03T08:00:00.000Z"),
+        ],
+        wins: [],
+        tasks: [task],
+      },
+      [{ evidenceIds: ["run:4"] }],
+    );
+    expect(grouped.map((t) => [t.threadId, t.title, t.runs, t.citedBy, t.task])).toEqual([
+      ["work", "Ship the fix", 3, 1, task],
+    ]);
+  });
+});
+
+describe("recurring friction", () => {
+  it("keeps failures that recur across or within tasks and have an error to act on", () => {
+    const cluster = (key: string, overrides: object) => ({
+      key,
+      family: "sed",
+      exitCode: 1,
+      signature: "No such file",
+      harmless: false,
+      failures: 2,
+      tasks: 2,
+      maxPerTask: 1,
+      evidenceIds: [],
+      ...overrides,
+    });
+    const friction = recurringInsightFriction(
+      {
+        evidence: [],
+        friction: [
+          cluster("across", {}),
+          cluster("within", { tasks: 1, maxPerTask: 2, evidenceIds: ["item:x"] }),
+          cluster("once", { failures: 1, tasks: 1 }),
+          cluster("harmless", { harmless: true }),
+          cluster("silent", { signature: "(no error output)" }),
+        ],
+      },
+      [{ id: "rec", title: "Quote separators", evidenceIds: ["item:x"] }],
+    );
+    expect(friction.map((entry) => [entry.key, entry.recommendation?.title ?? null])).toEqual([
+      ["across", null],
+      ["within", "Quote separators"],
     ]);
   });
 });

@@ -1,5 +1,6 @@
 import * as Insights from "../insights/InsightsService.ts";
 import * as ThreadSkills from "./ThreadSkills.ts";
+import * as ThreadEngineeringLoop from "./ThreadEngineeringLoop.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
@@ -392,6 +393,7 @@ export const layerProduction = Layer.mergeAll(
   layerScratchThreadPromotionProvided,
   layerSecretRequestsProvided,
   ThreadSkills.layer,
+  ThreadEngineeringLoop.layer,
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),
   ),

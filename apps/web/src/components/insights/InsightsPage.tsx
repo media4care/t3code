@@ -25,6 +25,8 @@ import {
   linkedInsightsProjectIds,
   setLinkedInsightsProject,
   INSIGHT_STATUS_LABELS,
+  insightTrial,
+  insightTrialSummary,
 } from "@t3tools/client-runtime/insights";
 import {
   useEnvironments,
@@ -749,6 +751,8 @@ function Recommendations({
   );
 }
 
+const weekFromNow = () => new Date(Date.now() + 7 * 86400000).toISOString();
+
 function RecommendationDetail({
   environmentId,
   summary,
@@ -769,6 +773,8 @@ function RecommendationDetail({
   const [note, setNote] = useState(recommendation.note);
   const [reference, setReference] = useState(recommendation.implementationRef ?? "");
   const implementationUrl = insightImplementationUrl(recommendation.implementationRef);
+  const trial = insightTrial(recommendation);
+  const closed = recommendation.status === "kept" || recommendation.status === "reverted";
   const [busy, setBusy] = useState(false);
   const act = async (status: InsightStatus) => {
     setBusy(true);
@@ -783,7 +789,7 @@ function RecommendationDetail({
           status === "deferred"
             ? recommendation.status === "deferred"
               ? recommendation.deferredUntil
-              : new Date(Date.now() + 7 * 86400000).toISOString()
+              : weekFromNow()
             : null,
       },
     });
@@ -806,25 +812,53 @@ function RecommendationDetail({
       <section className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h4 className="text-sm font-semibold">Implementation</h4>
+            <h4 className="text-sm font-semibold">{trial ? "Trial" : "Implementation"}</h4>
             <InsightImplementationBadge recommendation={recommendation} />
           </div>
-          <Button
-            size="sm"
-            variant={recommendation.status === "implemented" ? "outline" : "default"}
-            disabled={disabled || busy}
-            onClick={() => {
-              void act(recommendation.status === "implemented" ? "open" : "implemented");
-            }}
-          >
-            {recommendation.status === "implemented" ? "Reopen" : "Mark implemented"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {(trial
+              ? ([
+                  ["kept", "Keep"],
+                  ["accepted", "Revise"],
+                  ["reverted", "Mark reverted"],
+                ] as const)
+              : closed
+                ? recommendation.status === "kept"
+                  ? ([["implemented", "Reopen trial"]] as const)
+                  : ([["open", "Reopen"]] as const)
+                : ([["implemented", "Mark implemented"]] as const)
+            ).map(([status, label]) => (
+              <Button
+                key={status}
+                size="sm"
+                variant={status === "implemented" || status === "kept" ? "default" : "outline"}
+                disabled={disabled || busy}
+                onClick={() => {
+                  void act(status);
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          {recommendation.status === "implemented"
-            ? "Completion recorded. Later reviews assess whether the change helped."
-            : "Completion has not been recorded. Confirm it after checking the change."}
+          {trial
+            ? `${trial.startedAt ? `On trial since ${new Date(trial.startedAt).toLocaleDateString()}. ` : ""}${insightTrialSummary(trial)}`
+            : recommendation.status === "kept"
+              ? "Kept after its trial. Reviews no longer assess it."
+              : recommendation.status === "reverted"
+                ? "Reverted after its trial. Reviews no longer assess it."
+                : "Completion has not been recorded. Confirm it after checking the change."}
         </p>
+        {trial && (
+          <div>
+            <h5 className="text-xs font-medium">Criterion, as agreed when the trial started</h5>
+            <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+              {trial.criterion}
+            </p>
+          </div>
+        )}
         {recommendation.implementationRef ? (
           implementationUrl ? (
             <a
@@ -850,7 +884,8 @@ function RecommendationDetail({
             Open implementation thread
           </Link>
         ) : (
-          recommendation.status !== "implemented" && (
+          !trial &&
+          recommendation.status !== "kept" && (
             <Button
               variant="outline"
               disabled={disabled || busy}
@@ -891,7 +926,9 @@ function RecommendationDetail({
             aria-label="Decision note"
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="Why accept, defer, or dismiss this?"
+            placeholder={
+              trial ? "Why keep, revise, or revert it?" : "Why accept, defer, or dismiss this?"
+            }
           />
         </Field>
         <Field label="Implementation reference">
@@ -913,12 +950,8 @@ function RecommendationDetail({
         >
           Save note
         </Button>
-        {(["accepted", "deferred", "dismissed", "open"] as const)
-          .filter(
-            (status) =>
-              status !== recommendation.status &&
-              !(status === "open" && recommendation.status === "implemented"),
-          )
+        {(trial ? [] : (["accepted", "deferred", "dismissed", "open"] as const))
+          .filter((status) => status !== recommendation.status && !(status === "open" && closed))
           .map((status) => (
             <Button
               key={status}

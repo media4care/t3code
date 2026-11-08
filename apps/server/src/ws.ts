@@ -2,6 +2,7 @@ import * as Qa from "./qa/QaService.ts";
 import * as Releases from "./releases/ReleasesService.ts";
 import * as Insights from "./insights/InsightsService.ts";
 import * as ThreadSkills from "./orchestration-v2/ThreadSkills.ts";
+import * as ThreadEngineeringLoop from "./orchestration-v2/ThreadEngineeringLoop.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -1406,6 +1407,7 @@ export const layerWsRpc = (
       const releases = yield* Releases.ReleasesService;
       const insights = yield* Insights.InsightsService;
       const threadSkills = yield* ThreadSkills.ThreadSkills;
+      const threadEngineeringLoop = yield* ThreadEngineeringLoop.ThreadEngineeringLoop;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2312,6 +2314,18 @@ export const layerWsRpc = (
                 new OrchestrationV2GetThreadProjectionError({
                   threadId: input.threadId,
                   message: "Failed to load thread skills",
+                  cause,
+                }),
+            ),
+          ),
+        [WS_METHODS.threadEngineeringLoopList]: (input) =>
+          threadEngineeringLoop.list(input.threadId).pipe(
+            Effect.map((tickets) => ({ tickets })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: "Failed to load the thread's engineering loop",
                   cause,
                 }),
             ),

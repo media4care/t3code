@@ -273,6 +273,16 @@ layouts with an inspector, its thread opens beside the parent. Maximize it to
 fill the screen; close the full-screen view to return to the parent and inspector.
 Stop on a thread also stops the subagents it delegated to.
 
+When a thread runs the agents-toolkit engineering loop, **Agents** also shows the
+ticket it is driving: the current stage, the next action, and when the worksheet
+last changed. **Agents** appears for such a thread even without subagents. The
+thread card is highlighted while the ticket is still in the loop, and delegated
+agents that run their own loop show their ticket's stage. A thread counts once
+it has written a stage into `.agent-work/<ticket>/engineering-loop.md` in its
+checkout; reading the worksheet doesn't count. It shows the worksheet as it is
+now. Time in a stage appears only for worksheets that record timestamped stage
+changes.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

@@ -21,7 +21,9 @@ import {
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { InsightsEngineeringLoop } from "./InsightsEngineeringLoop";
+import { InsightsDecisionBrief } from "./InsightsDecisionBrief";
+import { InsightsFriction } from "./InsightsFriction";
+import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
 const OUTCOMES = [
@@ -69,6 +71,11 @@ export function InsightsDashboard({
   });
   return (
     <div className="space-y-4">
+      <InsightsDecisionBrief
+        environmentId={environmentId}
+        report={report}
+        onOpenRecommendation={onOpenRecommendation}
+      />
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
           {
@@ -86,9 +93,9 @@ export function InsightsDashboard({
             color: "text-warning-foreground bg-warning/8",
           },
           {
-            label: "Human requests",
+            label: "Agent questions",
             value: metrics.humanRequests,
-            hint: "Questions & approvals",
+            hint: "Asked through question & approval tools",
             icon: MessageCircleQuestionIcon,
             color: "text-info-foreground bg-info/8",
           },
@@ -291,7 +298,11 @@ export function InsightsDashboard({
           </div>
           <p className="mt-2 text-sm">
             <span className="text-2xl font-semibold tabular-nums">
-              {snapshot.recommendations.filter((r) => r.status === "implemented").length}
+              {
+                snapshot.recommendations.filter(
+                  (r) => insightImplementationStatus(r) === "implemented",
+                ).length
+              }
             </span>
             <span className="text-muted-foreground">
               {" "}
@@ -357,13 +368,17 @@ export function InsightsDashboard({
         </section>
       )}
 
-      {report.engineeringLoop?.length ? (
-        <InsightsEngineeringLoop
-          environmentId={environmentId}
-          tickets={report.engineeringLoop}
-          asOf={report.createdAt}
-        />
-      ) : null}
+      <InsightsFriction
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
+
+      <InsightsReviewedThreads
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
 
       {recent.length > 1 && (
         <section className="rounded-xl border border-border bg-card p-5">

@@ -1,10 +1,12 @@
 import type {
   EnvironmentId,
-  InsightLoopTicket,
   InsightRecommendation,
+  InsightsReport,
+  InsightTask,
   InsightsSettings,
   ProjectId,
   ServerProvider,
+  ThreadId,
 } from "@t3tools/contracts";
 
 export function insightsModelChoices(providers: readonly ServerProvider[]) {
@@ -93,7 +95,9 @@ export const INSIGHT_STATUS_LABELS = {
   accepted: "Accepted",
   deferred: "Deferred",
   dismissed: "Dismissed",
-  implemented: "Implemented",
+  implemented: "On trial",
+  kept: "Kept",
+  reverted: "Reverted",
 } as const;
 
 export function actionableInsight(
@@ -122,7 +126,8 @@ export const INSIGHT_IMPLEMENTATION_FILTERS = Object.entries(INSIGHT_IMPLEMENTAT
 export function insightImplementationStatus(
   recommendation: Pick<InsightRecommendation, "status" | "implementationThreadId">,
 ) {
-  if (recommendation.status === "implemented") return "implemented";
+  if (recommendation.status === "implemented" || recommendation.status === "kept")
+    return "implemented";
   if (recommendation.status === "accepted" && recommendation.implementationThreadId)
     return "started";
   return "not_implemented";
@@ -144,6 +149,38 @@ export function matchesInsightFilter(
   return recommendation.status === filter;
 }
 
+/** When the current trial began, its frozen criterion, and how the reviews since assessed it. */
+export function insightTrial(
+  recommendation: Pick<
+    InsightRecommendation,
+    "status" | "history" | "assessments" | "trial" | "validation"
+  >,
+) {
+  if (recommendation.status !== "implemented") return null;
+  const startedAt =
+    recommendation.trial?.startedAt ??
+    recommendation.history.findLast(
+      (entry, index, history) =>
+        entry.status === "implemented" && history[index - 1]?.status !== "implemented",
+    )?.at ??
+    null;
+  return {
+    startedAt,
+    criterion: recommendation.trial?.validation ?? recommendation.validation,
+    assessments: recommendation.assessments.filter(
+      (assessment) => startedAt !== null && assessment.createdAt > startedAt,
+    ),
+  };
+}
+
+/** What the reviews since a trial began have found, and what the user can do. */
+export function insightTrialSummary(trial: NonNullable<ReturnType<typeof insightTrial>>) {
+  const outcomes = trial.assessments.map((entry) => entry.outcome.replaceAll("_", " "));
+  return `${
+    outcomes.length ? `Reviews since: ${outcomes.join(", ")}.` : "No review has assessed it yet."
+  } Keep it once the criterion is met, revise it, or mark it reverted after undoing the change.`;
+}
+
 export function insightImplementationUrl(reference: string | null) {
   if (!reference) return null;
   try {
@@ -154,44 +191,105 @@ export function insightImplementationUrl(reference: string | null) {
   }
 }
 
-/** The agents-toolkit engineering loop's stages in order; Blocked, Aborted and Done sit beside them. */
-export const ENGINEERING_LOOP_STAGES = [
-  "Plan",
-  "PoC",
-  "Delivery plan",
-  "Implementation",
-  "Testing",
-  "Review",
-  "QA",
-  "Human review",
-] as const;
-
-const DAY_MS = 86_400_000;
-
-/** Tickets per stage and per-ticket rows, with ages measured when the report was gathered. */
-export function engineeringLoopBoard(tickets: readonly InsightLoopTicket[], asOf: string) {
-  const at = Date.parse(asOf);
-  const days = (iso: string) => Math.max(0, Math.floor((at - Date.parse(iso)) / DAY_MS));
-  const stages: readonly string[] = ENGINEERING_LOOP_STAGES;
-  const rows = tickets.map((ticket) => {
-    // A ticket can return to a stage after repairs; its time there starts at the latest entry.
-    const entered = ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at;
-    return {
-      ...ticket,
-      position: stages.indexOf(ticket.stage),
-      daysInStage: entered ? days(entered) : null,
-      daysSinceUpdate: days(ticket.updatedAt),
+/**
+ * The threads a review sampled, from each run's evidence: most recent first, with how many of
+ * the review's findings cite them. Recommendations carry their evidence ids even in a snapshot.
+ */
+/**
+ * What a review sampled: one row per task (a root thread with its child threads) when the report
+ * measured tasks, else one per thread, with how many findings cite its evidence.
+ */
+export function reviewedInsightThreads(
+  report: Pick<InsightsReport, "evidence" | "wins" | "tasks">,
+  recommendations: ReadonlyArray<Pick<InsightRecommendation, "evidenceIds">>,
+) {
+  const findings = [...report.wins, ...recommendations].map(
+    (finding) => new Set(finding.evidenceIds),
+  );
+  const taskOf = new Map<string, InsightTask>();
+  for (const task of report.tasks ?? [])
+    for (const threadId of [task.rootThreadId, ...task.threadIds])
+      taskOf.set(`${task.environmentId ?? ""}\n${threadId}`, task);
+  const threads = new Map<
+    string,
+    {
+      environmentId: EnvironmentId | null;
+      threadId: ThreadId;
+      projectId: ProjectId;
+      title: string;
+      runs: number;
+      lastActivityAt: string;
+      task: InsightTask | null;
+      evidenceIds: string[];
+    }
+  >();
+  for (const entry of report.evidence) {
+    const task = taskOf.get(`${entry.environmentId ?? ""}\n${entry.threadId}`) ?? null;
+    const key = `${entry.environmentId ?? ""}\n${task?.rootThreadId ?? entry.threadId}`;
+    const thread = threads.get(key) ?? {
+      environmentId: entry.environmentId ?? null,
+      threadId: task?.rootThreadId ?? entry.threadId,
+      projectId: task?.projectId ?? entry.projectId,
+      title: task?.title ?? entry.title,
+      runs: task?.runs ?? 0,
+      lastActivityAt: task?.lastActivityAt ?? entry.occurredAt,
+      task,
+      evidenceIds: [],
     };
-  });
-  const count = (stage: string) => rows.filter((row) => row.stage === stage).length;
-  return {
-    stages: ENGINEERING_LOOP_STAGES.map((stage) => ({ stage, count: count(stage) })),
-    elsewhere: [...new Set(rows.filter((row) => row.position < 0).map((row) => row.stage))].map(
-      (stage) => ({ stage, count: count(stage) }),
-    ),
-    rows,
-  };
+    thread.evidenceIds.push(entry.id);
+    if (!task && entry.kind === "run") thread.runs++;
+    if (!task && entry.occurredAt > thread.lastActivityAt) thread.lastActivityAt = entry.occurredAt;
+    threads.set(key, thread);
+  }
+  return [...threads.values()]
+    .map(({ evidenceIds, ...thread }) => ({
+      ...thread,
+      citedBy: findings.filter((ids) => evidenceIds.some((id) => ids.has(id))).length,
+    }))
+    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
 }
 
-export const loopDaysLabel = (days: number) =>
-  days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
+/**
+ * Failures that keep coming back: across tasks, or repeated within one. Harmless ones and
+ * failures that printed no error are left out; they have nothing to act on.
+ */
+export function recurringInsightFriction(
+  report: Pick<InsightsReport, "evidence" | "friction">,
+  recommendations: ReadonlyArray<Pick<InsightRecommendation, "id" | "title" | "evidenceIds">>,
+) {
+  return (report.friction ?? [])
+    .filter(
+      (cluster) =>
+        !cluster.harmless &&
+        cluster.signature !== "(no error output)" &&
+        (cluster.tasks > 1 || cluster.maxPerTask > 1),
+    )
+    .slice(0, 6)
+    .map((cluster) => {
+      const example = report.evidence.find((entry) => entry.id === cluster.evidenceIds[0]);
+      return {
+        ...cluster,
+        recommendation:
+          recommendations.find((recommendation) =>
+            recommendation.evidenceIds.some((id) => cluster.evidenceIds.includes(id)),
+          ) ?? null,
+        example: example
+          ? { environmentId: example.environmentId ?? null, threadId: example.threadId }
+          : null,
+      };
+    });
+}
+
+const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
+
+/** A task's measures in a line; failures already counted as harmless are left out. */
+export const insightTaskMeasures = (task: InsightTask) =>
+  [
+    count(task.followUps, "follow-up", "follow-ups"),
+    task.interrupts ? count(task.interrupts, "interrupt", "interrupts") : null,
+    task.agentQuestions ? count(task.agentQuestions, "question", "questions") : null,
+    count(task.failedTools - task.harmlessFailures, "failed tool", "failed tools"),
+    task.latestRunStatus === "completed" ? null : `last run ${task.latestRunStatus}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");

@@ -27,6 +27,7 @@ import {
   InsightUpdateInput,
   InsightsError,
 } from "./insights.ts";
+import { EngineeringLoopTicket } from "./engineeringLoop.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -614,6 +615,7 @@ export const WS_METHODS = {
   insightsUpdate: "insights.update",
   insightsImplement: "insights.implement",
   threadSkillsList: "threadSkills.list",
+  threadEngineeringLoopList: "threadEngineeringLoop.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
@@ -2137,6 +2139,12 @@ const WsThreadSkillsListRpc = Rpc.make(WS_METHODS.threadSkillsList, {
   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
 });
 
+const WsThreadEngineeringLoopListRpc = Rpc.make(WS_METHODS.threadEngineeringLoopList, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Struct({ tickets: Schema.Array(EngineeringLoopTicket) }),
+  error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2302,6 +2310,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsInsightsUpdateRpc,
   WsInsightsImplementRpc,
   WsThreadSkillsListRpc,
+  WsThreadEngineeringLoopListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,

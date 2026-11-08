@@ -1,6 +1,7 @@
 import {
   isProviderNativeSubagentThread,
   ThreadId,
+  type EngineeringLoopTicket,
   type EnvironmentId,
   type ModelSelection,
   type OrchestrationV2Subagent,
@@ -430,6 +431,14 @@ export function resolveAgentMapConversation(
   };
 }
 
+/** Where a worksheet's ticket stands. A ticket can return to a stage after repairs. */
+export function engineeringLoopProgress(ticket: EngineeringLoopTicket) {
+  return {
+    inLoop: ticket.stage !== "Done" && ticket.stage !== "Aborted",
+    enteredAt: ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at ?? null,
+  };
+}
+
 export function createThreadAgentMapAtoms<R, ER>(input: {
   readonly runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>;
   readonly details: Pick<
@@ -451,6 +460,17 @@ export function createThreadAgentMapAtoms<R, ER>(input: {
     // Any new turn item may be a skill call.
     refreshTrigger: ({ environmentId, input: { threadId } }) =>
       Atom.make((get) => get(input.threadIndexAtom(environmentId)).get(threadId)?.itemCount),
+  });
+  const engineeringLoop = createEnvironmentRpcQueryAtomFamily(input.runtime, {
+    label: "environment-data:thread-agent-map:engineering-loop",
+    tag: WS_METHODS.threadEngineeringLoopList,
+    staleTimeMs: 0,
+    // Checked for every open thread, so it refreshes per run rather than per turn item.
+    refreshTrigger: ({ environmentId, input: { threadId } }) =>
+      Atom.make((get) => {
+        const thread = get(input.threadIndexAtom(environmentId)).get(threadId);
+        return `${thread?.latestRunId}:${thread?.latestRunCompletedAt?.epochMilliseconds}`;
+      }),
   });
   const nodes = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -528,5 +548,7 @@ export function createThreadAgentMapAtoms<R, ER>(input: {
     nodeAtom: (ref: ScopedThreadRef, id: string) => resolved(JSON.stringify([threadKey(ref), id])),
     skillsAtom: (ref: ScopedThreadRef) =>
       skills({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
+    engineeringLoopAtom: (ref: ScopedThreadRef) =>
+      engineeringLoop({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
   };
 }
