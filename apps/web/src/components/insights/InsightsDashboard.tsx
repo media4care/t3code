@@ -298,7 +298,11 @@ export function InsightsDashboard({
           </div>
           <p className="mt-2 text-sm">
             <span className="text-2xl font-semibold tabular-nums">
-              {snapshot.recommendations.filter((r) => r.status === "implemented").length}
+              {
+                snapshot.recommendations.filter(
+                  (r) => insightImplementationStatus(r) === "implemented",
+                ).length
+              }
             </span>
             <span className="text-muted-foreground">
               {" "}

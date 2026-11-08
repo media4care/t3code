@@ -13,6 +13,7 @@ import {
   reviewedInsightThreads,
   setLinkedInsightsProject,
   insightImplementationStatus,
+  insightTrial,
   insightImplementationUrl,
   matchesInsightFilter,
 } from "./insights.ts";
@@ -27,6 +28,8 @@ describe("implementation tracking", () => {
     ["open", ThreadId.make("previous-implementation"), "not_implemented"],
     ["deferred", ThreadId.make("previous-implementation"), "not_implemented"],
     ["dismissed", ThreadId.make("previous-implementation"), "not_implemented"],
+    ["kept", ThreadId.make("implementation"), "implemented"],
+    ["reverted", ThreadId.make("implementation"), "not_implemented"],
   ] as const)("classifies %s with thread %s as %s", (status, implementationThreadId, expected) => {
     const recommendation = { status, implementationThreadId, deferredUntil: null };
     expect(insightImplementationStatus(recommendation)).toBe(expected);
@@ -52,6 +55,34 @@ describe("implementation tracking", () => {
     expect(matchesInsightFilter(recommendation, "deferred", 0)).toBe(true);
     expect(matchesInsightFilter(recommendation, "all", 0)).toBe(true);
     expect(matchesInsightFilter(recommendation, "implementation:started", 0)).toBe(false);
+  });
+
+  it("counts only assessments made since the current trial began", () => {
+    const assessment = (createdAt: string) => ({
+      reportId: createdAt,
+      createdAt,
+      outcome: "improved" as const,
+      explanation: "Fewer retries.",
+      evidence: [],
+    });
+    const trial = insightTrial({
+      status: "implemented",
+      validation: "Fewer retries, same coverage.",
+      history: [
+        { at: "2026-11-01T00:00:00.000Z", status: "implemented", note: "" },
+        { at: "2026-11-02T00:00:00.000Z", status: "accepted", note: "Revise" },
+        { at: "2026-11-03T00:00:00.000Z", status: "implemented", note: "" },
+        { at: "2026-11-03T01:00:00.000Z", status: "implemented", note: "Added the PR link" },
+      ],
+      assessments: [assessment("2026-11-01T12:00:00.000Z"), assessment("2026-11-04T00:00:00.000Z")],
+    });
+    expect(trial?.startedAt).toBe("2026-11-03T00:00:00.000Z");
+    expect(trial?.assessments.map((entry) => entry.createdAt)).toEqual([
+      "2026-11-04T00:00:00.000Z",
+    ]);
+    expect(
+      insightTrial({ status: "kept", validation: "", history: [], assessments: [] }),
+    ).toBeNull();
   });
 
   it.each([

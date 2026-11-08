@@ -95,7 +95,9 @@ export const INSIGHT_STATUS_LABELS = {
   accepted: "Accepted",
   deferred: "Deferred",
   dismissed: "Dismissed",
-  implemented: "Implemented",
+  implemented: "On trial",
+  kept: "Kept",
+  reverted: "Reverted",
 } as const;
 
 export function actionableInsight(
@@ -124,7 +126,8 @@ export const INSIGHT_IMPLEMENTATION_FILTERS = Object.entries(INSIGHT_IMPLEMENTAT
 export function insightImplementationStatus(
   recommendation: Pick<InsightRecommendation, "status" | "implementationThreadId">,
 ) {
-  if (recommendation.status === "implemented") return "implemented";
+  if (recommendation.status === "implemented" || recommendation.status === "kept")
+    return "implemented";
   if (recommendation.status === "accepted" && recommendation.implementationThreadId)
     return "started";
   return "not_implemented";
@@ -144,6 +147,38 @@ export function matchesInsightFilter(
     return insightImplementationStatus(recommendation) === filter.slice("implementation:".length);
   }
   return recommendation.status === filter;
+}
+
+/** When the current trial began, its frozen criterion, and how the reviews since assessed it. */
+export function insightTrial(
+  recommendation: Pick<
+    InsightRecommendation,
+    "status" | "history" | "assessments" | "trial" | "validation"
+  >,
+) {
+  if (recommendation.status !== "implemented") return null;
+  const startedAt =
+    recommendation.trial?.startedAt ??
+    recommendation.history.findLast(
+      (entry, index, history) =>
+        entry.status === "implemented" && history[index - 1]?.status !== "implemented",
+    )?.at ??
+    null;
+  return {
+    startedAt,
+    criterion: recommendation.trial?.validation ?? recommendation.validation,
+    assessments: recommendation.assessments.filter(
+      (assessment) => startedAt !== null && assessment.createdAt > startedAt,
+    ),
+  };
+}
+
+/** What the reviews since a trial began have found, and what the user can do. */
+export function insightTrialSummary(trial: NonNullable<ReturnType<typeof insightTrial>>) {
+  const outcomes = trial.assessments.map((entry) => entry.outcome.replaceAll("_", " "));
+  return `${
+    outcomes.length ? `Reviews since: ${outcomes.join(", ")}.` : "No review has assessed it yet."
+  } Keep it once the criterion is met, revise it, or mark it reverted after undoing the change.`;
 }
 
 export function insightImplementationUrl(reference: string | null) {

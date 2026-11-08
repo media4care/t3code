@@ -550,8 +550,25 @@ it.effect(
       yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
       VALUES ('later', 'thread', 'work', 3, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-1"}', 2)`;
       const after = yield* service.collect(analyst);
-      yield* service.submit(analyst, { ...payload, reportId: after.report.id });
-      assert.equal((yield* service.recommendation(id)).assessments.at(-1)?.outcome, "improved");
+      const proposal = submission(after.report.id, "run:run-1").recommendations[0]!;
+      yield* service.submit(analyst, {
+        ...payload,
+        reportId: after.report.id,
+        recommendations: [{ ...proposal, validation: "Count fewer tool calls." }],
+      });
+      const assessed = yield* service.recommendation(id);
+      assert.equal(assessed.assessments.at(-1)?.outcome, "improved");
+      assert.equal(assessed.validation, "Count fewer tool calls.");
+      assert.deepInclude(assessed.trial, { validation: "Check subsequent deployment evidence." });
+      yield* TestClock.adjust("1 hour");
+      yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
+      VALUES ('again', 'thread', 'work', 4, 'run.updated', ${later}, 'server', '{}', '{"runId":"run-1"}', 2)`;
+      const again = yield* service.collect(analyst);
+      assert.equal(
+        (yield* Effect.flip(service.submit(analyst, { ...payload, reportId: again.report.id })))
+          .reason,
+        "invalid_evidence",
+      );
     }).pipe(Effect.provide(layer)),
 );
 

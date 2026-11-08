@@ -256,8 +256,11 @@ export function InsightsDashboard({
           <Button label="View all" tone="text" onPress={() => onOpenHistory()} />
         </View>
         <Text className="font-t3-semibold text-2xl text-foreground">
-          {snapshot.recommendations.filter((r) => r.status === "implemented").length} /{" "}
-          {snapshot.recommendations.length}{" "}
+          {
+            snapshot.recommendations.filter((r) => insightImplementationStatus(r) === "implemented")
+              .length
+          }{" "}
+          / {snapshot.recommendations.length}{" "}
           <Text className="text-sm text-foreground-muted">implemented</Text>
         </Text>
         {counts.map((entry) => (

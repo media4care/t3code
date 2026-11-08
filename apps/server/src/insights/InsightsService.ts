@@ -967,6 +967,7 @@ const make = Effect.gen(function* () {
               deferredUntil: existing?.deferredUntil ?? null,
               implementationThreadId: existing?.implementationThreadId ?? null,
               implementationRef: existing?.implementationRef ?? null,
+              ...(existing?.trial ? { trial: existing.trial } : {}),
               evidence: proposal.evidenceIds.map((id) => evidenceById.get(id)!),
               assessments: existing?.assessments ?? [],
               history: existing?.history ?? [
@@ -1007,9 +1008,16 @@ const make = Effect.gen(function* () {
               (h, index, history) =>
                 h.status === "implemented" && history[index - 1]?.status !== "implemented",
             )?.at;
+            // One observation counts once per trial, however many reports see the run again.
+            const assessed = new Set(
+              existing.assessments
+                .filter((previous) => implementationAt && previous.createdAt > implementationAt)
+                .flatMap((previous) => previous.evidence.map((evidence) => evidence.id)),
+            );
             if (
               !implementationAt ||
               current.createdAt <= implementationAt ||
+              assessment.evidenceIds.some((id) => assessed.has(id)) ||
               (assessment.outcome !== "insufficient_evidence" &&
                 assessment.evidenceIds.some(
                   (id) => evidenceById.get(id)!.occurredAt <= implementationAt,
@@ -1064,16 +1072,20 @@ const make = Effect.gen(function* () {
         (input.deferredUntil === undefined || input.deferredUntil === previous.deferredUntil)
       )
         return previous;
+      const implementationRef =
+        input.implementationRef === undefined
+          ? previous.implementationRef
+          : input.implementationRef;
       const value: InsightRecommendation = {
         ...previous,
         status: input.status,
         note: input.note,
         updatedAt: at,
         deferredUntil: input.status === "deferred" ? (input.deferredUntil ?? null) : null,
-        implementationRef:
-          input.implementationRef === undefined
-            ? previous.implementationRef
-            : input.implementationRef,
+        implementationRef,
+        ...(input.status === "implemented" && previous.status !== "implemented"
+          ? { trial: { startedAt: at, validation: previous.validation, implementationRef } }
+          : {}),
         history: [...previous.history, { at, status: input.status, note: input.note }],
       };
       yield* saveRecommendation(value);

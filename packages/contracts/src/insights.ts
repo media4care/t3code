@@ -14,12 +14,15 @@ import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 
 const Text = TrimmedNonEmptyString.check(Schema.isMaxLength(12000));
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(300));
+/** `implemented` is a trial that later reviews assess; `kept` and `reverted` close it. */
 export const InsightStatus = Schema.Literals([
   "open",
   "accepted",
   "deferred",
   "dismissed",
   "implemented",
+  "kept",
+  "reverted",
 ]);
 export type InsightStatus = typeof InsightStatus.Type;
 export const InsightCategory = Schema.Literals([
@@ -94,6 +97,14 @@ export const InsightRecommendation = Schema.Struct({
   deferredUntil: Schema.NullOr(IsoDateTime),
   implementationThreadId: Schema.NullOr(ThreadId),
   implementationRef: Schema.NullOr(Schema.String),
+  /** The trial contract, frozen when it entered `implemented`; later proposals do not change it. */
+  trial: Schema.optionalKey(
+    Schema.Struct({
+      startedAt: IsoDateTime,
+      validation: Text,
+      implementationRef: Schema.NullOr(Schema.String),
+    }),
+  ),
   evidence: Schema.Array(InsightEvidence),
   assessments: Schema.Array(
     Schema.Struct({
