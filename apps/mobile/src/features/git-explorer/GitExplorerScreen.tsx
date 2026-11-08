@@ -1,6 +1,6 @@
 import { use, useContext, useRef, useState, type ReactNode } from "react";
 import { FlatList, Platform, Pressable, ScrollView, View } from "react-native";
-import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   CommonActions,
   StackActions,
@@ -25,9 +25,10 @@ import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useProject, useProjects } from "../../state/entities";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { GitExplorerBranches } from "./GitExplorerBranches";
+import { GitExplorerRepositoryMenu, gitExplorerHomeProject } from "./GitExplorerRepositoryMenu";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
@@ -142,17 +143,11 @@ function GitRepositoriesColumn() {
 
 function GitExplorerHome(props: { readonly workspace: boolean }) {
   const navigation = useNavigation();
-  const projects = useProjects().filter((project) => !project.isScratch);
-  const { savedConnectionsById } = useSavedRemoteConnections();
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const saved = AsyncResult.isSuccess(preferences)
-    ? preferences.value.gitExplorerProject
-    : undefined;
-  const project =
-    projects.find(
-      (item) => item.environmentId === saved?.environmentId && item.id === saved.projectId,
-    ) ?? projects[0];
+  const project = gitExplorerHomeProject(
+    useProjects(),
+    AsyncResult.isSuccess(preferences) ? preferences.value.gitExplorerProject : undefined,
+  );
   const scope = project ? JSON.stringify([project.environmentId, project.id]) : "";
   const [view, setView] = useState({
     scope,
@@ -179,29 +174,9 @@ function GitExplorerHome(props: { readonly workspace: boolean }) {
       </>
     );
   const current = view.scope === scope ? view : { scope, worktreePath: undefined, revision: null };
-  const multipleEnvironments = new Set(projects.map((item) => item.environmentId)).size > 1;
   const repository = (
-    <ListFilterMenu
-      label={project.title}
-      accessibilityLabel="Choose repository"
-      actions={projects.map((item) => {
-        const id = JSON.stringify([item.environmentId, item.id]);
-        return {
-          id,
-          title: item.title,
-          ...(multipleEnvironments
-            ? { subtitle: savedConnectionsById[item.environmentId]?.environmentLabel }
-            : {}),
-          state: id === scope ? ("on" as const) : ("off" as const),
-        };
-      })}
-      onSelect={(id) => {
-        const next = projects.find((item) => JSON.stringify([item.environmentId, item.id]) === id);
-        if (next)
-          savePreferences({
-            gitExplorerProject: { environmentId: next.environmentId, projectId: next.id },
-          });
-      }}
+    <GitExplorerRepositoryMenu
+      selected={{ environmentId: project.environmentId, projectId: project.id }}
     />
   );
   return (
@@ -254,26 +229,32 @@ function GitExplorerBranchesColumn(props: {
   });
   const updateDetail = (next: Partial<GitExplorerRouteParams>) =>
     navigation.dispatch({ ...CommonActions.setParams(next), source: props.routeKey });
-  const header = (
+  const header = params.submodulePath ? (
     <View className="gap-0.5 px-3 pb-2">
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={
-          params.submodulePath ? "Back to parent repository" : "Back to repositories"
-        }
+        accessibilityLabel="Back to parent repository"
         onPress={() => navigation.dispatch({ ...CommonActions.goBack(), source: props.routeKey })}
         className="-ml-1 flex-row items-center gap-1 self-start py-1 active:opacity-60"
       >
         <SymbolView name="chevron.left" size={12} tintColorClassName="accent-primary-text" />
-        <Text className="text-sm text-primary-text">
-          {params.submodulePath ? "Parent repository" : "Repositories"}
-        </Text>
+        <Text className="text-sm text-primary-text">Parent repository</Text>
       </Pressable>
       <Text numberOfLines={1} className="text-xl font-t3-semibold text-drawer-foreground">
-        {params.submodulePath
-          ? `${project?.title ?? "Repository"} › ${params.submodulePath}`
-          : (project?.title ?? "Repository")}
+        {`${project?.title ?? "Repository"} › ${params.submodulePath}`}
       </Text>
+    </View>
+  ) : (
+    <View className="flex-row px-3 pb-2">
+      <GitExplorerRepositoryMenu
+        selected={params}
+        onSelect={(next) =>
+          navigation.dispatch({
+            ...StackActions.replace("GitExplorer", next),
+            source: props.routeKey,
+          })
+        }
+      />
     </View>
   );
   if (!overview.data)

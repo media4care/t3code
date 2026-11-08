@@ -50,6 +50,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
+import { gitExplorerHomeProject } from "../git-explorer/GitExplorerRepositoryMenu";
 import { useThreadCwd } from "../../state/use-selected-thread-worktree";
 import { environmentThreadShells } from "../../state/threads";
 import { mobilePreferencesAtom } from "../../state/preferences";
@@ -559,6 +560,14 @@ function AdaptiveWorkspaceLayoutContent(
     const state = rootStackState(navigation);
     if (!state) return;
     const { workspace, overlays } = workspaceRoutesOf(state.routes.slice(0, state.index + 1));
+    const preferences = appAtomRegistry.get(mobilePreferencesAtom);
+    const repository =
+      tab === "gitExplorer"
+        ? gitExplorerHomeProject(
+            projects,
+            AsyncResult.isSuccess(preferences) ? preferences.value.gitExplorerProject : undefined,
+          )
+        : undefined;
     const next = workspaceTabNavigationState(
       { ...state, routes: workspace },
       tab,
@@ -567,6 +576,9 @@ function AdaptiveWorkspaceLayoutContent(
         columns: workspaceTabColumns(Platform.OS, tab, options?.columns ?? layout.usesSplitView),
         check: workspaceSelectionCheck,
         overlays,
+        gitExplorer: repository
+          ? { environmentId: repository.environmentId, projectId: repository.id }
+          : undefined,
       },
     );
     if (layout.primarySidebarOverlaysContent) {
