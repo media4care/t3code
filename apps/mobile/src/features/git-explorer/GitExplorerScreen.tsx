@@ -12,7 +12,6 @@ import { formatGitExplorerSync } from "@t3tools/client-runtime/git-explorer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppBar } from "../../components/ui/AppBar";
-import type { AppBarMenu } from "../../components/ui/AppBar.types";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -336,46 +335,31 @@ function GitExplorerRepository(props: {
             : (project?.title ?? "Repository")
         }
         onBack={() => navigation.goBack()}
-        menus={[
+        actions={[
           {
-            title: "Sync",
+            accessibilityLabel: "Refresh Git Explorer",
             icon: "arrow.clockwise",
-            items: [
-              {
-                id: "fetch",
-                title: sync.pending === "fetch" ? "Fetching…" : "Fetch all remotes",
-                icon: "arrow.down.circle",
-                subtitle:
-                  sync.unavailable ??
-                  (overview?.lastFetchAt
-                    ? `Last fetched ${new Date(overview.lastFetchAt).toLocaleString()}`
-                    : "Last fetch unknown"),
-                disabled: sync.unavailable !== null,
-                onPress: () => void sync.execute("fetch"),
-              },
-              {
-                id: "pull",
-                title:
-                  sync.pending === "pull"
-                    ? "Pulling…"
-                    : `Pull ${overview?.headBranch ?? "current branch"}`,
-                icon: "arrow.down",
-                subtitle: sync.pullUnavailable ?? "Fast-forward only",
-                disabled: sync.pullUnavailable !== null,
-                onPress: () => void sync.execute("pull"),
-              },
-              {
-                id: "refresh",
-                title: "Refresh",
-                icon: "arrow.clockwise",
-                subtitle: "Reread local Git without fetching",
-                disabled: explorer.overview.isPending,
-                onPress: explorer.refresh,
-              },
-            ],
+            onPress: explorer.refresh,
+            disabled: explorer.overview.isPending,
           },
+          {
+            accessibilityLabel: `Pull ${overview?.headBranch ?? "current branch"} (fast-forward only)${sync.pullUnavailable ? `. ${sync.pullUnavailable}` : ""}`,
+            icon: "arrow.down",
+            onPress: () => void sync.execute("pull"),
+            disabled: sync.pullUnavailable !== null,
+            loading: sync.pending === "pull",
+          },
+          {
+            accessibilityLabel: `Fetch all remotes${sync.unavailable ? `. ${sync.unavailable}` : ""}`,
+            icon: "arrow.down.circle",
+            onPress: () => void sync.execute("fetch"),
+            disabled: sync.unavailable !== null,
+            loading: sync.pending === "fetch",
+          },
+        ]}
+        menus={
           // Submodule worktrees are not selectable; the parent worktree stays fixed.
-          ...(overview && !params.submodulePath
+          overview && !params.submodulePath
             ? [
                 {
                   title: "Review worktree",
@@ -389,10 +373,10 @@ function GitExplorerRepository(props: {
                       selected: worktree.path === overview.selectedWorktreePath,
                       onPress: () => props.onWorktreeChange(worktree.path),
                     })),
-                } satisfies AppBarMenu,
+                },
               ]
-            : []),
-        ]}
+            : []
+        }
       />
       <ScreenContent>
         <View
