@@ -16,7 +16,7 @@ import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 
 export function useGitExplorerSync(
   params: GitExplorerParams,
-  overview: GitExplorerOverviewResult,
+  overview: GitExplorerOverviewResult | null,
   refresh: () => void,
 ) {
   const target = gitExplorerTarget(params);
@@ -32,26 +32,29 @@ export function useGitExplorerSync(
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
   const inFlight = useRef(false);
   const [pending, setPending] = useState<"fetch" | "pull" | null>(null);
-  const branch = overview.refs.find(
+  const branch = overview?.refs.find(
     (ref) => ref.kind === "local" && ref.shortName === overview.headBranch,
   );
-  const unavailable = !connected
-    ? "Connect to this environment first."
-    : !allowed
-      ? "This connection cannot change source control."
-      : pending
-        ? "A Git action is in progress."
-        : null;
+  const unavailable = !overview
+    ? "Wait for the repository to load."
+    : !connected
+      ? "Connect to this environment first."
+      : !allowed
+        ? "This connection cannot change source control."
+        : pending
+          ? "A Git action is in progress."
+          : null;
   const pullUnavailable =
     unavailable ??
-    (!overview.headBranch
+    (!overview?.headBranch
       ? "Check out a branch before pulling."
       : !branch?.upstream || branch.upstreamMissing
         ? "Configure an upstream before pulling."
         : null);
 
   const execute = async (action: "fetch" | "pull") => {
-    if (inFlight.current || (action === "pull" ? pullUnavailable : unavailable)) return;
+    if (!overview || inFlight.current || (action === "pull" ? pullUnavailable : unavailable))
+      return;
     inFlight.current = true;
     setPending(action);
     const reportFailure = (error: unknown) =>

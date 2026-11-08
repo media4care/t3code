@@ -27,11 +27,11 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { GitExplorerBranches } from "./GitExplorerBranches";
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
-import { GitExplorerSyncControls } from "./GitExplorerSyncControls";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
 import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
 import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
+import { useGitExplorerSync } from "./useGitExplorerSync";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import {
   THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
@@ -278,6 +278,7 @@ function GitExplorerRepository(props: {
   });
   const explorer = useGitExplorer(params);
   const overview = explorer.overview.data;
+  const sync = useGitExplorerSync(params, overview, explorer.refresh);
   const commitMenu = useGitExplorerCommitMenu({
     params,
     overview,
@@ -340,6 +341,20 @@ function GitExplorerRepository(props: {
             icon: "arrow.clockwise",
             onPress: explorer.refresh,
             disabled: explorer.overview.isPending,
+          },
+          {
+            accessibilityLabel: `Pull ${overview?.headBranch ?? "current branch"} (fast-forward only)${sync.pullUnavailable ? `. ${sync.pullUnavailable}` : ""}`,
+            icon: "arrow.down",
+            onPress: () => void sync.execute("pull"),
+            disabled: sync.pullUnavailable !== null,
+            loading: sync.pending === "pull",
+          },
+          {
+            accessibilityLabel: `Fetch all remotes${sync.unavailable ? `. ${sync.unavailable}` : ""}`,
+            icon: "arrow.down.circle",
+            onPress: () => void sync.execute("fetch"),
+            disabled: sync.unavailable !== null,
+            loading: sync.pending === "fetch",
           },
         ]}
         menus={
@@ -427,11 +442,6 @@ function GitExplorerRepository(props: {
                     : "Fetch unknown"}{" "}
                   · local refs
                 </Text>
-                <GitExplorerSyncControls
-                  params={params}
-                  overview={overview}
-                  onRefresh={explorer.refresh}
-                />
               </View>
               {!branchesPinned && branchesVisible ? (
                 <View style={{ height: 240 }} className="border-b border-border bg-card">

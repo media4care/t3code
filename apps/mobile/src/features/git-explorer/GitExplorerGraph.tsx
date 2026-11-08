@@ -37,6 +37,7 @@ const GraphCommit = memo(function GraphCommit(props: {
   readonly rowHeight: number;
   readonly tablet: boolean;
   readonly refs: readonly GitExplorerRef[];
+  readonly refColors: ReadonlyMap<string, number>;
   readonly worktrees: string;
   readonly isHead: boolean;
   readonly headBranch: string | null;
@@ -122,27 +123,35 @@ const GraphCommit = memo(function GraphCommit(props: {
                     <Text className="text-[12px] leading-[14px] text-foreground">HEAD</Text>
                   </View>
                 ) : null}
-                {visibleRefs.map((ref) => (
-                  <View
-                    key={ref.name}
-                    className="h-[18px] min-w-0 shrink flex-row items-center gap-1 rounded border border-border bg-subtle-strong px-1"
-                  >
-                    <SymbolView
-                      name={ref.kind === "tag" ? "tag" : "arrow.triangle.branch"}
-                      size={10}
-                      tintColorClassName="accent-foreground"
-                    />
-                    <Text
-                      numberOfLines={1}
-                      className={cn(
-                        "min-w-0 shrink text-[12px] leading-[14px] text-foreground",
-                        ref === preferredBranch && "font-t3-semibold",
-                      )}
+                {visibleRefs.map((ref) => {
+                  const color = COLORS[(props.refColors.get(ref.hash) ?? 0) % COLORS.length]!;
+                  return (
+                    <View
+                      key={ref.name}
+                      // 16% alpha keeps the label readable in both themes.
+                      style={{ borderColor: color, backgroundColor: `${color}29` }}
+                      className="h-[18px] min-w-0 shrink flex-row items-center gap-1 rounded border px-1"
                     >
-                      {ref.shortName}
-                    </Text>
-                  </View>
-                ))}
+                      <SymbolView
+                        name={ref.kind === "tag" ? "tag" : "arrow.triangle.branch"}
+                        size={10}
+                        tintColor={color}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        className={cn(
+                          "min-w-0 shrink text-[12px] leading-[14px] text-foreground",
+                          ref.kind === "local" &&
+                            (ref.name === props.headBranch || ref.shortName === props.headBranch)
+                            ? "font-t3-bold"
+                            : ref === preferredBranch && "font-t3-semibold",
+                        )}
+                      >
+                        {ref.shortName}
+                      </Text>
+                    </View>
+                  );
+                })}
                 {props.refs.length > visibleRefs.length ? (
                   <View className="h-[18px] justify-center rounded border border-border bg-subtle-strong px-1">
                     <Text className="text-[12px] leading-[14px] text-foreground">
@@ -224,10 +233,13 @@ export function GitExplorerGraph(props: {
   readonly menu: GitExplorerCommitMenu;
 }) {
   const rowHeight = props.tablet ? 22 : 34;
+  const refColors = useMemo(
+    () => gitExplorerReferenceColors(props.overview.refs),
+    [props.overview.refs],
+  );
   const layout = useMemo(
-    () =>
-      layoutGitGraph(props.commits, [], new Set(), gitExplorerReferenceColors(props.overview.refs)),
-    [props.commits, props.overview.refs],
+    () => layoutGitGraph(props.commits, [], new Set(), refColors),
+    [props.commits, refColors],
   );
   const laneCount = layout.rows.reduce((max, row) => Math.max(max, row.laneCount), 1);
   const graphWidth = Math.max(props.tablet ? 58 : 30, laneCount * 14 + 6);
@@ -337,6 +349,7 @@ export function GitExplorerGraph(props: {
                   rowHeight={rowHeight}
                   tablet={props.tablet}
                   refs={refs.get(item.hash) ?? EMPTY_REFS}
+                  refColors={refColors}
                   worktrees={(worktrees.get(item.hash) ?? []).join(", ")}
                   isHead={item.hash === props.overview.headHash}
                   headBranch={props.overview.headBranch}
