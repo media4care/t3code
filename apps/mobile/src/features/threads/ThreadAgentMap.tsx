@@ -4,6 +4,8 @@ import {
   agentMapStatus,
   agentMapEmptyDetail,
   agentMapOutput,
+  ENGINEERING_LOOP_STAGES,
+  engineeringLoopProgress,
   type ThreadAgentMapNode,
 } from "@t3tools/client-runtime/state/thread-agent-map";
 import { subagentDetailPreview } from "@t3tools/client-runtime/state/subagent-display";
@@ -13,7 +15,7 @@ import {
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import type { ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
+import type { EngineeringLoopTicket, ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
 import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
@@ -22,6 +24,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { Chip } from "../../components/ui/Chip";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { RelativeTime } from "../../components/RelativeTime";
 import { cn } from "../../lib/cn";
 import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useServerConfigs } from "../../state/entities";
@@ -42,6 +45,56 @@ const ROW_SKILL_LIMIT = 3;
 
 function useThreadSkills(target: ScopedThreadRef | null) {
   return useEnvironmentQuery(target === null ? null : threadAgentMaps.skillsAtom(target));
+}
+
+function useThreadLoop(target: ScopedThreadRef | null) {
+  return useEnvironmentQuery(target === null ? null : threadAgentMaps.engineeringLoopAtom(target));
+}
+
+/** The engineering-loop worksheets a thread wrote: stage, progress through the stages, next action. */
+function AgentLoop({ tickets }: { tickets: ReadonlyArray<EngineeringLoopTicket> }) {
+  return (
+    <View className="gap-3">
+      {tickets.map((ticket) => {
+        const progress = engineeringLoopProgress(ticket);
+        return (
+          <View key={ticket.ticket} className="gap-1.5">
+            <View className="flex-row items-center gap-2">
+              <Text numberOfLines={1} className="min-w-0 flex-1 text-sm">
+                <Text className="font-t3-semibold text-sm">{ticket.ticket}</Text> {ticket.title}
+              </Text>
+              <Chip label={ticket.stage} size="small" selected={progress.inLoop} />
+            </View>
+            <View className="flex-row gap-0.5">
+              {ENGINEERING_LOOP_STAGES.map((stage, index) => (
+                <View
+                  key={stage}
+                  className={cn(
+                    "h-1.5 flex-1 rounded-full bg-subtle-strong",
+                    index < progress.position && "bg-primary/45",
+                    index === progress.position && "bg-primary",
+                  )}
+                />
+              ))}
+            </View>
+            {ticket.next ? (
+              <Text numberOfLines={2} className="text-xs text-foreground-muted">
+                Next: {ticket.next}
+              </Text>
+            ) : null}
+            <Text className="text-xs text-foreground-muted">
+              {progress.enteredAt ? (
+                <>
+                  Entered {ticket.stage} <RelativeTime timestamp={progress.enteredAt} /> ago ·{" "}
+                </>
+              ) : null}
+              Updated <RelativeTime timestamp={ticket.updatedAt} /> ago
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
 }
 
 function AgentSkills({ skills }: { skills: ReadonlyArray<string> }) {
@@ -69,6 +122,7 @@ export function ThreadAgentMap(props: {
   const [limit, setLimit] = useState(24);
   const nodes = useAtomValue(threadAgentMaps.nodesAtom(props.target));
   const rootSkills = useThreadSkills(props.target).data?.skills ?? [];
+  const rootLoop = useThreadLoop(props.target).data?.tickets ?? [];
   const children = new Map<string | null, ThreadAgentMapNode[]>();
   for (const node of nodes) {
     const siblings = children.get(node.parentId) ?? [];
@@ -85,7 +139,13 @@ export function ThreadAgentMap(props: {
   walk(null, 0);
   return (
     <View className="gap-4 pt-4">
-      <View className="rounded-2xl border border-border bg-card p-4">
+      <View
+        className={cn(
+          "rounded-2xl border border-border bg-card p-4",
+          rootLoop.some((ticket) => engineeringLoopProgress(ticket).inLoop) &&
+            "border-primary bg-primary/5",
+        )}
+      >
         <Text className="font-t3-medium text-sm">{projection?.thread.title ?? "Thread"}</Text>
         <Text className="mt-1 text-xs text-foreground-muted">
           {nodes.length} agents across this thread
@@ -93,6 +153,11 @@ export function ThreadAgentMap(props: {
         {rootSkills.length > 0 ? (
           <View className="mt-3">
             <AgentSkills skills={rootSkills} />
+          </View>
+        ) : null}
+        {rootLoop.length > 0 ? (
+          <View className="mt-3 border-t border-border pt-3">
+            <AgentLoop tickets={rootLoop} />
           </View>
         ) : null}
       </View>
@@ -160,6 +225,7 @@ function AgentMapRow(props: {
   const metadata = agentMapMetadata(node, provider);
   const status = agentMapStatus(node);
   const skills = useThreadSkills(node.target).data?.skills ?? [];
+  const loop = useThreadLoop(node.target).data?.tickets ?? [];
 
   const driver = provider?.driver ?? node.source?.driver;
   return (
@@ -192,6 +258,18 @@ function AgentMapRow(props: {
           </Text>
         </View>
         {skills.length > 0 ? <AgentSkills skills={skills} /> : null}
+        {loop.length > 0 ? (
+          <View className="flex-row flex-wrap gap-1.5">
+            {loop.map((ticket) => (
+              <Chip
+                key={ticket.ticket}
+                label={`${ticket.ticket} · ${ticket.stage}`}
+                size="small"
+                selected={engineeringLoopProgress(ticket).inLoop}
+              />
+            ))}
+          </View>
+        ) : null}
         <View className="flex-row flex-wrap items-center justify-between gap-2">
           <Text className={cn("font-t3-medium text-xs", STATUS_CLASSES[status.tone])}>
             {status.label}
@@ -247,6 +325,7 @@ function AgentInspector(props: {
   const metadata = agentMapMetadata(node, props.provider);
   const output = agentMapOutput(node);
   const skills = useThreadSkills(node.target);
+  const loop = useThreadLoop(node.target).data?.tickets ?? [];
   const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && presentationById.has(node.target.environmentId);
   const workflow =
@@ -305,6 +384,12 @@ function AgentInspector(props: {
                   ? "Loading…"
                   : "Not reported"}
           </Text>
+          {loop.length > 0 ? (
+            <View className="gap-2 pt-1">
+              <Text className="text-xs text-foreground-muted">Engineering loop:</Text>
+              <AgentLoop tickets={loop} />
+            </View>
+          ) : null}
           {node.agent.usage ? (
             <Text className="text-xs text-foreground-muted">
               Tokens: {node.agent.usage.totalTokens.toLocaleString()}

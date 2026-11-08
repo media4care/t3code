@@ -21,7 +21,7 @@ import {
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { InsightsEngineeringLoop } from "./InsightsEngineeringLoop";
+import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
 const OUTCOMES = [
@@ -357,13 +357,11 @@ export function InsightsDashboard({
         </section>
       )}
 
-      {report.engineeringLoop?.length ? (
-        <InsightsEngineeringLoop
-          environmentId={environmentId}
-          tickets={report.engineeringLoop}
-          asOf={report.createdAt}
-        />
-      ) : null}
+      <InsightsReviewedThreads
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
 
       {recent.length > 1 && (
         <section className="rounded-xl border border-border bg-card p-5">

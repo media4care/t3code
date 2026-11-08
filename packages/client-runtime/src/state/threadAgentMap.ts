@@ -1,6 +1,7 @@
 import {
   isProviderNativeSubagentThread,
   ThreadId,
+  type EngineeringLoopTicket,
   type EnvironmentId,
   type ModelSelection,
   type OrchestrationV2Subagent,
@@ -430,6 +431,28 @@ export function resolveAgentMapConversation(
   };
 }
 
+/** The agents-toolkit engineering loop's stages in order; Blocked, Aborted and Done sit beside them. */
+export const ENGINEERING_LOOP_STAGES = [
+  "Plan",
+  "PoC",
+  "Delivery plan",
+  "Implementation",
+  "Testing",
+  "Review",
+  "QA",
+  "Human review",
+] as const;
+
+/** Where a worksheet's ticket stands. A ticket can return to a stage after repairs. */
+export function engineeringLoopProgress(ticket: EngineeringLoopTicket) {
+  const stages: readonly string[] = ENGINEERING_LOOP_STAGES;
+  return {
+    position: ticket.stage === "Done" ? stages.length : stages.indexOf(ticket.stage),
+    inLoop: ticket.stage !== "Done" && ticket.stage !== "Aborted",
+    enteredAt: ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at ?? null,
+  };
+}
+
 export function createThreadAgentMapAtoms<R, ER>(input: {
   readonly runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>;
   readonly details: Pick<
@@ -449,6 +472,14 @@ export function createThreadAgentMapAtoms<R, ER>(input: {
     tag: WS_METHODS.threadSkillsList,
     staleTimeMs: 0,
     // Any new turn item may be a skill call.
+    refreshTrigger: ({ environmentId, input: { threadId } }) =>
+      Atom.make((get) => get(input.threadIndexAtom(environmentId)).get(threadId)?.itemCount),
+  });
+  const engineeringLoop = createEnvironmentRpcQueryAtomFamily(input.runtime, {
+    label: "environment-data:thread-agent-map:engineering-loop",
+    tag: WS_METHODS.threadEngineeringLoopList,
+    staleTimeMs: 0,
+    // Any new turn item may have rewritten a worksheet.
     refreshTrigger: ({ environmentId, input: { threadId } }) =>
       Atom.make((get) => get(input.threadIndexAtom(environmentId)).get(threadId)?.itemCount),
   });
@@ -528,5 +559,7 @@ export function createThreadAgentMapAtoms<R, ER>(input: {
     nodeAtom: (ref: ScopedThreadRef, id: string) => resolved(JSON.stringify([threadKey(ref), id])),
     skillsAtom: (ref: ScopedThreadRef) =>
       skills({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
+    engineeringLoopAtom: (ref: ScopedThreadRef) =>
+      engineeringLoop({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
   };
 }

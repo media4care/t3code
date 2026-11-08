@@ -24,6 +24,7 @@ import {
   agentMapStatus,
   createThreadAgentMapAtoms,
   deriveThreadAgentMap,
+  engineeringLoopProgress,
   resolveAgentMapConversation,
 } from "./threadAgentMap.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
@@ -504,6 +505,37 @@ describe("thread agent map", () => {
       result: null,
       progress: "Current progress",
       completedAt: null,
+    });
+  });
+});
+
+describe("engineering loop progress", () => {
+  it("times a re-entered stage from its latest entry and leaves the loop when done", () => {
+    const ticket = {
+      ticket: "NG-1",
+      title: "Inventory",
+      stage: "Review",
+      next: "",
+      updatedAt: "2026-11-02T08:00:00.000Z",
+      stageChanges: [
+        { stage: "Review", at: "2026-10-20T08:00:00.000Z" },
+        { stage: "Implementation", at: "2026-10-25T08:00:00.000Z" },
+        { stage: "Review", at: "2026-10-30T08:00:00.000Z" },
+      ],
+    };
+    expect(engineeringLoopProgress(ticket)).toEqual({
+      position: 5,
+      inLoop: true,
+      enteredAt: "2026-10-30T08:00:00.000Z",
+    });
+    expect(engineeringLoopProgress({ ...ticket, stage: "Blocked" })).toEqual({
+      position: -1,
+      inLoop: true,
+      enteredAt: null,
+    });
+    expect(engineeringLoopProgress({ ...ticket, stage: "Done" })).toMatchObject({
+      position: 8,
+      inLoop: false,
     });
   });
 });

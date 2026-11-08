@@ -16,11 +16,21 @@ import { useEnvironmentQuery } from "../../state/query";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { Button } from "../ui/button";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
-import { AgentMapCard, AgentMapSkills, AgentMapStatus, ThreadAgentMap } from "./ThreadAgentMap";
+import {
+  AgentMapCard,
+  AgentMapLoop,
+  AgentMapSkills,
+  AgentMapStatus,
+  ThreadAgentMap,
+} from "./ThreadAgentMap";
 import { AgentElapsed } from "./AgentElapsed";
 
 function useThreadSkills(target: ScopedThreadRef | null) {
   return useEnvironmentQuery(target === null ? null : threadAgentMaps.skillsAtom(target));
+}
+
+function useThreadLoop(target: ScopedThreadRef | null) {
+  return useEnvironmentQuery(target === null ? null : threadAgentMaps.engineeringLoopAtom(target));
 }
 
 export function ThreadAgentMapControl({ threadRef }: { threadRef: ScopedThreadRef }) {
@@ -61,6 +71,7 @@ function AgentMapContent({
   const projection = useQuietThreadProjection(threadRef)?.projection;
   const nodes = useAtomValue(threadAgentMaps.nodesAtom(threadRef));
   const rootSkills = useThreadSkills(threadRef).data?.skills;
+  const rootLoop = useThreadLoop(threadRef).data?.tickets;
   const providers = useEnvironmentProviders();
   const providerFor = (node: ThreadAgentMapNode) =>
     providers
@@ -78,6 +89,7 @@ function AgentMapContent({
     <ThreadAgentMap
       title={projection?.thread.title ?? "Thread"}
       {...(rootSkills === undefined ? {} : { skills: rootSkills })}
+      {...(rootLoop === undefined ? {} : { loop: rootLoop })}
       nodes={nodes}
       providerFor={providerFor}
       renderCard={(node, selected, onSelect) => (
@@ -111,11 +123,13 @@ function ResolvedAgentMapCard(props: {
 }) {
   const node = useAtomValue(threadAgentMaps.nodeAtom(props.threadRef, props.node.id)) ?? props.node;
   const skills = useThreadSkills(node.target).data?.skills;
+  const loop = useThreadLoop(node.target).data?.tickets;
   return (
     <AgentMapCard
       node={node}
       provider={props.providerFor(node)}
       {...(skills === undefined ? {} : { skills })}
+      {...(loop === undefined ? {} : { loop })}
       selected={props.selected}
       onSelect={props.onSelect}
     />
@@ -135,6 +149,7 @@ function AgentMapInspector(props: {
   const metadata = agentMapMetadata(node, props.providerFor(node));
   const output = agentMapOutput(node);
   const skills = useThreadSkills(node.target);
+  const loop = useThreadLoop(node.target).data?.tickets;
   const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
   const canOpen = node.target !== null && environment !== null;
   return (
@@ -241,6 +256,14 @@ function AgentMapInspector(props: {
                 "Not reported"
               )}
             </dd>
+            {loop?.length ? (
+              <>
+                <dt className="text-muted-foreground">Engineering loop</dt>
+                <dd>
+                  <AgentMapLoop tickets={loop} />
+                </dd>
+              </>
+            ) : null}
             {node.agent.usage ? (
               <>
                 <dt className="text-muted-foreground">Tokens</dt>

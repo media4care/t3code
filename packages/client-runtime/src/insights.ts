@@ -1,10 +1,11 @@
 import type {
   EnvironmentId,
-  InsightLoopTicket,
   InsightRecommendation,
+  InsightsReport,
   InsightsSettings,
   ProjectId,
   ServerProvider,
+  ThreadId,
 } from "@t3tools/contracts";
 
 export function insightsModelChoices(providers: readonly ServerProvider[]) {
@@ -154,44 +155,49 @@ export function insightImplementationUrl(reference: string | null) {
   }
 }
 
-/** The agents-toolkit engineering loop's stages in order; Blocked, Aborted and Done sit beside them. */
-export const ENGINEERING_LOOP_STAGES = [
-  "Plan",
-  "PoC",
-  "Delivery plan",
-  "Implementation",
-  "Testing",
-  "Review",
-  "QA",
-  "Human review",
-] as const;
-
-const DAY_MS = 86_400_000;
-
-/** Tickets per stage and per-ticket rows, with ages measured when the report was gathered. */
-export function engineeringLoopBoard(tickets: readonly InsightLoopTicket[], asOf: string) {
-  const at = Date.parse(asOf);
-  const days = (iso: string) => Math.max(0, Math.floor((at - Date.parse(iso)) / DAY_MS));
-  const stages: readonly string[] = ENGINEERING_LOOP_STAGES;
-  const rows = tickets.map((ticket) => {
-    // A ticket can return to a stage after repairs; its time there starts at the latest entry.
-    const entered = ticket.stageChanges.findLast((change) => change.stage === ticket.stage)?.at;
-    return {
-      ...ticket,
-      position: stages.indexOf(ticket.stage),
-      daysInStage: entered ? days(entered) : null,
-      daysSinceUpdate: days(ticket.updatedAt),
+/**
+ * The threads a review sampled, from each run's evidence: most recent first, with how many of
+ * the review's findings cite them. Recommendations carry their evidence ids even in a snapshot.
+ */
+export function reviewedInsightThreads(
+  report: Pick<InsightsReport, "evidence" | "wins">,
+  recommendations: ReadonlyArray<Pick<InsightRecommendation, "evidenceIds">>,
+) {
+  const findings = [...report.wins, ...recommendations].map(
+    (finding) => new Set(finding.evidenceIds),
+  );
+  const threads = new Map<
+    string,
+    {
+      environmentId: EnvironmentId | null;
+      threadId: ThreadId;
+      projectId: ProjectId;
+      title: string;
+      runs: number;
+      lastActivityAt: string;
+      evidenceIds: string[];
+    }
+  >();
+  for (const entry of report.evidence) {
+    const key = `${entry.environmentId ?? ""}\n${entry.threadId}`;
+    const thread = threads.get(key) ?? {
+      environmentId: entry.environmentId ?? null,
+      threadId: entry.threadId,
+      projectId: entry.projectId,
+      title: entry.title,
+      runs: 0,
+      lastActivityAt: entry.occurredAt,
+      evidenceIds: [],
     };
-  });
-  const count = (stage: string) => rows.filter((row) => row.stage === stage).length;
-  return {
-    stages: ENGINEERING_LOOP_STAGES.map((stage) => ({ stage, count: count(stage) })),
-    elsewhere: [...new Set(rows.filter((row) => row.position < 0).map((row) => row.stage))].map(
-      (stage) => ({ stage, count: count(stage) }),
-    ),
-    rows,
-  };
+    thread.evidenceIds.push(entry.id);
+    if (entry.kind === "run") thread.runs++;
+    if (entry.occurredAt > thread.lastActivityAt) thread.lastActivityAt = entry.occurredAt;
+    threads.set(key, thread);
+  }
+  return [...threads.values()]
+    .map(({ evidenceIds, ...thread }) => ({
+      ...thread,
+      citedBy: findings.filter((ids) => evidenceIds.some((id) => ids.has(id))).length,
+    }))
+    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
 }
-
-export const loopDaysLabel = (days: number) =>
-  days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;

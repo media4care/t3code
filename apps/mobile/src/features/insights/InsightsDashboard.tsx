@@ -11,7 +11,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
-import { InsightsEngineeringLoop } from "./InsightsEngineeringLoop";
+import { InsightsReviewedThreads } from "./InsightsReviewedThreads";
 import { InsightsEvidence } from "./InsightsEvidence";
 
 const OUTCOMES = [
@@ -313,13 +313,11 @@ export function InsightsDashboard({
         </View>
       )}
 
-      {report.engineeringLoop?.length ? (
-        <InsightsEngineeringLoop
-          environmentId={environmentId}
-          tickets={report.engineeringLoop}
-          asOf={report.createdAt}
-        />
-      ) : null}
+      <InsightsReviewedThreads
+        environmentId={environmentId}
+        report={report}
+        recommendations={recommendations}
+      />
 
       {recent.length > 1 && (
         <View className="gap-3 rounded-2xl border border-border-subtle bg-surface p-4">
