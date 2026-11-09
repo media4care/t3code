@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState, type ComponentRef } from "react";
+import { useRef, useState, type ComponentRef, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -16,9 +16,8 @@ import { AppBar } from "../../components/ui/AppBar";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { Chip } from "../../components/ui/Chip";
 import { ScreenContent } from "../../components/ui/ScreenContent";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -28,6 +27,8 @@ import { QaDashboard } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaTestList } from "./QaTestList";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 export function QaScreen() {
   const projects = useProjects();
@@ -37,60 +38,33 @@ export function QaScreen() {
     `${project.environmentId}:${project.id}`;
   const project = projects.find((item) => projectKey(item) === selection) ?? projects[0];
   const environment = environments.find((item) => item.environmentId === project?.environmentId);
-  const projectItems = projects.map((item) => ({
-    id: projectKey(item),
-    title: item.title,
-    subtitle: environments.find((e) => e.environmentId === item.environmentId)?.label,
-    selected: projectKey(item) === (project ? projectKey(project) : null),
-    onPress: () => setSelection(projectKey(item)),
-  }));
+  const multipleEnvironments = new Set(projects.map((item) => item.environmentId)).size > 1;
+  const projectPicker = project ? (
+    <ListFilterMenu
+      label={project.title}
+      accessibilityLabel="QA project"
+      actions={projects.map((item) => ({
+        id: projectKey(item),
+        title: item.title,
+        ...(multipleEnvironments
+          ? { subtitle: environments.find((e) => e.environmentId === item.environmentId)?.label }
+          : {}),
+        state: projectKey(item) === projectKey(project) ? ("on" as const) : ("off" as const),
+      }))}
+      onSelect={setSelection}
+    />
+  ) : null;
   return (
     <>
-      {Platform.OS === "ios" ? (
-        <NativeStackScreenOptions
-          optionsVersion={JSON.stringify(projectItems)}
-          options={{
-            unstable_headerRightItems: () =>
-              projectItems.length > 1
-                ? [
-                    withNativeGlassHeaderItem({
-                      accessibilityLabel: "QA project",
-                      icon: { name: "folder", type: "sfSymbol" },
-                      label: "",
-                      type: "menu",
-                      menu: {
-                        title: "QA project",
-                        items: projectItems.map((item) => ({
-                          type: "action" as const,
-                          label: item.title,
-                          description: item.subtitle,
-                          state: item.selected ? ("on" as const) : undefined,
-                          onPress: item.onPress,
-                        })),
-                      },
-                    }),
-                  ]
-                : [],
-          }}
-        />
-      ) : (
-        <AppBar
-          title="QA"
-          subtitle={project?.title ?? "Test suites and run history"}
-          menus={
-            projectItems.length > 1
-              ? [{ title: "QA project", icon: "folder", items: projectItems }]
-              : []
-          }
-        />
-      )}
+      {/* The workspace header belongs to the tab bar's toolbar on iOS. */}
+      {Platform.OS === "ios" ? null : <AppBar title="QA" subtitle="Test suites and run history" />}
       <ScreenContent>
         {project ? (
           <ProjectQa
             key={projectKey(project)}
             environmentId={project.environmentId}
             projectId={project.id}
-            projectTitle={project.title}
+            projectPicker={projectPicker}
             connected={environment?.connection.phase === "connected"}
             environmentLabel={environment?.label ?? "Environment"}
           />
@@ -105,13 +79,13 @@ export function QaScreen() {
 function ProjectQa({
   environmentId,
   projectId,
-  projectTitle,
+  projectPicker,
   connected,
   environmentLabel,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  projectTitle: string;
+  projectPicker: ReactNode;
   connected: boolean;
   environmentLabel: string;
 }) {
@@ -138,6 +112,7 @@ function ProjectQa({
   };
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
+  const { themeAppearance } = useAppearancePreferences();
   const snapshot = query.data;
   const running = snapshot?.latestRuns.some((run) => run.status === "running");
   const { entries, counts } = qaDashboard(
@@ -163,24 +138,28 @@ function ProjectQa({
       ref={scroll}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
-        padding: 16,
+        paddingHorizontal: 16,
         paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0) + 24,
         gap: 16,
       }}
     >
-      <View className="gap-1">
-        <Text className="text-2xl font-t3-semibold">{projectTitle}</Text>
-        <Text className="text-sm text-foreground-muted">
-          {environmentLabel}
-          {connected ? "" : " · Offline"}
+      <ListFilterRow bleed={16}>
+        {projectPicker}
+        <Chip
+          label="Refresh"
+          icon="arrow.clockwise"
+          glass
+          colorScheme={themeAppearance}
+          accessibilityLabel="Refresh QA"
+          onPress={query.refresh}
+          disabled={!connected}
+        />
+      </ListFilterRow>
+      {connected ? null : (
+        <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
+          {environmentLabel} is offline. Reconnect to run QA.
         </Text>
-      </View>
-      <Button
-        label="Refresh QA"
-        icon="arrow.clockwise"
-        onPress={query.refresh}
-        disabled={!connected}
-      />
+      )}
       {snapshot?.sharedResults?.enabled ? (
         <Text className="text-sm text-foreground-muted">{QA_SHARED_RESULTS_NOTICE}</Text>
       ) : null}

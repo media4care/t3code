@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { useRef, useState } from "react";
+import { View, type TextInputInstance } from "react-native";
 import {
   QA_TEST_PAGE_SIZE,
   type EnvironmentId,
@@ -9,7 +9,8 @@ import {
 import { QA_TEST_FILTERS, qaTestDuration, type QaTestFilter } from "@t3tools/client-runtime/qa";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import { Menu } from "../../components/ui/Menu";
+import { SearchField } from "../../components/ui/SearchField";
+import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 
@@ -36,6 +37,7 @@ export function QaTestList({
     status: "all" as QaTestFilter,
     offset: 0,
   });
+  const searchRef = useRef<TextInputInstance>(null);
   const query = useEnvironmentQuery(
     serverEnvironment.qaTests({
       environmentId,
@@ -62,39 +64,36 @@ export function QaTestList({
         <Text className="text-sm text-foreground-muted">{data.unavailableReason}</Text>
       ) : (
         <>
-          <TextInput
-            accessibilityLabel="Search tests"
-            placeholder="Search test names, files, or groups…"
-            maxLength={200}
-            value={selection.search}
-            onChangeText={(search) => setSelection({ ...selection, search, offset: 0 })}
-            autoCapitalize="none"
-            autoCorrect={false}
-            className="min-h-11 rounded-xl border border-border-subtle p-3 text-foreground"
-          />
-          <Menu
-            actions={QA_TEST_FILTERS.map((filter) => ({
-              id: filter.value,
-              title: filter.label,
-              state: filter.value === selection.status ? "on" : "off",
-            }))}
-            onPressAction={({ nativeEvent }) => {
-              const status = QA_TEST_FILTERS.find(
-                (filter) => filter.value === nativeEvent.event,
-              )?.value;
-              if (status) setSelection({ ...selection, status, offset: 0 });
-            }}
-          >
-            <Pressable
-              accessibilityRole="button"
+          <View className="flex-row">
+            <SearchField
+              inputRef={searchRef}
+              autoFocus={false}
+              accessibilityLabel="Search tests"
+              clearAccessibilityLabel="Clear test search"
+              placeholder="Search test names, files, or groups…"
+              value={selection.search}
+              onChangeText={(search) => setSelection({ ...selection, search, offset: 0 })}
+            />
+          </View>
+          <ListFilterRow>
+            <ListFilterMenu
+              label={
+                QA_TEST_FILTERS.find((filter) => filter.value === selection.status)?.label ??
+                "Tests"
+              }
+              active={selection.status !== "all"}
               accessibilityLabel="Filter tests"
-              className="min-h-11 justify-center rounded-xl border border-border-subtle px-3"
-            >
-              <Text>
-                {QA_TEST_FILTERS.find((filter) => filter.value === selection.status)?.label} ▾
-              </Text>
-            </Pressable>
-          </Menu>
+              actions={QA_TEST_FILTERS.map((filter) => ({
+                id: filter.value,
+                title: filter.label,
+                state: filter.value === selection.status ? ("on" as const) : ("off" as const),
+              }))}
+              onSelect={(id) => {
+                const status = QA_TEST_FILTERS.find((filter) => filter.value === id)?.value;
+                if (status) setSelection({ ...selection, status, offset: 0 });
+              }}
+            />
+          </ListFilterRow>
           {query.isPending ? (
             <Text className="text-sm text-foreground-muted">Loading tests…</Text>
           ) : null}
