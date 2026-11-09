@@ -246,6 +246,8 @@ export const ReleasesRefreshInput = Schema.Struct({
   force: Schema.optionalKey(Schema.Boolean),
 });
 export type ReleasesRefreshInput = typeof ReleasesRefreshInput.Type;
+/** Projects whose t3.json has a `releases` section, even an invalid one. */
+export const ReleasesProjects = Schema.Array(ProjectId);
 
 export class ReleasesError extends Schema.TaggedError<ReleasesError>()("ReleasesError", {
   reason: Schema.Literals(["project-not-found", "workspace", "not-configured"]),

@@ -1,4 +1,6 @@
 import type {
+  EnvironmentId,
+  ProjectId,
   ReleaseAudience,
   ReleaseBinary,
   ReleaseGate,
@@ -7,6 +9,7 @@ import type {
   ReleaseTarget,
   ReleaseVersion,
 } from "@t3tools/contracts";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 export type ReleaseTone = "ok" | "info" | "warning" | "error" | "muted";
 
@@ -111,6 +114,55 @@ const PLATFORMS = ["ios", "android", "web"] as const;
 const PLATFORM_LABEL = { ios: "iOS", android: "Android", web: "Web" } as const;
 const platformRank = (platform: ReleaseTarget["platform"]) =>
   platform ? PLATFORMS.indexOf(platform) : PLATFORMS.length;
+
+/** An environment's projects with a release command; `unknown` when it can't say, such as an older server. */
+export type ReleaseProjectsState = ReadonlyArray<ProjectId> | "loading" | "unknown";
+
+/** Each connected environment's `releases.projects` answer; disconnected ones are absent. */
+export function releaseProjectStatesAtom(
+  connectedEnvironmentIds: Atom.Atom<ReadonlyArray<EnvironmentId>>,
+  releaseProjects: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: {};
+  }) => Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<ProjectId>, unknown>>,
+) {
+  return Atom.make(
+    (get) =>
+      new Map(
+        get(connectedEnvironmentIds).map((environmentId) => {
+          const result = get(releaseProjects({ environmentId, input: {} }));
+          const state: ReleaseProjectsState = AsyncResult.isSuccess(result)
+            ? result.value
+            : AsyncResult.isFailure(result)
+              ? "unknown"
+              : "loading";
+          return [environmentId, state] as const;
+        }),
+      ),
+  );
+}
+
+/**
+ * The projects the Releases picker offers: those with a release command, then those of connected
+ * environments that can't say. With none known, every project, so the setup hint stays reachable.
+ */
+export function releaseProjectChoices<
+  P extends { readonly environmentId: EnvironmentId; readonly id: ProjectId },
+>(projects: ReadonlyArray<P>, states: ReadonlyMap<EnvironmentId, ReleaseProjectsState>) {
+  const configured = projects.filter((project) => {
+    const known = states.get(project.environmentId);
+    return typeof known === "object" && known.includes(project.id);
+  });
+  const loading = projects.some((project) => states.get(project.environmentId) === "loading");
+  if (configured.length === 0) return { projects: loading ? [] : projects, loading } as const;
+  return {
+    projects: [
+      ...configured,
+      ...projects.filter((project) => states.get(project.environmentId) === "unknown"),
+    ],
+    loading,
+  } as const;
+}
 
 /** The newest version of each environment, in the order the document lists them. */
 export function currentReleases(document: ReleaseStatusDocument): ReadonlyArray<ReleaseVersion> {

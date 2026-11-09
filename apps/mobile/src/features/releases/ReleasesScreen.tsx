@@ -22,6 +22,8 @@ import {
   releasePresenceLabel,
   RELEASE_REACH,
   RELEASES_CONFIGURATION_EXAMPLE,
+  releaseProjectChoices,
+  releaseProjectStatesAtom,
   type ReleaseAppRow,
   type ReleaseTone,
 } from "@t3tools/client-runtime/releases";
@@ -45,6 +47,7 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { connectedEnvironmentIdsAtom } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
@@ -52,6 +55,11 @@ import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 // An open screen asks this often; the server skips the command until the document is stale.
 const STALE_CHECK_MS = 60_000;
+
+const projectStatesAtom = releaseProjectStatesAtom(
+  connectedEnvironmentIdsAtom,
+  serverEnvironment.releaseProjects,
+);
 
 const TONE_TEXT: Record<ReleaseTone, string> = {
   ok: "text-green-500",
@@ -62,7 +70,8 @@ const TONE_TEXT: Record<ReleaseTone, string> = {
 };
 
 export function ReleasesScreen() {
-  const projects = useProjects();
+  const choices = releaseProjectChoices(useProjects(), useAtomValue(projectStatesAtom));
+  const projects = choices.projects;
   const { environments } = useEnvironments();
   const [selection, setSelection] = useState<string | null>(null);
   const projectKey = (project: (typeof projects)[number]) =>
@@ -133,7 +142,9 @@ export function ReleasesScreen() {
             environmentLabel={environment?.label ?? "Environment"}
           />
         ) : (
-          <Text className="p-6 text-foreground-muted">Add a project to see its releases.</Text>
+          <Text className="p-6 text-foreground-muted">
+            {choices.loading ? "Loading projects…" : "Add a project to see its releases."}
+          </Text>
         )}
       </ScreenContent>
     </>

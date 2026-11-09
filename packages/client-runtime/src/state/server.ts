@@ -1394,6 +1394,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:releases:refresh",
       tag: WS_METHODS.releasesRefresh,
     }),
+    releaseProjects: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:releases:projects",
+      tag: WS_METHODS.releasesProjects,
+      // A t3.json edited since the page last opened should show on the next visit.
+      staleTimeMs: 0,
+    }),
     insightsLive,
     insightReport: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:insights:report",

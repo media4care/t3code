@@ -44,6 +44,7 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (
     readonly canonicalKey?: string;
     readonly releaseEnvironments?: ServerSettings["releaseEnvironments"];
     readonly secrets?: Readonly<Record<string, string>>;
+    readonly otherProjects?: Readonly<Record<string, string>>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -54,28 +55,31 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (
     encodeJson({ releases: { command: "node status.cjs" } }),
   );
   yield* fs.writeFileString(path.join(root, "status.cjs"), script);
+  const row = (id: ProjectId, workspaceRoot: string) => ({
+    projectId: id,
+    workspaceRoot,
+    title: "Releases",
+    defaultModelSelection: null,
+    defaultThreadEnvMode: null,
+    autoPull: false,
+    pinnedAt: null,
+    archivedAt: null,
+    faviconPath: null,
+    projectIcon: null,
+    scripts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  });
+  const rows = [
+    row(projectId, root),
+    ...Object.entries(options.otherProjects ?? {}).map(([id, workspaceRoot]) =>
+      row(ProjectId.make(id), workspaceRoot),
+    ),
+  ];
   const projectLayer = Layer.mock(ProjectStore.ProjectStoreV2)({
-    get: (id) =>
-      Effect.succeed(
-        id === projectId
-          ? Option.some({
-              projectId,
-              workspaceRoot: root,
-              title: "Releases",
-              defaultModelSelection: null,
-              defaultThreadEnvMode: null,
-              autoPull: false,
-              pinnedAt: null,
-              archivedAt: null,
-              faviconPath: null,
-              projectIcon: null,
-              scripts: [],
-              createdAt: "2026-01-01T00:00:00.000Z",
-              updatedAt: "2026-01-01T00:00:00.000Z",
-              deletedAt: null,
-            })
-          : Option.none(),
-      ),
+    get: (id) => Effect.succeed(Option.fromNullishOr(rows.find((item) => item.projectId === id))),
+    list: () => Effect.succeed(rows),
   });
   const identityLayer = Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
     resolve: () =>
@@ -283,6 +287,28 @@ describe("ReleasesService", () => {
       assert.strictEqual(error.reason, "not-configured");
       const snapshot = yield* service.subscribe({ projectId }).pipe(Stream.runHead);
       assert.isFalse(Option.getOrThrow(snapshot).configured);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("lists the projects whose t3.json has a releases section, even a broken one", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const folder = (contents: string | null) =>
+        Effect.gen(function* () {
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-releases-other-" });
+          if (contents !== null) yield* fs.writeFileString(path.join(dir, "t3.json"), contents);
+          return dir;
+        });
+      const { service } = yield* fixture("", {
+        otherProjects: {
+          none: yield* folder(encodeJson({ scripts: [] })),
+          broken: yield* folder(encodeJson({ releases: { command: 5 } })),
+          "no-file": yield* folder(null),
+          gone: path.join(yield* folder(null), "missing"),
+        },
+      });
+      assert.deepStrictEqual(yield* service.projects, [projectId, ProjectId.make("broken")]);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

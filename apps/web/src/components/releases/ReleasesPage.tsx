@@ -13,7 +13,9 @@ import {
   releasePlatformSummaries,
   releasePresence,
   releasePresenceLabel,
+  releaseProjectChoices,
   RELEASES_CONFIGURATION_EXAMPLE,
+  releaseProjectStatesAtom,
 } from "@t3tools/client-runtime/releases";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -25,6 +27,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { environmentSummaries } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -45,8 +48,14 @@ import {
 // An open page asks this often; the server skips the command until the document is stale.
 const STALE_CHECK_MS = 60_000;
 
+const projectStatesAtom = releaseProjectStatesAtom(
+  environmentSummaries.connectedEnvironmentIdsAtom,
+  serverEnvironment.releaseProjects,
+);
+
 export function ReleasesPage() {
-  const projects = useProjects();
+  const choices = releaseProjectChoices(useProjects(), useAtomValue(projectStatesAtom));
+  const projects = choices.projects;
   const { environments } = useEnvironments();
   const [selection, setSelection] = useState<string | null>(null);
   const key = (project: (typeof projects)[number]) => `${project.environmentId}:${project.id}`;
@@ -106,6 +115,8 @@ export function ReleasesPage() {
               connected={environment?.connection.phase === "connected"}
               environmentLabel={environment?.label ?? "Environment"}
             />
+          ) : choices.loading ? (
+            <p className="text-sm text-muted-foreground">Loading projects…</p>
           ) : (
             <div className="rounded-xl border border-dashed border-border p-10 text-center">
               <h2 className="text-xl font-semibold">Every release, in one place</h2>
