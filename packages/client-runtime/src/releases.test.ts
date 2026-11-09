@@ -1,4 +1,10 @@
-import type { ReleaseBinary, ReleaseStatusDocument, ReleaseTarget } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type ReleaseBinary,
+  type ReleaseStatusDocument,
+  type ReleaseTarget,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +12,8 @@ import {
   releaseAttention,
   releasePlatformSummaries,
   releasePresence,
+  releaseProjectChoices,
+  type ReleaseProjectsState,
   type ReleaseReach,
 } from "./releases.ts";
 
@@ -330,5 +338,50 @@ describe("releaseAttention", () => {
       ["info", "Store release pending"],
       ["info", "Could not read Google Play"],
     ]);
+  });
+});
+
+describe("releaseProjectChoices", () => {
+  const local = EnvironmentId.make("local");
+  const remote = EnvironmentId.make("remote");
+  const t3code = { environmentId: local, id: ProjectId.make("t3code") };
+  const app = { environmentId: local, id: ProjectId.make("app") };
+  const old = { environmentId: remote, id: ProjectId.make("old") };
+  const choose = (states: Array<[EnvironmentId, ReleaseProjectsState]>) =>
+    releaseProjectChoices([t3code, app, old], new Map(states));
+
+  it("offers configured projects, then those an older server can't judge, and hides the rest", () => {
+    expect(choose([[local, [app.id]]])).toEqual({ projects: [app], loading: false });
+    expect(
+      choose([
+        [local, [app.id]],
+        [remote, "unknown"],
+      ]),
+    ).toEqual({
+      projects: [app, old],
+      loading: false,
+    });
+    expect(
+      choose([
+        [local, [app.id]],
+        [remote, "loading"],
+      ]),
+    ).toEqual({
+      projects: [app],
+      loading: true,
+    });
+  });
+
+  it("waits while nothing is known, then offers every project when none has a command", () => {
+    expect(choose([[local, "loading"]])).toEqual({ projects: [], loading: true });
+    expect(
+      choose([
+        [local, []],
+        [remote, []],
+      ]),
+    ).toEqual({
+      projects: [t3code, app, old],
+      loading: false,
+    });
   });
 });

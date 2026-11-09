@@ -284,8 +284,9 @@ Open **Releases** and choose a project to see what each app has right now: per
 iOS and Android build, the store version and rollout, the OTA update on top of
 it, and the tester build, plus approvals waiting in its pipeline and the version
 deployed to each environment. Pick a release to highlight it and see which
-builds carry it. On mobile, Releases is in the
-navigation overflow. Web and desktop also offer **Open Releases** in the command
+builds carry it. The project list shows only projects with a `releases` command,
+and opens on the first; with none set up, it shows every project. On mobile,
+Releases is in the navigation overflow. Web and desktop also offer **Open Releases** in the command
 palette and the configurable `releases.open` keyboard command.
 
 The project supplies this status itself. Add a command to its `t3.json` that

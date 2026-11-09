@@ -66,6 +66,7 @@ export class ReleasesService extends Context.Service<
     readonly refresh: (input: ReleasesRefreshInput) => Effect.Effect<void, ReleasesError>;
     /** The snapshot, after running the command first when the document is stale. */
     readonly read: (input: ReleasesProjectInput) => Effect.Effect<ReleasesSnapshot, ReleasesError>;
+    readonly projects: Effect.Effect<ReadonlyArray<ProjectId>, ReleasesError>;
   }
 >()("t3/releases/ReleasesService") {}
 
@@ -252,6 +253,28 @@ const make = Effect.gen(function* () {
   });
 
   return ReleasesService.of({
+    projects: Effect.gen(function* () {
+      const rows = yield* projects
+        .list()
+        .pipe(Effect.mapError((cause) => new ReleasesError({ reason: "workspace", cause })));
+      const configured = yield* Effect.forEach(
+        rows,
+        (row) =>
+          fs.realPath(row.workspaceRoot).pipe(
+            Effect.flatMap((root) =>
+              configuration(root).pipe(
+                Effect.map((config) => config !== null),
+                // A broken section still counts, so its error stays visible on the page.
+                Effect.orElseSucceed(() => true),
+              ),
+            ),
+            Effect.orElseSucceed(() => false),
+            Effect.map((configured) => (configured ? [row.projectId] : [])),
+          ),
+        { concurrency: 8 },
+      );
+      return configured.flat();
+    }).pipe(Effect.withSpan("ReleasesService.projects")),
     refresh: Effect.fn("ReleasesService.refresh")(function* (input) {
       yield* Effect.forkIn(yield* start(input), scope);
     }),
