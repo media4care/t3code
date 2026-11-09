@@ -38,6 +38,12 @@ import { settleAndAdvance } from "../../settleAndAdvance";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  checkoutBlockingPaths,
+  describeCheckoutDiscard,
+  describeGitFailure,
+} from "@t3tools/client-runtime/git-explorer";
+import { requestConfirmDialog } from "~/confirmDialog";
 import { type SetStateAction, useRef, useState } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
@@ -346,13 +352,35 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         return next;
       });
     setRestoringBranchThreadKeys((current) => new Set(current).add(threadKey));
-    const checkoutResult = await switchGitRef({
-      environmentId,
-      input: {
-        cwd: activeProjectCwd,
-        refName: localCheckoutBranchMismatch.threadBranch,
-      },
-    });
+    const checkout = (discardPaths?: readonly string[]) =>
+      switchGitRef({
+        environmentId,
+        input: {
+          cwd: activeProjectCwd,
+          refName: localCheckoutBranchMismatch.threadBranch,
+          ...(discardPaths ? { discardPaths } : {}),
+        },
+      });
+    let checkoutResult = await checkout();
+    const blockingPaths =
+      checkoutResult._tag === "Failure"
+        ? checkoutBlockingPaths(squashAtomCommandFailure(checkoutResult))
+        : null;
+    if (blockingPaths) {
+      const { title, description, pathList } = describeCheckoutDiscard(
+        localCheckoutBranchMismatch.threadBranch,
+        blockingPaths,
+      );
+      const confirmed =
+        (await requestConfirmDialog(`${title}\n${description}\n\n${pathList}`, {
+          variant: "destructive",
+        })) ?? false;
+      if (!confirmed) {
+        finishRestore();
+        return;
+      }
+      checkoutResult = await checkout(blockingPaths);
+    }
     if (checkoutResult._tag === "Failure") {
       finishRestore();
       if (!isAtomCommandInterrupted(checkoutResult)) {
@@ -360,7 +388,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
           stackedThreadToast({
             type: "error",
             title: "Failed to switch checkout",
-            description: chatActionErrorMessage(squashAtomCommandFailure(checkoutResult)),
+            description: describeGitFailure(squashAtomCommandFailure(checkoutResult)),
           }),
         );
       }

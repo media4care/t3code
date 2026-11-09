@@ -18,9 +18,15 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
+import {
+  checkoutBlockingPaths,
+  describeCheckoutDiscard,
+  describeGitFailure,
+} from "@t3tools/client-runtime/git-explorer";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
+import * as Dialog from "../components/ui/Dialog";
 import { useBranches } from "../state/queries";
 import { threadEnvironment } from "../state/threads";
 import { vcsActionManager, vcsEnvironment } from "../state/vcs";
@@ -51,6 +57,20 @@ const selectedThreadStatusRevalidation = createVcsStatusRevalidationAtomFamily({
       AsyncResult.isFailure(result) ? refreshFailureMessage(result.cause) : null,
     ),
 });
+
+function confirmCheckoutDiscard(branch: string, paths: readonly string[]) {
+  const { title, description, pathList } = describeCheckoutDiscard(branch, paths);
+  return new Promise<boolean>((resolve) =>
+    Dialog.confirm({
+      title,
+      message: `${description}\n\n${pathList}`,
+      confirmText: "Discard and switch",
+      destructive: true,
+      onConfirm: () => resolve(true),
+      onCancel: () => resolve(false),
+    }),
+  );
+}
 
 export function useSelectedThreadGitActions() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -198,8 +218,7 @@ export function useSelectedThreadGitActions() {
         ? await run()
         : await vcsActionManager.track(appAtomRegistry, target, { operation, label }, run);
     if (AsyncResult.isFailure(result)) {
-      const error = Cause.squash(result.cause);
-      const message = error instanceof Error ? error.message : "Git action failed.";
+      const message = describeGitFailure(Cause.squash(result.cause), "Git action failed.");
       setPendingConnectionError(message);
       showGitActionResult({ type: "error", title: "Git action failed", description: message });
       return null;
@@ -250,10 +269,18 @@ export function useSelectedThreadGitActions() {
       "switch_ref",
       "Switching branch",
       async ({ thread, cwd }) => {
-        const result = await switchRef({
-          environmentId: thread.environmentId,
-          input: { cwd, refName: branch },
-        });
+        const checkout = (discardPaths?: readonly string[]) =>
+          switchRef({
+            environmentId: thread.environmentId,
+            input: { cwd, refName: branch, ...(discardPaths ? { discardPaths } : {}) },
+          });
+        let result = await checkout();
+        const blockingPaths = AsyncResult.isFailure(result)
+          ? checkoutBlockingPaths(Cause.squash(result.cause))
+          : null;
+        if (blockingPaths && (await confirmCheckoutDiscard(branch, blockingPaths))) {
+          result = await checkout(blockingPaths);
+        }
         if (AsyncResult.isFailure(result)) {
           return result;
         }

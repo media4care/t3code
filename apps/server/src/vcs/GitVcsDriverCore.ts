@@ -453,6 +453,14 @@ const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFai
   ],
   [/host key verification failed/i, "host_key_unverified"],
   [
+    /Your local changes to the following files would be overwritten by checkout/i,
+    "local_changes_would_be_overwritten",
+  ],
+  [
+    /The following untracked working tree files would be overwritten by checkout/i,
+    "untracked_files_would_be_overwritten",
+  ],
+  [
     /(?:could not read from remote repository|does not appear to be a git repository|repository .+ not found)/i,
     "remote_unreachable",
   ],
@@ -483,13 +491,44 @@ const GIT_FAILURE_REASON_DETAILS: Partial<Record<GitCommandFailureReason, string
     "The remote has commits this branch doesn't have. Pull or rebase, then push again.",
   config_locked:
     "Another Git process kept the repository's config locked. Wait for it to finish, then retry.",
+  local_changes_would_be_overwritten:
+    "Uncommitted changes would be overwritten by the checkout. Commit, stash, or discard them, then switch again.",
+  untracked_files_would_be_overwritten:
+    "Untracked files would be overwritten by the checkout. Move or delete them, then switch again.",
+  branch_checked_out_in_worktree:
+    "That branch is already checked out in another worktree. Use that worktree, or switch it to another branch first.",
+  ref_not_found: "That branch or commit doesn't exist. Refresh and pick another one.",
 };
 
-function gitFailureDetail(reason: GitCommandFailureReason | null): string {
+function gitFailureDetail(reason: GitCommandFailureReason | null, fallback?: string): string {
   return (
     (reason === null ? undefined : GIT_FAILURE_REASON_DETAILS[reason]) ??
+    fallback ??
     "Git command exited with a non-zero status."
   );
+}
+
+// Git lists each blocking file, repository-relative, on a tab-indented line below the
+// diagnostic. A list over the contract's cap is dropped rather than offered partially.
+function checkoutBlockingPaths(stderr: string): string[] | null {
+  const lines = stderr.split(/\r?\n/);
+  const start = lines.findIndex((line) =>
+    /^error: (?:Your local changes to the following files|The following untracked working tree files) would be overwritten by checkout:/.test(
+      line,
+    ),
+  );
+  if (start < 0) return null;
+  const paths: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith("\t")) break;
+    paths.push(line.slice(1));
+  }
+  return paths.length > 0 && paths.length <= 2000 ? paths : null;
+}
+
+function namePaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, 3).join(", ");
+  return paths.length > 3 ? ` Files: ${shown} and ${paths.length - 3} more.` : ` Files: ${shown}.`;
 }
 
 // Existing non-commit objects share the missing-ref fatal diagnostic; Git
@@ -1164,11 +1203,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           return Effect.succeed(result);
         }
         const reason = classifyGitFailure(result.stderr);
+        const paths =
+          reason === "local_changes_would_be_overwritten" ||
+          reason === "untracked_files_would_be_overwritten"
+            ? checkoutBlockingPaths(result.stderr)
+            : null;
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
             ...(reason === null ? {} : { reason }),
-            detail: options.fallbackErrorDetail ?? gitFailureDetail(reason),
+            ...(paths === null ? {} : { paths }),
+            detail:
+              gitFailureDetail(reason, options.fallbackErrorDetail) +
+              (paths === null ? "" : namePaths(paths)),
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
@@ -4913,6 +4960,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
       yield* refuseOptionLikeRefName("GitVcsDriver.switchRef", input.cwd, checkoutArgs.at(-1));
 
+      if (input.discardPaths) {
+        // Git names blocking files relative to the repository root; `top` keeps a nested cwd from re-rooting them.
+        yield* executeGit(
+          "GitVcsDriver.switchRef.discardPaths",
+          input.cwd,
+          [
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+          ],
+          {
+            stdin: input.discardPaths.map((path) => `:(top,literal)${path}\0`).join(""),
+            timeoutMs: 10_000,
+            fallbackErrorDetail: "Could not discard the local changes.",
+          },
+        );
+      }
+
       // A stale ref must not turn into a path checkout that discards local edits.
       yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.switchRef.checkout",
@@ -4920,7 +4988,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         [...checkoutArgs, "--"],
         {
           timeoutMs: 10_000,
-          fallbackErrorDetail: "git checkout failed",
+          fallbackErrorDetail: "Git couldn't switch branches.",
           // Checking out a remote branch creates a local one that tracks it.
           writesSharedConfig: !localInputExists,
         },
