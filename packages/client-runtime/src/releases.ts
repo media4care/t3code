@@ -39,10 +39,12 @@ export interface ReleaseOtaLane {
   readonly preview: ReleaseOtaUpdate | undefined;
 }
 
-/** One installable app on one platform; targets sharing their binaries merge into one row. */
+/** One build on one platform; targets sharing their binaries merge into one row. */
 export interface ReleaseAppRow {
   readonly key: string;
+  /** The build, such as "swOnly". */
   readonly name: string;
+  readonly variant: string | undefined;
   readonly detail: string | undefined;
   readonly platform: ReleaseTarget["platform"];
   readonly binaries: ReadonlyArray<ReleaseBinary>;
@@ -54,9 +56,26 @@ export interface ReleaseAppRow {
   readonly tone: ReleaseTone;
 }
 
-export interface ReleaseApp {
+export interface ReleaseBuild {
   readonly key: string;
   readonly name: string;
+  /** One entry per variant; a build without variants has one unnamed entry. */
+  readonly variants: ReadonlyArray<{
+    readonly key: string;
+    readonly name: string | undefined;
+    readonly rows: ReadonlyArray<ReleaseAppRow>;
+  }>;
+}
+
+export interface ReleaseApp {
+  /** The group id. */
+  readonly key: string;
+  /** The store name from `groups`, else the group id. */
+  readonly name: string;
+  /** A data URL. */
+  readonly icon: string | undefined;
+  readonly builds: ReadonlyArray<ReleaseBuild>;
+  /** Every row, in tree order. */
   readonly rows: ReadonlyArray<ReleaseAppRow>;
 }
 
@@ -89,6 +108,9 @@ export interface ReleaseAttention {
 const AUDIENCE_RANK: Record<ReleaseAudience, number> = { public: 0, testers: 1, internal: 2 };
 const TONE_RANK: Record<ReleaseTone, number> = { error: 0, warning: 1, info: 2, muted: 3, ok: 4 };
 const PLATFORMS = ["ios", "android", "web"] as const;
+const PLATFORM_LABEL = { ios: "iOS", android: "Android", web: "Web" } as const;
+const platformRank = (platform: ReleaseTarget["platform"]) =>
+  platform ? PLATFORMS.indexOf(platform) : PLATFORMS.length;
 
 /** The newest version of each environment, in the order the document lists them. */
 export function currentReleases(document: ReleaseStatusDocument): ReadonlyArray<ReleaseVersion> {
@@ -138,13 +160,15 @@ function reachOf(
   return "unknown";
 }
 
-const segments = (detail: string | undefined) => detail?.split(" · ") ?? [];
+// Older clients ignore `variant`, so commands may repeat it in `detail`; it shows once here.
+const segments = (target: ReleaseTarget) =>
+  target.detail?.split(" · ").filter((segment) => segment !== target.variant) ?? [];
 
 function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
   const first = targets[0]!;
   const binaries = first.binaries;
-  const shared = segments(first.detail).filter((segment) =>
-    targets.every((target) => segments(target.detail).includes(segment)),
+  const shared = segments(first).filter((segment) =>
+    targets.every((target) => segments(target).includes(segment)),
   );
   const store = binaries.find(installable) ?? null;
   const ota = targets.flatMap((target): ReleaseOtaLane[] => {
@@ -152,7 +176,7 @@ function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
     if (!channel || (!live && !preview)) return [];
     const label =
       targets.length > 1
-        ? segments(target.detail)
+        ? segments(target)
             .filter((segment) => !shared.includes(segment))
             .join(" · ") || undefined
         : undefined;
@@ -175,6 +199,7 @@ function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
   return {
     key: targets.map((target) => target.id).join("+"),
     name: first.name,
+    variant: first.variant,
     detail: shared.join(" · ") || undefined,
     platform: first.platform,
     binaries,
@@ -186,24 +211,48 @@ function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
   };
 }
 
-/** Apps by group, one row per platform build; audiences that share binaries share a row. */
-export function releaseApps(document: ReleaseStatusDocument): ReadonlyArray<ReleaseApp> {
-  const apps = new Map<string, Map<string, ReleaseTarget[]>>();
+/**
+ * Apps by group, then build, then variant, with a row per platform, iOS first. Targets sharing
+ * their binaries share a row, as do targets of one platform whose store was not read.
+ */
+export function releaseApps(
+  document: ReleaseStatusDocument,
+  icons: Readonly<Record<string, string>> = {},
+): ReadonlyArray<ReleaseApp> {
+  const names = new Map(document.groups?.map((group) => [group.id, group.name]));
+  // group → build → variant ("" for none) → row key → targets
+  const apps = new Map<string, Map<string, Map<string, Map<string, ReleaseTarget[]>>>>();
   for (const target of document.targets) {
     if (target.binaries.length === 0 && !target.ota) continue;
-    const rows = apps.get(target.group) ?? new Map<string, ReleaseTarget[]>();
-    // No binaries means the store was not read, not that targets share one.
-    const key = target.binaries.length
-      ? JSON.stringify([target.name, target.platform, target.binaries])
-      : target.id;
+    const builds = apps.get(target.group) ?? new Map();
+    const variants = builds.get(target.name) ?? new Map();
+    const rows = variants.get(target.variant ?? "") ?? new Map<string, ReleaseTarget[]>();
+    const key = JSON.stringify([target.platform, target.binaries]);
     rows.set(key, [...(rows.get(key) ?? []), target]);
-    apps.set(target.group, rows);
+    variants.set(target.variant ?? "", rows);
+    builds.set(target.name, variants);
+    apps.set(target.group, builds);
   }
-  return [...apps].map(([name, rows]) => ({
-    key: name,
-    name,
-    rows: [...rows.values()].map(appRow),
-  }));
+  return [...apps].map(([group, builds]) => {
+    const tree = [...builds].map(([build, variants]) => ({
+      key: `${group}/${build}`,
+      name: build,
+      variants: [...variants].map(([variant, rows]) => ({
+        key: `${group}/${build}/${variant}`,
+        name: variant || undefined,
+        rows: [...rows.values()]
+          .map(appRow)
+          .sort((a, b) => platformRank(a.platform) - platformRank(b.platform)),
+      })),
+    }));
+    return {
+      key: group,
+      name: names.get(group) ?? group,
+      icon: icons[group],
+      builds: tree,
+      rows: tree.flatMap((build) => build.variants.flatMap((variant) => variant.rows)),
+    };
+  });
 }
 
 function byFrequency<Item>(items: ReadonlyArray<Item>, version: (item: Item) => string) {
@@ -319,7 +368,9 @@ export function releaseAttention(
   const prod = document.releases.find((release) => release.environment === "prod")?.version;
   for (const app of apps)
     for (const row of app.rows) {
-      const name = `${app.name} ${row.name}`;
+      const name = [app.name, row.name, row.variant, row.platform && PLATFORM_LABEL[row.platform]]
+        .filter(Boolean)
+        .join(" · ");
       for (const lane of row.ota)
         if (
           lane.live &&

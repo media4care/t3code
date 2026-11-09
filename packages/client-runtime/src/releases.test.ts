@@ -106,11 +106,17 @@ describe("releaseApps", () => {
     ];
     const [app] = releaseApps(
       statusDocument([
-        { ...target(binaries, live()), id: "standard", detail: "Standard · managed" },
+        {
+          ...target(binaries, live()),
+          id: "standard",
+          detail: "Standard · managed",
+          variant: "managed",
+        },
         {
           ...target(binaries, { channel: "caregiver", live: { ...live().live, percent: 100 } }),
           id: "caregiver",
           detail: "Caregiver profiles · managed",
+          variant: "managed",
         },
         {
           ...target([store({ label: "S3 · in-app" })]),
@@ -131,7 +137,7 @@ describe("releaseApps", () => {
       })),
     ).toEqual([
       {
-        detail: "managed",
+        detail: undefined,
         store: "2.0.0",
         testers: "Play internal",
         lanes: [
@@ -141,17 +147,66 @@ describe("releaseApps", () => {
       },
       { detail: "Standard · in-app", store: "2.0.0", testers: undefined, lanes: [] },
       {
-        detail: "Standard · unread",
+        detail: "unread",
         store: undefined,
         testers: undefined,
-        lanes: [[undefined, 25]],
+        lanes: [
+          ["Standard", 25],
+          ["Caregiver profiles", 25],
+        ],
       },
+    ]);
+  });
+
+  it("nests rows by app, build and variant, iOS first, under the app's store name", () => {
+    const build = (id: string, name: string, platform: "ios" | "android", variant?: string) => ({
+      ...target([store({ version: id })]),
+      id,
+      name,
+      platform,
+      ...(variant ? { variant } : {}),
+    });
+    const apps = releaseApps(
       {
-        detail: "Caregiver profiles · unread",
-        store: undefined,
-        testers: undefined,
-        lanes: [[undefined, 25]],
+        ...statusDocument([
+          build("only-android", "swOnly", "android", "managed"),
+          build("hw-inapp", "swAndHw", "android", "in-app"),
+          build("only-ios", "swOnly", "ios", "managed"),
+          build("hw-managed", "swAndHw", "android", "managed"),
+          { ...build("family", "Store only", "android"), group: "Family" },
+        ]),
+        groups: [{ id: "B2B", name: "Betreuung Pro", icon: "icons/b2b.png" }],
       },
+      { B2B: "data:image/png;base64,AA==" },
+    );
+    expect(
+      apps.map((app) => [
+        app.name,
+        app.icon,
+        app.builds.map((build) => [
+          build.name,
+          build.variants.map((variant) => [
+            variant.name,
+            variant.rows.map((row) => row.store?.version),
+          ]),
+        ]),
+      ]),
+    ).toEqual([
+      [
+        "Betreuung Pro",
+        "data:image/png;base64,AA==",
+        [
+          ["swOnly", [["managed", ["only-ios", "only-android"]]]],
+          [
+            "swAndHw",
+            [
+              ["in-app", ["hw-inapp"]],
+              ["managed", ["hw-managed"]],
+            ],
+          ],
+        ],
+      ],
+      ["Family", undefined, [["Store only", [[undefined, ["family"]]]]]],
     ]);
   });
 });

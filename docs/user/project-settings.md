@@ -304,8 +304,13 @@ The document format is `ReleaseStatusDocument` in
 [`packages/contracts/src/releases.ts`](../../packages/contracts/src/releases.ts):
 releases per environment, pipeline gates, targets with their store binaries and
 OTA channel, and deployed services. Set a binary's `store` (`app-store`,
-`testflight`, `play`, `firebase` or `direct`) to show its store icon. A source the
-command cannot read goes in `sources` with its error, so the rest still shows.
+`testflight`, `play`, `firebase` or `direct`) to show its store icon. The Apps
+table nests targets by `group` (the app), `name` (the build) and an optional
+`variant`, such as managed or in-app, with a row per platform. List each app in
+`groups` with its store `name` and an `icon`: a small PNG, JPEG or WebP copy of
+the app icon (at most 16 KB, such as 96 px), relative to `t3.json`. An icon that
+is missing, too large or not one of those formats is skipped. A source the command cannot read goes in `sources`
+with its error, so the rest still shows.
 
 The command runs in the project root (or `cwd`) on the environment, with the
 same shell as QA suites, so it can read credentials from files there. You can
@@ -324,9 +329,9 @@ internal or testing track, paused store rollouts, and live OTA updates of the
 current prod release whose runtime no public build has. An OTA update only reaches installs of a binary with the
 same runtime, so an update live at 100% on a runtime that is only in TestFlight
 reaches testers only. Each live OTA update says who it reaches: **Reaches
-users**, **Testers only**, **Reaches no one**, **Store build is newer** when
-the public store build already supersedes it, or **Reach unknown** when no build
-reports its runtime. Releases is read-only: approve, promote, or roll back in
+users**, **Testers only**, **Reaches no one**, or **Store build is newer** when
+the public store build already supersedes it. When no build reports its
+runtime, the line shows no reach and a note under **Apps** says so. Releases is read-only: approve, promote, or roll back in
 your pipeline, store console, or release tooling. Agents can read the same
 status with the `t3_releases` tool.
 
