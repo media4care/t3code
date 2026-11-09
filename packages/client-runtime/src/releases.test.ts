@@ -1,7 +1,13 @@
 import type { ReleaseBinary, ReleaseStatusDocument, ReleaseTarget } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { releaseAttention, releaseTargetGroups, releaseTargetRow } from "./releases.ts";
+import {
+  releaseApps,
+  releaseAttention,
+  releasePlatformSummaries,
+  releasePresence,
+  type ReleaseReach,
+} from "./releases.ts";
 
 const store = (
   overrides: { [Key in keyof ReleaseBinary]?: ReleaseBinary[Key] | undefined } = {},
@@ -29,90 +35,163 @@ const target = (binaries: ReleaseBinary[], ota?: ReleaseTarget["ota"]): ReleaseT
   ...(ota ? { ota } : {}),
 });
 
-describe("releaseTargetRow", () => {
-  it.each<[string, ReleaseTarget, string]>([
-    ["an OTA on a public binary's runtime", target([store()], live()), "Runtimes match"],
+const statusDocument = (targets: ReleaseTarget[]): ReleaseStatusDocument => ({
+  schemaVersion: 1,
+  generatedAt: "2026-11-04T10:00:00.000Z",
+  sources: [],
+  releases: [{ version: "2.0.0", environment: "prod" }],
+  gates: [],
+  targets,
+  services: [],
+});
+
+describe("releaseApps", () => {
+  it.each<[string, ReleaseTarget, ReleaseReach]>([
+    ["an OTA on a public binary's runtime", target([store()], live()), "users"],
     [
       "an OTA on a runtime only testers have",
       target([store({ label: "TestFlight", audience: "testers" })], live()),
-      "Reaches testers only",
-    ],
-    [
-      "an OTA on a runtime no build has",
-      target([store({ runtime: "old", version: "1.0.0" })], live()),
-      "No build has this runtime",
+      "testers",
     ],
     [
       "an OTA whose runtime reaches a public draft only",
       target([store({ rollout: { percent: 0, state: "draft" } })], live()),
-      "Reaches testers only",
+      "testers",
+    ],
+    [
+      "an OTA on a runtime no build has",
+      target([store({ runtime: "old", version: "1.0.0" })], live()),
+      "no-one",
+    ],
+    [
+      "an older OTA under a newer store build",
+      target([store({ runtime: "next", version: "2.1.0" })], live()),
+      "superseded",
+    ],
+    [
+      "an OTA a newer store build replaced, though testers still have its runtime",
+      target(
+        [
+          store({ label: "Play internal", audience: "internal", version: "1.9.0" }),
+          store({ version: "2.1.0", runtime: "next" }),
+        ],
+        live(),
+      ),
+      "superseded",
+    ],
+    [
+      "an older OTA under a v-prefixed store version",
+      target([store({ runtime: "next", version: "v2.1.0" })], live()),
+      "superseded",
     ],
     [
       "binaries without a recorded runtime",
       target([store({ runtime: undefined })], live()),
-      "Runtime unknown",
+      "unknown",
     ],
-    [
-      "a binary left on the internal track",
-      target([store({ label: "Play internal", audience: "internal", rollout: undefined })]),
-      "Binary not promoted",
-    ],
-    [
-      "an approved store version not released yet",
-      target([
-        store({ label: "App Store · pending release", rollout: { percent: 0, state: "draft" } }),
-      ]),
-      "Store release pending",
-    ],
-    [
-      "a halted store rollout",
-      target([store({ rollout: { percent: 5, state: "halted" } })]),
-      "Store rollout halted",
-    ],
-    [
-      "a JS-only release that reaches an older binary",
-      target([store({ version: "1.0.0" })], live()),
-      "Runtimes match",
-    ],
-    [
-      "a target this release did not touch",
-      target([store({ version: "1.0.0" })]),
-      "Not in this release",
-    ],
-    [
-      "an update that is only on preview",
-      target([store({ version: "1.0.0", runtime: "old" })], {
-        channel: "prod",
-        preview: { version: "2.0.0", runtime: "new", percent: 100 },
-      }),
-      "Preview only",
-    ],
-  ])("checks %s", (_name, releaseTarget, label) => {
-    expect(releaseTargetRow(releaseTarget, "2.0.0").check.label).toBe(label);
+    ["no store source", target([], live()), "unknown"],
+  ])("judges the reach of %s", (_name, releaseTarget, reach) => {
+    expect(releaseApps(statusDocument([releaseTarget]))[0]?.rows[0]?.ota[0]?.reach).toBe(reach);
   });
 
-  it("shows the public binary an OTA of the release reaches when the release has none", () => {
-    const old = store({ version: "1.0.0" });
-    expect(releaseTargetRow(target([old], live()), "2.0.0").binary).toBe(old);
+  it("merges audiences that share binaries and keeps other builds apart", () => {
+    const binaries = [
+      store({ label: "Play internal", audience: "internal", version: "2.1.0" }),
+      store({
+        label: "Play production",
+        version: "2.1.0",
+        rollout: { percent: 0, state: "draft" },
+      }),
+      store(),
+    ];
+    const [app] = releaseApps(
+      statusDocument([
+        { ...target(binaries, live()), id: "standard", detail: "Standard · managed" },
+        {
+          ...target(binaries, { channel: "caregiver", live: { ...live().live, percent: 100 } }),
+          id: "caregiver",
+          detail: "Caregiver profiles · managed",
+        },
+        {
+          ...target([store({ label: "S3 · in-app" })]),
+          id: "inapp",
+          detail: "Standard · in-app",
+        },
+        { ...target([]), id: "unread" },
+        { ...target([], live()), id: "unread-standard", detail: "Standard · unread" },
+        { ...target([], live()), id: "unread-caregiver", detail: "Caregiver profiles · unread" },
+      ]),
+    );
+    expect(
+      app?.rows.map((row) => ({
+        detail: row.detail,
+        store: row.store?.version,
+        testers: row.testers?.label,
+        lanes: row.ota.map((lane) => [lane.label, lane.live?.percent]),
+      })),
+    ).toEqual([
+      {
+        detail: "managed",
+        store: "2.0.0",
+        testers: "Play internal",
+        lanes: [
+          ["Standard", 25],
+          ["Caregiver profiles", 100],
+        ],
+      },
+      { detail: "Standard · in-app", store: "2.0.0", testers: undefined, lanes: [] },
+      {
+        detail: "Standard · unread",
+        store: undefined,
+        testers: undefined,
+        lanes: [[undefined, 25]],
+      },
+      {
+        detail: "Caregiver profiles · unread",
+        store: undefined,
+        testers: undefined,
+        lanes: [[undefined, 25]],
+      },
+    ]);
   });
 });
 
-describe("releaseTargetGroups", () => {
-  it("leaves out targets no source reported anything for", () => {
-    const document: ReleaseStatusDocument = {
-      schemaVersion: 1,
-      generatedAt: "2026-11-04T10:00:00.000Z",
-      sources: [],
-      releases: [{ version: "2.0.0", environment: "prod" }],
-      gates: [],
-      targets: [target([store()]), { ...target([]), id: "unread", group: "Games" }],
-      services: [],
-    };
-    expect(
-      releaseTargetGroups(document, "2.0.0").flatMap((group) =>
-        group.rows.map((row) => row.target.id),
+describe("releasePresence", () => {
+  it("counts the rows that carry a version and through which channel", () => {
+    const apps = releaseApps(
+      statusDocument([
+        target([store({ version: "1.0.0", runtime: "old" })], live("old")),
+        { ...target([store({ version: "2.0.0" })]), id: "store" },
+        { ...target([store({ version: "2.0.0", audience: "testers" })]), id: "testers" },
+        { ...target([store({ version: "1.0.0" })]), id: "behind", name: "iOS" },
+      ]),
+    );
+    expect(releasePresence(apps, "2.0.0")).toEqual({
+      rows: 3,
+      total: 4,
+      store: 1,
+      testers: 1,
+      ota: 1,
+    });
+  });
+});
+
+describe("releasePlatformSummaries", () => {
+  it("lists each platform's versions, the most common first", () => {
+    const android = (id: string, version: string): ReleaseTarget => ({
+      ...target([store({ version })]),
+      id,
+      name: id,
+      platform: "android",
+    });
+    const summaries = releasePlatformSummaries(
+      releaseApps(
+        statusDocument([android("a", "1.0.0"), android("b", "2.0.0"), android("c", "2.0.0")]),
       ),
-    ).toEqual(["b2b-android"]);
+    );
+    expect(
+      summaries.map((summary) => [summary.platform, summary.store.map((binary) => binary.version)]),
+    ).toEqual([["android", ["2.0.0", "1.0.0"]]]);
   });
 });
 
@@ -140,7 +219,34 @@ describe("releaseAttention", () => {
     ],
     targets: [
       target([store({ label: "TestFlight", audience: "testers" })], live()),
+      {
+        ...target([store({ label: "TestFlight", audience: "testers" })], {
+          channel: "caregiver",
+          live: live().live,
+        }),
+        id: "caregiver",
+      },
       { ...target([store()], live()), id: "fine" },
+      {
+        ...target([store({ version: "0.9.0", runtime: "old" })], {
+          channel: "prod",
+          live: { version: "1.0.0", runtime: "older", percent: 100 },
+        }),
+        id: "stale",
+        name: "Stale",
+      },
+      {
+        ...target([store({ rollout: { percent: 5, state: "halted" } })]),
+        id: "halted",
+        name: "iOS",
+      },
+      {
+        ...target([
+          store({ label: "App Store · pending release", rollout: { percent: 0, state: "draft" } }),
+        ]),
+        id: "pending",
+        name: "Web",
+      },
     ],
     services: [
       {
@@ -158,11 +264,15 @@ describe("releaseAttention", () => {
     ],
   };
 
-  it("lists the current release's open work, most severe first", () => {
+  it("lists the current release's open work once per build, most severe first", () => {
     expect(releaseAttention(document).map((item) => [item.tone, item.title])).toEqual([
-      ["error", "Reaches testers only"],
+      ["error", "OTA update reaches testers only"],
+      ["error", "OTA update reaches testers only"],
       ["warning", "Approve 25%"],
+      ["warning", "Build uploaded, not promoted"],
       ["warning", "Approve Backend deploy"],
+      ["info", "Store rollout halted"],
+      ["info", "Store release pending"],
       ["info", "Could not read Google Play"],
     ]);
   });

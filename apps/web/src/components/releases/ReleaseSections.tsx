@@ -3,18 +3,30 @@ import type {
   ReleaseGate,
   ReleaseService,
   ReleaseStatusDocument,
+  ReleaseStore,
 } from "@t3tools/contracts";
 import {
   releaseAge,
+  RELEASE_REACH,
+  type ReleaseApp,
+  type ReleaseAppRow,
   type ReleaseAttention,
-  type ReleaseTargetGroup,
-  type ReleaseTargetRow,
+  type ReleasePlatformSummary,
   type ReleaseTone,
 } from "@t3tools/client-runtime/releases";
-import { ExternalLinkIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { CloudDownloadIcon, ExternalLinkIcon, GlobeIcon, SmartphoneIcon } from "lucide-react";
+import type { ComponentType, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import {
+  AndroidIcon,
+  AppleIcon,
+  AppStoreIcon,
+  FirebaseIcon,
+  GooglePlayIcon,
+  TestFlightIcon,
+} from "../Icons";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const TONE_TEXT: Record<ReleaseTone, string> = {
   ok: "text-success-foreground",
@@ -141,113 +153,319 @@ export function ReleaseGateList(props: { gates: ReadonlyArray<ReleaseGate>; vers
   );
 }
 
+type IconComponent = ComponentType<{ className?: string }>;
+
+const PLATFORM: Record<ReleasePlatformSummary["platform"], { label: string; icon: IconComponent }> =
+  {
+    ios: { label: "iOS", icon: AppleIcon },
+    android: { label: "Android", icon: AndroidIcon },
+    web: { label: "Web", icon: GlobeIcon },
+  };
+
+const STORE_ICON: Record<ReleaseStore, IconComponent> = {
+  "app-store": AppStoreIcon,
+  testflight: TestFlightIcon,
+  play: GooglePlayIcon,
+  firebase: FirebaseIcon,
+  direct: CloudDownloadIcon,
+};
+
+function PlatformIcon(props: { platform: ReleaseAppRow["platform"]; className?: string }) {
+  const Icon = props.platform ? PLATFORM[props.platform].icon : SmartphoneIcon;
+  return <Icon className={cn("size-4 shrink-0", props.className)} />;
+}
+
+function StoreIcon(props: { binary: ReleaseBinary }) {
+  const Icon = props.binary.store ? STORE_ICON[props.binary.store] : null;
+  return Icon ? <Icon className="size-3.5 shrink-0" /> : null;
+}
+
+function Version(props: { version: string; selected: string }) {
+  return (
+    <span
+      className={cn(
+        "font-mono text-xs font-semibold",
+        props.version === props.selected && "rounded bg-primary/15 px-1 text-primary",
+      )}
+    >
+      {props.version}
+    </span>
+  );
+}
+
 function RolloutBar(props: { percent: number; tone: string }) {
   return (
-    <span className="h-1 w-11 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20">
+    <span className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20">
       <span className={cn("block h-full", props.tone)} style={{ width: `${props.percent}%` }} />
     </span>
   );
 }
 
-function binaryPercent(binary: ReleaseBinary) {
-  if (binary.audience !== "public") return null;
-  return binary.rollout?.percent ?? 100;
+function rolloutText(binary: ReleaseBinary) {
+  const rollout = binary.rollout;
+  if (!rollout || rollout.state === "completed") return `${rollout?.percent ?? 100}%`;
+  if (rollout.state === "active") return `staged ${rollout.percent}%`;
+  return `${rollout.state} ${rollout.percent}%`;
 }
 
-function BinaryCell(props: { binary: ReleaseBinary | null; version: string }) {
+function StoreCell(props: { binary: ReleaseBinary | null; version: string; now: number }) {
   const binary = props.binary;
-  if (!binary) return <span className="text-muted-foreground">No build</span>;
-  const percent = binaryPercent(binary);
-  const paused = binary.rollout?.state === "paused" || binary.rollout?.state === "halted";
+  if (!binary) return <span className="text-xs text-muted-foreground">{EMPTY}</span>;
+  const percent = binary.audience === "public" ? (binary.rollout?.percent ?? 100) : null;
+  const stopped = binary.rollout?.state === "paused" || binary.rollout?.state === "halted";
+  const age = releaseAge(binary.updatedAt, props.now);
   return (
-    <span className="flex items-center gap-2">
-      <RolloutBar
-        percent={percent ?? 0}
-        tone={paused ? "bg-warning" : percent === 100 ? "bg-success" : "bg-info"}
-      />
-      <span className="w-9 shrink-0 font-mono text-xs">
-        {percent === null ? EMPTY : `${percent}%`}
-      </span>
-      <span className="truncate text-muted-foreground">
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5">
+        <StoreIcon binary={binary} />
         <ExternalLink href={binary.url}>
-          {binary.label}
-          {binary.version !== props.version ? ` · ${binary.version}` : ""}
+          <Version version={binary.version} selected={props.version} />
         </ExternalLink>
+      </div>
+      <div className="mt-0.5 flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+        {percent !== null ? (
+          <RolloutBar
+            percent={percent}
+            tone={stopped ? "bg-warning" : percent === 100 ? "bg-success" : "bg-info"}
+          />
+        ) : null}
+        <span className="truncate">
+          {binary.label}
+          {percent !== null ? ` · ${rolloutText(binary)}` : ""}
+          {binary.audience !== "public" && binary.build ? ` · ${binary.build}` : ""}
+          {age ? ` · ${age}` : ""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function OtaCell(props: { row: ReleaseAppRow; version: string }) {
+  const { row } = props;
+  if (row.ota.length === 0)
+    return (
+      <span className="text-xs text-muted-foreground">
+        {row.hasOtaChannel ? "No live update" : EMPTY}
       </span>
-    </span>
-  );
-}
-
-function OtaCell(props: { row: ReleaseTargetRow }) {
-  const ota = props.row.ota;
-  if (!ota) return <span className="text-muted-foreground">{EMPTY}</span>;
-  if (ota.state === "preview") return <span className="text-muted-foreground">Preview only</span>;
-  const { update } = ota;
-  const tone =
-    props.row.check.tone === "error"
-      ? "bg-warning"
-      : update.percent === 100
-        ? "bg-success"
-        : "bg-info";
+    );
   return (
-    <span className="flex items-center gap-2">
-      <RolloutBar percent={update.percent} tone={tone} />
-      <span className="font-mono text-xs">{update.percent}%</span>
-      {ota.state === "other" ? (
-        <span className="truncate text-xs text-muted-foreground">{update.version}</span>
-      ) : null}
-    </span>
+    <div className="flex min-w-0 flex-col gap-1">
+      {row.ota.map((lane) => {
+        const reach = lane.reach ? RELEASE_REACH[lane.reach] : null;
+        return (
+          <div key={lane.key} className="min-w-0">
+            {lane.live ? (
+              <div className="flex items-center gap-1.5 whitespace-nowrap">
+                <ExternalLink href={lane.live.url}>
+                  <Version version={lane.live.version} selected={props.version} />
+                </ExternalLink>
+                {reach ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<span className={cn("text-xs", TONE_TEXT[reach.tone])} />}
+                    >
+                      {reach.label}
+                    </TooltipTrigger>
+                    <TooltipPopup>
+                      Runtime <span className="font-mono">{lane.live.runtime}</span>
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+              {lane.live ? (
+                <RolloutBar
+                  percent={lane.live.percent}
+                  tone={
+                    reach?.tone === "error"
+                      ? "bg-warning"
+                      : lane.live.percent === 100
+                        ? "bg-success"
+                        : "bg-info"
+                  }
+                />
+              ) : null}
+              <span className="truncate">
+                {[
+                  lane.label,
+                  lane.live ? `${lane.live.percent}%` : null,
+                  lane.preview ? `preview ${lane.preview.version}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
-export function ReleaseTargetTable(props: {
-  groups: ReadonlyArray<ReleaseTargetGroup>;
+export function ReleaseSourceList(props: {
+  sources: ReleaseStatusDocument["sources"];
+  onConnect: (() => void) | undefined;
+}) {
+  if (props.sources.length === 0) return null;
+  return (
+    <ul aria-label="Release sources" className="flex flex-wrap gap-1.5">
+      {props.sources.map((source) => (
+        <li
+          key={source.id}
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs",
+            source.status === "ok"
+              ? "border-border"
+              : "border-dashed border-border text-muted-foreground",
+          )}
+        >
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              source.status === "ok"
+                ? "bg-success"
+                : source.status === "error"
+                  ? "bg-destructive"
+                  : "bg-muted-foreground/50",
+            )}
+          />
+          {source.name}
+          {source.status === "error" ? " failed" : ""}
+          {source.status !== "ok" && props.onConnect ? (
+            <button
+              type="button"
+              onClick={props.onConnect}
+              className="font-medium text-info-foreground hover:underline"
+            >
+              {source.status === "error" ? "Fix" : "Connect"}
+            </button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function SummaryLine(props: {
+  label: string;
+  items: ReadonlyArray<{ version: string; binary?: ReleaseBinary }>;
+  selected: string;
+}) {
+  const first = props.items[0];
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className="w-20 shrink-0 text-xs text-muted-foreground">{props.label}</span>
+      {first?.binary ? <StoreIcon binary={first.binary} /> : null}
+      {first ? (
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2">
+          {props.items.slice(0, 3).map((item) => (
+            <Version key={item.version} version={item.version} selected={props.selected} />
+          ))}
+          {props.items.length > 3 ? (
+            <span className="text-xs text-muted-foreground">+{props.items.length - 3}</span>
+          ) : null}
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">{EMPTY}</span>
+      )}
+    </div>
+  );
+}
+
+export function ReleasePlatformCards(props: {
+  summaries: ReadonlyArray<ReleasePlatformSummary>;
   version: string;
 }) {
-  if (props.groups.length === 0) return null;
+  if (props.summaries.length === 0) return null;
   return (
-    <Section title={`Where ${props.version} is`} meta="Store binary → runtime → OTA update">
+    <section aria-label="Live now" className="grid gap-3 sm:grid-cols-2">
+      {props.summaries.map((summary) => (
+        <div
+          key={summary.platform}
+          className="flex flex-col gap-2 rounded-xl border border-border bg-card px-4 py-3"
+        >
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <PlatformIcon platform={summary.platform} />
+            {PLATFORM[summary.platform].label}
+          </h3>
+          <SummaryLine
+            label="Store"
+            items={summary.store.map((binary) => ({ version: binary.version, binary }))}
+            selected={props.version}
+          />
+          <SummaryLine label="OTA update" items={summary.ota} selected={props.version} />
+          <SummaryLine
+            label="Testers"
+            items={summary.testers.map((binary) => ({ version: binary.version, binary }))}
+            selected={props.version}
+          />
+        </div>
+      ))}
+    </section>
+  );
+}
+
+export function ReleaseAppTable(props: {
+  apps: ReadonlyArray<ReleaseApp>;
+  version: string;
+  now: number;
+}) {
+  if (props.apps.length === 0) return null;
+  const rows = props.apps.flatMap((app) => app.rows);
+  const attention = rows.filter((row) => row.tone === "error" || row.tone === "warning").length;
+  return (
+    <Section
+      title="Apps"
+      meta={`${rows.length} builds${attention ? ` · ${attention} need attention` : ""}`}
+    >
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs text-muted-foreground">
-              <th className="px-4 py-2 font-medium">Target</th>
-              <th className="px-2 py-2 font-medium">Store binary</th>
-              <th className="px-2 py-2 font-medium">Runtime</th>
+              <th className="px-4 py-2 font-medium">App</th>
+              <th className="px-2 py-2 font-medium">Store</th>
               <th className="px-2 py-2 font-medium">OTA update</th>
-              <th className="px-4 py-2 font-medium">Check</th>
+              <th className="px-4 py-2 font-medium">Testers</th>
             </tr>
           </thead>
-          {props.groups.map((group) => (
-            <tbody key={group.key}>
+          {props.apps.map((app) => (
+            <tbody key={app.key}>
               <tr>
-                <td colSpan={5} className="border-t border-border px-4 pt-2.5 pb-1 text-xs">
-                  <span className="font-semibold">{group.group}</span>
-                  {group.detail ? (
-                    <span className="ml-2 text-muted-foreground">{group.detail}</span>
-                  ) : null}
+                <td
+                  colSpan={4}
+                  className="border-t border-border px-4 pt-2.5 pb-1 text-xs font-semibold"
+                >
+                  {app.name}
                 </td>
               </tr>
-              {group.rows.map((row) => (
+              {app.rows.map((row) => (
                 <tr
-                  key={row.target.id}
+                  key={row.key}
                   className={cn(
-                    "border-t border-border/50",
-                    (row.check.tone === "error" || row.check.tone === "warning") && "bg-warning/8",
+                    "border-t border-border/50 align-top",
+                    (row.tone === "error" || row.tone === "warning") && "bg-warning/8",
                   )}
                 >
-                  <td className="px-4 py-1.5 whitespace-nowrap">{row.target.name}</td>
-                  <td className="max-w-64 px-2 py-1.5">
-                    <BinaryCell binary={row.binary} version={props.version} />
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <PlatformIcon platform={row.platform} className="text-muted-foreground" />
+                      <div className="min-w-0">
+                        <div className="whitespace-nowrap">{row.name}</div>
+                        {row.detail ? (
+                          <div className="text-xs text-muted-foreground">{row.detail}</div>
+                        ) : null}
+                      </div>
+                    </div>
                   </td>
-                  <td className="px-2 py-1.5 font-mono text-xs">
-                    {row.ota?.update.runtime ?? row.binary?.runtime ?? EMPTY}
+                  <td className="max-w-56 px-2 py-2">
+                    <StoreCell binary={row.store} version={props.version} now={props.now} />
                   </td>
-                  <td className="px-2 py-1.5">
-                    <OtaCell row={row} />
+                  <td className="max-w-64 px-2 py-2">
+                    <OtaCell row={row} version={props.version} />
                   </td>
-                  <td className={cn("px-4 py-1.5 whitespace-nowrap", TONE_TEXT[row.check.tone])}>
-                    {row.check.label}
+                  <td className="max-w-56 px-4 py-2">
+                    <StoreCell binary={row.testers} version={props.version} now={props.now} />
                   </td>
                 </tr>
               ))}

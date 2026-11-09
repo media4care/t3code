@@ -280,9 +280,11 @@ use different files, dependencies, and target environments.
 
 ## Releases
 
-Open **Releases** and choose a project to see where each release is: approvals
-waiting in its pipeline, store tracks and rollout percentages, OTA channels, and
-the version deployed to each environment. On mobile, Releases is in the
+Open **Releases** and choose a project to see what each app has right now: per
+iOS and Android build, the store version and rollout, the OTA update on top of
+it, and the tester build, plus approvals waiting in its pipeline and the version
+deployed to each environment. Pick a release to highlight it and see which
+builds carry it. On mobile, Releases is in the
 navigation overflow. Web and desktop also offer **Open Releases** in the command
 palette and the configurable `releases.open` keyboard command.
 
@@ -301,8 +303,9 @@ prints a release status document as JSON on stdout:
 The document format is `ReleaseStatusDocument` in
 [`packages/contracts/src/releases.ts`](../../packages/contracts/src/releases.ts):
 releases per environment, pipeline gates, targets with their store binaries and
-OTA channel, and deployed services. A source the command cannot read goes in
-`sources` with its error, so the rest still shows.
+OTA channel, and deployed services. Set a binary's `store` (`app-store`,
+`testflight`, `play`, `firebase` or `direct`) to show its store icon. A source the
+command cannot read goes in `sources` with its error, so the rest still shows.
 
 The command runs in the project root (or `cwd`) on the environment, with the
 same shell as QA suites, so it can read credentials from files there. You can
@@ -315,10 +318,13 @@ Releases is open, T3 Code runs it again once the last result is older than
 the page keeps the last status and shows the error.
 
 **Waiting on you** lists pipeline approvals, failed steps, builds left on an
-internal or testing track, paused store rollouts, and OTA updates whose runtime
-no public build has. An OTA update only reaches installs of a binary with the
+internal or testing track, paused store rollouts, and live OTA updates of the
+current prod release whose runtime no public build has. An OTA update only reaches installs of a binary with the
 same runtime, so an update live at 100% on a runtime that is only in TestFlight
-reaches testers only. Releases is read-only: approve, promote, or roll back in
+reaches testers only. Each live OTA update says who it reaches: **Reaches
+users**, **Testers only**, **Reaches no one**, **Store build is newer** when
+the public store build already supersedes it, or **Reach unknown** when no build
+reports its runtime. Releases is read-only: approve, promote, or roll back in
 your pipeline, store console, or release tooling. Agents can read the same
 status with the `t3_releases` tool.
 

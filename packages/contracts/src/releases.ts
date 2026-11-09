@@ -133,6 +133,7 @@ export type ReleaseOtaUpdate = typeof ReleaseOtaUpdate.Type;
 export const ReleaseTarget = Schema.Struct({
   id: ShortText,
   group: ShortText,
+  /** Parts joined by " · "; targets sharing binaries merge and keep the parts that differ. */
   detail: Schema.optionalKey(ShortText),
   name: ShortText,
   platform: Schema.optionalKey(Schema.Literals(["android", "ios", "web"])),

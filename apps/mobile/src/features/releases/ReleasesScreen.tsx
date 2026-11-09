@@ -2,20 +2,40 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { Linking, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { EnvironmentId, ProjectId, ReleaseStatusDocument } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ReleaseBinary,
+  ReleaseStatusDocument,
+  ReleaseStore,
+} from "@t3tools/contracts";
 import {
   currentReleases,
   defaultReleaseVersion,
   releaseAge,
-  releaseSourcesLabel,
+  releaseApps,
   releaseAttention,
   releaseGates,
-  releaseTargetGroups,
+  releasePlatformSummaries,
+  releasePresence,
+  releasePresenceLabel,
+  RELEASE_REACH,
   RELEASES_CONFIGURATION_EXAMPLE,
-  type ReleaseTargetRow,
+  type ReleaseAppRow,
   type ReleaseTone,
 } from "@t3tools/client-runtime/releases";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import IconBrandAndroid from "@tabler/icons-react-native/IconBrandAndroid";
+import IconBrandApple from "@tabler/icons-react-native/IconBrandApple";
+import IconBrandAppstore from "@tabler/icons-react-native/IconBrandAppstore";
+import IconBrandFirebase from "@tabler/icons-react-native/IconBrandFirebase";
+import IconBrandGooglePlay from "@tabler/icons-react-native/IconBrandGooglePlay";
+import IconCloudDownload from "@tabler/icons-react-native/IconCloudDownload";
+import IconDeviceMobile from "@tabler/icons-react-native/IconDeviceMobile";
+import IconPropeller from "@tabler/icons-react-native/IconPropeller";
+import IconWorld from "@tabler/icons-react-native/IconWorld";
+import type { Icon } from "@tabler/icons-react-native/types";
+import { useResolveClassNames } from "uniwind";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -177,7 +197,6 @@ function ProjectReleases(props: {
         <Text className="text-sm text-foreground-muted">
           {props.environmentLabel}
           {connected ? "" : " · Offline"}
-          {document && document.sources.length > 0 ? ` · ${releaseSourcesLabel(document)}` : ""}
           {updated ? ` · updated ${updated} ago` : ""}
         </Text>
       </View>
@@ -247,19 +266,121 @@ function Card(props: { children: ReactNode; onPress?: (() => void) | undefined }
   );
 }
 
-function binaryLine(row: ReleaseTargetRow, version: string) {
-  const binary = row.binary;
-  if (!binary) return "No build";
-  const percent =
-    binary.audience === "public" ? ` ${binary.rollout?.percent ?? 100}%` : " · not public";
-  return `${binary.label}${binary.version !== version ? ` ${binary.version}` : ""}${percent}`;
+const PLATFORM_ICON: Record<NonNullable<ReleaseAppRow["platform"]>, Icon> = {
+  ios: IconBrandApple,
+  android: IconBrandAndroid,
+  web: IconWorld,
+};
+const PLATFORM_LABEL = { ios: "iOS", android: "Android", web: "Web" } as const;
+const STORE_ICON: Record<ReleaseStore, { icon: Icon; color?: string }> = {
+  "app-store": { icon: IconBrandAppstore, color: "#0D84FF" },
+  testflight: { icon: IconPropeller, color: "#1A9CF0" },
+  play: { icon: IconBrandGooglePlay, color: "#01A66F" },
+  firebase: { icon: IconBrandFirebase, color: "#F59E0B" },
+  direct: { icon: IconCloudDownload },
+};
+
+function PlatformIcon(props: { platform: ReleaseAppRow["platform"] }) {
+  const { color } = useResolveClassNames("text-foreground-muted");
+  const PlatformGlyph = props.platform ? PLATFORM_ICON[props.platform] : IconDeviceMobile;
+  return <PlatformGlyph size={18} color={color} strokeWidth={1.8} />;
 }
 
-function otaLine(row: ReleaseTargetRow) {
-  if (!row.ota) return "No OTA update";
-  if (row.ota.state === "preview") return `OTA preview · ${row.ota.update.runtime}`;
-  const other = row.ota.state === "other" ? ` (${row.ota.update.version})` : "";
-  return `OTA ${row.ota.update.percent}%${other} · ${row.ota.update.runtime}`;
+function StoreIcon(props: { binary: ReleaseBinary | undefined }) {
+  const { color: muted } = useResolveClassNames("text-foreground-muted");
+  const store = props.binary?.store ? STORE_ICON[props.binary.store] : null;
+  if (!store) return null;
+  const StoreGlyph = store.icon;
+  return <StoreGlyph size={14} color={store.color ?? muted} strokeWidth={2} />;
+}
+
+function binaryDetail(binary: ReleaseBinary, now: number) {
+  const rollout = binary.rollout;
+  const percent =
+    binary.audience !== "public"
+      ? binary.build
+      : !rollout || rollout.state === "completed"
+        ? `${rollout?.percent ?? 100}%`
+        : rollout.state === "active"
+          ? `staged ${rollout.percent}%`
+          : `${rollout.state} ${rollout.percent}%`;
+  const age = releaseAge(binary.updatedAt, now);
+  return [binary.label, percent, age].filter(Boolean).join(" · ");
+}
+
+function versionClass(version: string, selected: string) {
+  return version === selected
+    ? "font-mono text-sm font-t3-semibold text-primary"
+    : "font-mono text-sm font-t3-semibold";
+}
+
+function BinaryLine(props: {
+  title: string;
+  binary: ReleaseBinary | null;
+  version: string;
+  now: number;
+}) {
+  const binary = props.binary;
+  return (
+    <Pressable
+      disabled={!binary?.url}
+      onPress={() => open(binary?.url)}
+      className="flex-row items-center gap-2"
+    >
+      <Text className="w-16 text-xs text-foreground-muted">{props.title}</Text>
+      {binary ? (
+        <>
+          <StoreIcon binary={binary} />
+          <Text className={versionClass(binary.version, props.version)}>{binary.version}</Text>
+          <Text numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+            {binaryDetail(binary, props.now)}
+          </Text>
+        </>
+      ) : (
+        <Text className="text-xs text-foreground-muted">–</Text>
+      )}
+    </Pressable>
+  );
+}
+
+function OtaLines(props: { row: ReleaseAppRow; version: string }) {
+  if (props.row.ota.length === 0)
+    return (
+      <View className="flex-row items-center gap-2">
+        <Text className="w-16 text-xs text-foreground-muted">OTA</Text>
+        <Text className="text-xs text-foreground-muted">
+          {props.row.hasOtaChannel ? "No live update" : "–"}
+        </Text>
+      </View>
+    );
+  return props.row.ota.map((lane) => {
+    const reach = lane.reach ? RELEASE_REACH[lane.reach] : null;
+    return (
+      <Pressable
+        key={lane.key}
+        disabled={!lane.live?.url}
+        onPress={() => open(lane.live?.url)}
+        className="flex-row items-center gap-2"
+      >
+        <Text className="w-16 text-xs text-foreground-muted">OTA</Text>
+        {lane.live ? (
+          <Text className={versionClass(lane.live.version, props.version)}>
+            {lane.live.version}
+          </Text>
+        ) : null}
+        <Text numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+          {[
+            lane.label,
+            lane.live ? `${lane.live.percent}%` : null,
+            lane.preview ? `preview ${lane.preview.version}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </Text>
+        {reach ? <Text className={`text-xs ${TONE_TEXT[reach.tone]}`}>{reach.label}</Text> : null}
+      </Pressable>
+    );
+  });
 }
 
 function ReleaseDetails(props: {
@@ -269,11 +390,37 @@ function ReleaseDetails(props: {
   onVersion: (version: string) => void;
 }) {
   const { document, version, now } = props;
-  const attention = releaseAttention(document);
+  const apps = releaseApps(document);
+  const attention = releaseAttention(document, apps);
   const gates = releaseGates(document, version);
-  const targetGroups = releaseTargetGroups(document, version);
   return (
     <>
+      {document.sources.length ? (
+        <View className="flex-row flex-wrap gap-1.5">
+          {document.sources.map((source) => (
+            <View
+              key={source.id}
+              className={
+                source.status === "ok"
+                  ? "flex-row items-center gap-1.5 rounded-full border border-border-subtle px-2 py-0.5"
+                  : "flex-row items-center gap-1.5 rounded-full border border-dashed border-border-subtle px-2 py-0.5"
+              }
+            >
+              <View
+                className={`size-1.5 rounded-full ${source.status === "ok" ? "bg-green-500" : source.status === "error" ? "bg-danger-foreground" : "bg-foreground-muted"}`}
+              />
+              <Text className={`text-xs ${source.status === "ok" ? "" : "text-foreground-muted"}`}>
+                {source.name}
+                {source.status === "error"
+                  ? " failed"
+                  : source.status === "unconfigured"
+                    ? " · not set up"
+                    : ""}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View className="flex-row gap-2">
           {document.releases.map((release) => (
@@ -303,6 +450,45 @@ function ReleaseDetails(props: {
           ? ` · ${document.unreleased.commits} commits since ${document.unreleased.since}`
           : ""}
       </Text>
+      {apps.length ? (
+        <View className="gap-2">
+          <Text className="text-sm">
+            {releasePresenceLabel(version, releasePresence(apps, version))}
+          </Text>
+          {releasePlatformSummaries(apps).map((summary) => (
+            <Card key={summary.platform}>
+              <View className="flex-row items-center gap-2">
+                <PlatformIcon platform={summary.platform} />
+                <Text className="font-t3-semibold">{PLATFORM_LABEL[summary.platform]}</Text>
+              </View>
+              {(
+                [
+                  ["Store", summary.store, summary.store[0]],
+                  ["OTA", summary.ota, undefined],
+                  ["Testers", summary.testers, summary.testers[0]],
+                ] as const
+              ).map(([title, items, first]) => (
+                <View key={title} className="flex-row flex-wrap items-center gap-2">
+                  <Text className="w-16 text-xs text-foreground-muted">{title}</Text>
+                  <StoreIcon binary={first} />
+                  {items.length === 0 ? (
+                    <Text className="text-xs text-foreground-muted">–</Text>
+                  ) : (
+                    items.slice(0, 3).map((item) => (
+                      <Text key={item.version} className={versionClass(item.version, version)}>
+                        {item.version}
+                      </Text>
+                    ))
+                  )}
+                  {items.length > 3 ? (
+                    <Text className="text-xs text-foreground-muted">+{items.length - 3}</Text>
+                  ) : null}
+                </View>
+              ))}
+            </Card>
+          ))}
+        </View>
+      ) : null}
       {attention.length ? (
         <View className="gap-2">
           <Text className="text-lg font-t3-semibold">Waiting on you · {attention.length}</Text>
@@ -347,29 +533,34 @@ function ReleaseDetails(props: {
           ))}
         </View>
       ) : null}
-      {targetGroups.length ? (
+      {apps.length ? (
         <View className="gap-2">
-          <Text className="text-lg font-t3-semibold">Where {version} is</Text>
-          {targetGroups.map((group) => (
-            <View key={group.key} className="gap-2">
-              <Text className="text-sm font-t3-semibold">
-                {group.group}
-                {group.detail ? ` · ${group.detail}` : ""}
-              </Text>
-              {group.rows.map((row) => (
-                <Card
-                  key={row.target.id}
-                  onPress={row.binary?.url ? () => open(row.binary?.url) : undefined}
+          <Text className="text-lg font-t3-semibold">Apps</Text>
+          {apps.map((app) => (
+            <View key={app.key} className="gap-2">
+              <Text className="text-sm font-t3-semibold">{app.name}</Text>
+              {app.rows.map((row) => (
+                <View
+                  key={row.key}
+                  className={
+                    row.tone === "error" || row.tone === "warning"
+                      ? "gap-1.5 rounded-xl border border-warning-border bg-card p-3"
+                      : "gap-1.5 rounded-xl border border-border-subtle bg-card p-3"
+                  }
                 >
-                  <View className="flex-row items-center justify-between gap-2">
-                    <Text className="flex-1 font-t3-semibold">{row.target.name}</Text>
-                    <Text className={`text-sm ${TONE_TEXT[row.check.tone]}`}>
-                      {row.check.label}
+                  <View className="flex-row items-center gap-2">
+                    <PlatformIcon platform={row.platform} />
+                    <Text className="flex-1 font-t3-semibold">
+                      {row.name}
+                      {row.detail ? (
+                        <Text className="text-sm text-foreground-muted"> · {row.detail}</Text>
+                      ) : null}
                     </Text>
                   </View>
-                  <Text className="text-sm text-foreground-muted">{binaryLine(row, version)}</Text>
-                  <Text className="text-sm text-foreground-muted">{otaLine(row)}</Text>
-                </Card>
+                  <BinaryLine title="Store" binary={row.store} version={version} now={now} />
+                  <OtaLines row={row} version={version} />
+                  <BinaryLine title="Testers" binary={row.testers} version={version} now={now} />
+                </View>
               ))}
             </View>
           ))}

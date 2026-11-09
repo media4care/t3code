@@ -10,27 +10,70 @@ import type {
 
 export type ReleaseTone = "ok" | "info" | "warning" | "error" | "muted";
 
-export interface ReleaseCheck {
-  readonly tone: ReleaseTone;
-  readonly label: string;
-}
+/**
+ * Who a live OTA update reaches, judged by the runtimes binaries report.
+ * `superseded` means the public store build is newer than the update.
+ */
+export type ReleaseReach = "users" | "testers" | "no-one" | "superseded" | "unknown";
 
-export interface ReleaseTargetRow {
-  readonly target: ReleaseTarget;
-  /** The release's binary, or the public one an OTA of this release reaches. */
-  readonly binary: ReleaseBinary | null;
-  readonly ota: {
-    readonly state: "live" | "preview" | "other";
-    readonly update: ReleaseOtaUpdate;
-  } | null;
-  readonly check: ReleaseCheck;
-}
+export const RELEASE_REACH: Record<
+  ReleaseReach,
+  { readonly label: string; readonly tone: ReleaseTone }
+> = {
+  users: { label: "Reaches users", tone: "ok" },
+  testers: { label: "Testers only", tone: "error" },
+  "no-one": { label: "Reaches no one", tone: "error" },
+  superseded: { label: "Store build is newer", tone: "muted" },
+  unknown: { label: "Reach unknown", tone: "muted" },
+};
 
-export interface ReleaseTargetGroup {
+export interface ReleaseOtaLane {
+  /** The target the lane comes from; merged targets may share a channel. */
   readonly key: string;
-  readonly group: string;
+  readonly channel: string;
+  /** The audience that tells merged targets apart, such as "Caregiver profiles". */
+  readonly label: string | undefined;
+  readonly live: ReleaseOtaUpdate | undefined;
+  readonly reach: ReleaseReach | undefined;
+  /** A preview update newer than the live one. */
+  readonly preview: ReleaseOtaUpdate | undefined;
+}
+
+/** One installable app on one platform; targets sharing their binaries merge into one row. */
+export interface ReleaseAppRow {
+  readonly key: string;
+  readonly name: string;
   readonly detail: string | undefined;
-  readonly rows: ReadonlyArray<ReleaseTargetRow>;
+  readonly platform: ReleaseTarget["platform"];
+  readonly binaries: ReadonlyArray<ReleaseBinary>;
+  /** What the public installs from the store. */
+  readonly store: ReleaseBinary | null;
+  readonly testers: ReleaseBinary | null;
+  readonly ota: ReadonlyArray<ReleaseOtaLane>;
+  readonly hasOtaChannel: boolean;
+  readonly tone: ReleaseTone;
+}
+
+export interface ReleaseApp {
+  readonly key: string;
+  readonly name: string;
+  readonly rows: ReadonlyArray<ReleaseAppRow>;
+}
+
+export interface ReleasePlatformSummary {
+  readonly platform: NonNullable<ReleaseTarget["platform"]>;
+  /** Distinct versions, the most common first, with the first binary seen for each. */
+  readonly store: ReadonlyArray<ReleaseBinary>;
+  readonly ota: ReadonlyArray<ReleaseOtaUpdate>;
+  readonly testers: ReadonlyArray<ReleaseBinary>;
+}
+
+export interface ReleasePresence {
+  readonly rows: number;
+  readonly total: number;
+  readonly store: number;
+  readonly testers: number;
+  readonly ota: number;
 }
 
 export interface ReleaseAttention {
@@ -45,6 +88,7 @@ export interface ReleaseAttention {
 
 const AUDIENCE_RANK: Record<ReleaseAudience, number> = { public: 0, testers: 1, internal: 2 };
 const TONE_RANK: Record<ReleaseTone, number> = { error: 0, warning: 1, info: 2, muted: 3, ok: 4 };
+const PLATFORMS = ["ios", "android", "web"] as const;
 
 /** The newest version of each environment, in the order the document lists them. */
 export function currentReleases(document: ReleaseStatusDocument): ReadonlyArray<ReleaseVersion> {
@@ -64,94 +108,174 @@ export function defaultReleaseVersion(document: ReleaseStatusDocument): string |
   );
 }
 
-const reaches = (binary: ReleaseBinary, runtime: string) =>
-  binary.audience === "public" && binary.runtime === runtime && binary.rollout?.state !== "draft";
+const installable = (binary: ReleaseBinary) =>
+  binary.audience === "public" && binary.rollout?.state !== "draft";
 
-const target = (row: ReleaseTargetRow) =>
-  [row.target.group, row.target.name].filter(Boolean).join(" ");
-
-function checkRow(row: Omit<ReleaseTargetRow, "check">, version: string): ReleaseCheck {
-  const checks: ReleaseCheck[] = [];
-  const { binaries } = row.target;
-  if (row.ota?.state === "live" && row.ota.update.version === version) {
-    const runtime = row.ota.update.runtime;
-    if (binaries.some((binary) => reaches(binary, runtime)))
-      checks.push({ tone: "ok", label: "Runtimes match" });
-    else if (binaries.some((binary) => binary.runtime === runtime))
-      checks.push({ tone: "error", label: "Reaches testers only" });
-    else if (binaries.some((binary) => binary.runtime))
-      checks.push({ tone: "error", label: "No build has this runtime" });
-    else checks.push({ tone: "muted", label: "Runtime unknown" });
+/** Compares the leading numeric parts of two versions; null when either has none. */
+function compareVersions(a: string, b: string): number | null {
+  const parts = (version: string) =>
+    /^v?(\d+(?:\.\d+)*)/.exec(version)?.[1]?.split(".").map(Number);
+  const left = parts(a);
+  const right = parts(b);
+  if (!left || !right) return null;
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
   }
-  const binary = row.binary;
-  if (binary?.version === version && binary.audience !== "public")
-    checks.push({ tone: "warning", label: "Binary not promoted" });
-  if (binary?.version === version && binary.rollout?.state === "draft")
-    checks.push({ tone: "info", label: "Store release pending" });
-  if (binary?.rollout?.state === "paused" || binary?.rollout?.state === "halted")
-    checks.push({ tone: "info", label: `Store rollout ${binary.rollout.state}` });
-  if (checks.length === 0) {
-    if (row.ota?.state === "preview") checks.push({ tone: "muted", label: "Preview only" });
-    else if (binary?.version === version) checks.push({ tone: "ok", label: "Released" });
-    else checks.push({ tone: "muted", label: "Not in this release" });
-  }
-  return checks.sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone])[0]!;
+  return 0;
 }
 
-export function releaseTargetRow(releaseTarget: ReleaseTarget, version: string): ReleaseTargetRow {
-  const { live, preview } = releaseTarget.ota ?? {};
-  const ota =
-    live?.version === version
-      ? { state: "live" as const, update: live }
-      : preview?.version === version
-        ? { state: "preview" as const, update: preview }
-        : live
-          ? { state: "other" as const, update: live }
-          : null;
-  const own = releaseTarget.binaries
-    .filter((binary) => binary.version === version)
-    .sort((a, b) => AUDIENCE_RANK[a.audience] - AUDIENCE_RANK[b.audience])[0];
-  const reached =
-    ota && ota.state !== "other"
-      ? releaseTarget.binaries.find((binary) => reaches(binary, ota.update.runtime))
-      : undefined;
-  const row = { target: releaseTarget, binary: own ?? reached ?? null, ota };
-  return { ...row, check: checkRow(row, version) };
+function reachOf(
+  binaries: ReadonlyArray<ReleaseBinary>,
+  store: ReleaseBinary | null,
+  update: ReleaseOtaUpdate,
+): ReleaseReach {
+  if (binaries.some((binary) => installable(binary) && binary.runtime === update.runtime))
+    return "users";
+  if (store && (compareVersions(store.version, update.version) ?? 0) > 0) return "superseded";
+  if (binaries.some((binary) => binary.runtime === update.runtime)) return "testers";
+  if (binaries.some((binary) => binary.runtime)) return "no-one";
+  return "unknown";
 }
 
-export function releaseTargetGroups(
-  document: ReleaseStatusDocument,
-  version: string,
-): ReadonlyArray<ReleaseTargetGroup> {
-  const groups = new Map<string, ReleaseTargetGroup & { rows: ReleaseTargetRow[] }>();
-  for (const releaseTarget of document.targets) {
-    if (releaseTarget.binaries.length === 0 && !releaseTarget.ota) continue;
-    const key = `${releaseTarget.group}\u0000${releaseTarget.detail ?? ""}`;
-    const group = groups.get(key) ?? {
-      key,
-      group: releaseTarget.group,
-      detail: releaseTarget.detail,
-      rows: [],
-    };
-    group.rows.push(releaseTargetRow(releaseTarget, version));
-    groups.set(key, group);
+const segments = (detail: string | undefined) => detail?.split(" · ") ?? [];
+
+function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
+  const first = targets[0]!;
+  const binaries = first.binaries;
+  const shared = segments(first.detail).filter((segment) =>
+    targets.every((target) => segments(target.detail).includes(segment)),
+  );
+  const store = binaries.find(installable) ?? null;
+  const ota = targets.flatMap((target): ReleaseOtaLane[] => {
+    const { channel, live, preview } = target.ota ?? {};
+    if (!channel || (!live && !preview)) return [];
+    const label =
+      targets.length > 1
+        ? segments(target.detail)
+            .filter((segment) => !shared.includes(segment))
+            .join(" · ") || undefined
+        : undefined;
+    return [
+      {
+        key: target.id,
+        channel,
+        label,
+        live,
+        reach: live ? reachOf(binaries, store, live) : undefined,
+        preview: preview && preview.version !== live?.version ? preview : undefined,
+      },
+    ];
+  });
+  const tones: ReleaseTone[] = ota.map((lane) =>
+    lane.reach ? RELEASE_REACH[lane.reach].tone : "muted",
+  );
+  if (store?.rollout?.state === "paused" || store?.rollout?.state === "halted")
+    tones.push("warning");
+  return {
+    key: targets.map((target) => target.id).join("+"),
+    name: first.name,
+    detail: shared.join(" · ") || undefined,
+    platform: first.platform,
+    binaries,
+    store,
+    testers: binaries.find((binary) => binary.audience !== "public") ?? null,
+    ota,
+    hasOtaChannel: targets.some((target) => target.ota),
+    tone: tones.sort((a, b) => TONE_RANK[a] - TONE_RANK[b])[0] ?? "ok",
+  };
+}
+
+/** Apps by group, one row per platform build; audiences that share binaries share a row. */
+export function releaseApps(document: ReleaseStatusDocument): ReadonlyArray<ReleaseApp> {
+  const apps = new Map<string, Map<string, ReleaseTarget[]>>();
+  for (const target of document.targets) {
+    if (target.binaries.length === 0 && !target.ota) continue;
+    const rows = apps.get(target.group) ?? new Map<string, ReleaseTarget[]>();
+    // No binaries means the store was not read, not that targets share one.
+    const key = target.binaries.length
+      ? JSON.stringify([target.name, target.platform, target.binaries])
+      : target.id;
+    rows.set(key, [...(rows.get(key) ?? []), target]);
+    apps.set(target.group, rows);
   }
-  return [...groups.values()];
+  return [...apps].map(([name, rows]) => ({
+    key: name,
+    name,
+    rows: [...rows.values()].map(appRow),
+  }));
 }
 
-/** Which sources fed the document, e.g. "Git, EAS Update · Google Play failed · CircleCI not set up". */
-export function releaseSourcesLabel(document: ReleaseStatusDocument): string {
-  const named = (status: ReleaseStatusDocument["sources"][number]["status"]) =>
-    document.sources
-      .filter((source) => source.status === status)
-      .map((source) => source.name)
-      .join(", ");
-  const ok = named("ok");
-  const failed = named("error");
-  const unconfigured = named("unconfigured");
-  return [ok, failed && `${failed} failed`, unconfigured && `${unconfigured} not set up`]
-    .filter(Boolean)
-    .join(" · ");
+function byFrequency<Item>(items: ReadonlyArray<Item>, version: (item: Item) => string) {
+  const counts = new Map<string, { item: Item; count: number }>();
+  for (const item of items) {
+    const entry = counts.get(version(item));
+    if (entry) entry.count++;
+    else counts.set(version(item), { item, count: 1 });
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count).map((entry) => entry.item);
+}
+
+/** What each platform's users and testers have right now. */
+export function releasePlatformSummaries(
+  apps: ReadonlyArray<ReleaseApp>,
+): ReadonlyArray<ReleasePlatformSummary> {
+  const rows = apps.flatMap((app) => app.rows);
+  return PLATFORMS.flatMap((platform) => {
+    const own = rows.filter((row) => row.platform === platform);
+    if (own.length === 0) return [];
+    return [
+      {
+        platform,
+        store: byFrequency(
+          own.flatMap((row) => (row.store ? [row.store] : [])),
+          (binary) => binary.version,
+        ),
+        ota: byFrequency(
+          own.flatMap((row) => row.ota.flatMap((lane) => (lane.live ? [lane.live] : []))),
+          (update) => update.version,
+        ),
+        testers: byFrequency(
+          own.flatMap((row) => (row.testers ? [row.testers] : [])),
+          (binary) => binary.version,
+        ),
+      },
+    ];
+  });
+}
+
+/** How many app rows carry a version, and through which channel. */
+export function releasePresence(apps: ReadonlyArray<ReleaseApp>, version: string): ReleasePresence {
+  const presence = { rows: 0, total: 0, store: 0, testers: 0, ota: 0 };
+  for (const row of apps.flatMap((app) => app.rows)) {
+    const store = row.binaries.some((binary) => installable(binary) && binary.version === version);
+    const testers = row.binaries.some(
+      (binary) => binary.audience !== "public" && binary.version === version,
+    );
+    const ota = row.ota.some((lane) => lane.live?.version === version);
+    presence.total++;
+    if (store) presence.store++;
+    if (testers) presence.testers++;
+    if (ota) presence.ota++;
+    if (store || testers || ota) presence.rows++;
+  }
+  return presence;
+}
+
+/** "2.0.0 is not in any app yet." or "2.0.0 is in 3 of 13 builds: OTA 2, store 1." */
+export function releasePresenceLabel(version: string, presence: ReleasePresence): string {
+  if (presence.rows === 0) return `${version} is not in any app yet.`;
+  const channels = (
+    [
+      ["OTA", presence.ota],
+      ["store", presence.store],
+      ["testers", presence.testers],
+    ] as const
+  )
+    .filter(([, count]) => count > 0)
+    .map(([channel, count]) => `${channel} ${count}`)
+    .join(", ");
+  return `${version} is in ${presence.rows} of ${presence.total} builds: ${channels}.`;
 }
 
 export function releaseGates(
@@ -162,7 +286,10 @@ export function releaseGates(
 }
 
 /** Work that waits on a person, newest releases only, most severe first. */
-export function releaseAttention(document: ReleaseStatusDocument): ReadonlyArray<ReleaseAttention> {
+export function releaseAttention(
+  document: ReleaseStatusDocument,
+  apps: ReadonlyArray<ReleaseApp> = releaseApps(document),
+): ReadonlyArray<ReleaseAttention> {
   const items: ReleaseAttention[] = [];
   const current = new Set(currentReleases(document).map((release) => release.version));
   for (const gate of document.gates) {
@@ -190,31 +317,43 @@ export function releaseAttention(document: ReleaseStatusDocument): ReadonlyArray
       });
   }
   const prod = document.releases.find((release) => release.environment === "prod")?.version;
-  if (prod)
-    for (const releaseTarget of document.targets) {
-      const row = releaseTargetRow(releaseTarget, prod);
-      if (row.check.tone !== "error" && row.check.tone !== "warning" && row.check.tone !== "info")
-        continue;
-      const binary = row.binary;
-      const update = row.ota?.update;
-      const detail =
-        row.check.tone === "error" && update
-          ? `${target(row)}: live at ${update.percent}% on runtime ${update.runtime}`
-          : binary
-            ? `${target(row)} · ${binary.version}${binary.build ? ` (${binary.build})` : ""} on ${binary.label}`
-            : target(row);
-      items.push({
-        id: `target:${releaseTarget.id}`,
-        tone: row.check.tone,
-        title:
-          row.check.label === "Binary not promoted"
-            ? "Build uploaded, not promoted"
-            : row.check.label,
-        detail,
-        source: "Stores",
-        since: binary?.updatedAt,
-        url: binary?.url ?? update?.url,
-      });
+  for (const app of apps)
+    for (const row of app.rows) {
+      const name = `${app.name} ${row.name}`;
+      for (const lane of row.ota)
+        if (
+          lane.live &&
+          lane.live.version === prod &&
+          (lane.reach === "testers" || lane.reach === "no-one")
+        )
+          items.push({
+            id: `ota:${lane.key}`,
+            tone: "error",
+            title: `OTA update ${lane.reach === "testers" ? "reaches testers only" : "reaches no one"}`,
+            detail: `${name}${lane.label ? ` (${lane.label})` : ""}: ${lane.live.version} live at ${lane.live.percent}% on runtime ${lane.live.runtime}`,
+            source: "OTA",
+            since: lane.live.publishedAt,
+            url: lane.live.url,
+          });
+      const storeItem = (binary: ReleaseBinary, tone: ReleaseAttention["tone"], title: string) =>
+        items.push({
+          id: `store:${row.key}:${title}`,
+          tone,
+          title,
+          detail: `${name} · ${binary.version}${binary.build ? ` (${binary.build})` : ""} on ${binary.label}`,
+          source: "Stores",
+          since: binary.updatedAt,
+          url: binary.url,
+        });
+      const own = row.binaries
+        .filter((binary) => binary.version === prod)
+        .sort((a, b) => AUDIENCE_RANK[a.audience] - AUDIENCE_RANK[b.audience])[0];
+      if (own && own.audience !== "public")
+        storeItem(own, "warning", "Build uploaded, not promoted");
+      if (own?.rollout?.state === "draft") storeItem(own, "info", "Store release pending");
+      const rollout = row.store?.rollout?.state;
+      if (row.store && (rollout === "paused" || rollout === "halted"))
+        storeItem(row.store, "info", `Store rollout ${rollout}`);
     }
   for (const service of document.services)
     for (const deployment of service.deployments) {
