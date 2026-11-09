@@ -376,7 +376,11 @@ function OtaLines(props: { row: ReleaseAppRow; version: string }) {
             {lane.live.version}
           </Text>
         ) : null}
-        <Text numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+        <Text
+          numberOfLines={1}
+          ellipsizeMode="middle"
+          className="flex-1 text-xs text-foreground-muted"
+        >
           {[
             lane.label,
             lane.live ? `${lane.live.percent}%` : null,
