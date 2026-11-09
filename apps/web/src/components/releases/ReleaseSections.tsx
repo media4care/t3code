@@ -15,7 +15,7 @@ import {
   type ReleaseTone,
 } from "@t3tools/client-runtime/releases";
 import { CloudDownloadIcon, ExternalLinkIcon, GlobeIcon, SmartphoneIcon } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { Fragment, type ComponentType, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -248,55 +248,58 @@ function OtaCell(props: { row: ReleaseAppRow; version: string }) {
         {row.hasOtaChannel ? "No live update" : EMPTY}
       </span>
     );
+  const labelled = row.ota.some((lane) => lane.label);
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div
+      className={cn(
+        "grid min-w-0 items-center gap-x-2 gap-y-1",
+        labelled ? "grid-cols-[max-content_minmax(0,1fr)]" : "grid-cols-1",
+      )}
+    >
       {row.ota.map((lane) => {
-        const reach = lane.reach ? RELEASE_REACH[lane.reach] : null;
+        // Unknown reach is said once under the table, not on every line.
+        const reach = lane.reach && lane.reach !== "unknown" ? RELEASE_REACH[lane.reach] : null;
         return (
-          <div key={lane.key} className="min-w-0">
-            {lane.live ? (
-              <div className="flex items-center gap-1.5 whitespace-nowrap">
-                <ExternalLink href={lane.live.url}>
-                  <Version version={lane.live.version} selected={props.version} />
-                </ExternalLink>
-                {reach ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={<span className={cn("text-xs", TONE_TEXT[reach.tone])} />}
-                    >
-                      {reach.label}
-                    </TooltipTrigger>
-                    <TooltipPopup>
-                      Runtime <span className="font-mono">{lane.live.runtime}</span>
-                    </TooltipPopup>
-                  </Tooltip>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="mt-0.5 flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
-              {lane.live ? (
-                <RolloutBar
-                  percent={lane.live.percent}
-                  tone={
-                    reach?.tone === "error"
-                      ? "bg-warning"
-                      : lane.live.percent === 100
-                        ? "bg-success"
-                        : "bg-info"
-                  }
-                />
-              ) : null}
-              <span className="truncate">
-                {[
-                  lane.label,
-                  lane.live ? `${lane.live.percent}%` : null,
-                  lane.preview ? `preview ${lane.preview.version}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+          <Fragment key={lane.key}>
+            {labelled ? (
+              <span className="text-xs whitespace-nowrap text-muted-foreground">
+                {lane.label ?? EMPTY}
               </span>
+            ) : null}
+            <div className="flex min-w-0 items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+              {lane.live ? (
+                <>
+                  <ExternalLink href={lane.live.url}>
+                    <Version version={lane.live.version} selected={props.version} />
+                  </ExternalLink>
+                  <RolloutBar
+                    percent={lane.live.percent}
+                    tone={
+                      reach?.tone === "error"
+                        ? "bg-warning"
+                        : lane.live.percent === 100
+                          ? "bg-success"
+                          : "bg-info"
+                    }
+                  />
+                  <span>{lane.live.percent}%</span>
+                </>
+              ) : null}
+              {reach && lane.live ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span className={TONE_TEXT[reach.tone]} />}>
+                    {reach.label}
+                  </TooltipTrigger>
+                  <TooltipPopup>
+                    Runtime <span className="font-mono">{lane.live.runtime}</span>
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
+              {lane.preview ? (
+                <span className="truncate">preview {lane.preview.version}</span>
+              ) : null}
             </div>
-          </div>
+          </Fragment>
         );
       })}
     </div>
@@ -406,6 +409,35 @@ export function ReleasePlatformCards(props: {
   );
 }
 
+function AppRow(props: { row: ReleaseAppRow; nested: boolean; version: string; now: number }) {
+  const { row } = props;
+  return (
+    <tr
+      className={cn(
+        "align-top",
+        (row.tone === "error" || row.tone === "warning") && "bg-warning/8",
+      )}
+    >
+      <td className={cn("py-1.5 pr-2", props.nested ? "pl-11" : "pl-8")}>
+        <div className="flex items-center gap-2 whitespace-nowrap">
+          <PlatformIcon platform={row.platform} className="text-muted-foreground" />
+          <span>{row.platform ? PLATFORM[row.platform].label : row.name}</span>
+          {row.detail ? <span className="text-xs text-muted-foreground">{row.detail}</span> : null}
+        </div>
+      </td>
+      <td className="max-w-56 px-2 py-1.5">
+        <StoreCell binary={row.store} version={props.version} now={props.now} />
+      </td>
+      <td className="max-w-80 px-2 py-1.5">
+        <OtaCell row={row} version={props.version} />
+      </td>
+      <td className="max-w-56 px-4 py-1.5">
+        <StoreCell binary={row.testers} version={props.version} now={props.now} />
+      </td>
+    </tr>
+  );
+}
+
 export function ReleaseAppTable(props: {
   apps: ReadonlyArray<ReleaseApp>;
   version: string;
@@ -414,6 +446,7 @@ export function ReleaseAppTable(props: {
   if (props.apps.length === 0) return null;
   const rows = props.apps.flatMap((app) => app.rows);
   const attention = rows.filter((row) => row.tone === "error" || row.tone === "warning").length;
+  const unknownReach = rows.some((row) => row.ota.some((lane) => lane.reach === "unknown"));
   return (
     <Section
       title="Apps"
@@ -430,49 +463,66 @@ export function ReleaseAppTable(props: {
             </tr>
           </thead>
           {props.apps.map((app) => (
-            <tbody key={app.key}>
-              <tr>
-                <td
-                  colSpan={4}
-                  className="border-t border-border px-4 pt-2.5 pb-1 text-xs font-semibold"
-                >
-                  {app.name}
+            <tbody key={app.key} className="border-t border-border first-of-type:border-t-0">
+              <tr className="bg-muted/40">
+                <td colSpan={4} className="px-4 py-2">
+                  <div className="flex items-center gap-2.5">
+                    {app.icon ? (
+                      <img src={app.icon} alt="" className="size-6 shrink-0 rounded-md" />
+                    ) : null}
+                    <span className="font-semibold">{app.name}</span>
+                  </div>
                 </td>
               </tr>
-              {app.rows.map((row) => (
-                <tr
-                  key={row.key}
-                  className={cn(
-                    "border-t border-border/50 align-top",
-                    (row.tone === "error" || row.tone === "warning") && "bg-warning/8",
-                  )}
-                >
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <PlatformIcon platform={row.platform} className="text-muted-foreground" />
-                      <div className="min-w-0">
-                        <div className="whitespace-nowrap">{row.name}</div>
-                        {row.detail ? (
-                          <div className="text-xs text-muted-foreground">{row.detail}</div>
+              {app.builds.map((build) => {
+                const single = build.variants.length === 1;
+                return (
+                  <Fragment key={build.key}>
+                    <tr>
+                      <td colSpan={4} className="px-4 pt-2.5 pb-0.5 text-xs">
+                        <span className="font-semibold">{build.name}</span>
+                        {single && build.variants[0]?.name ? (
+                          <span className="ml-1.5 text-muted-foreground">
+                            {build.variants[0].name}
+                          </span>
                         ) : null}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="max-w-56 px-2 py-2">
-                    <StoreCell binary={row.store} version={props.version} now={props.now} />
-                  </td>
-                  <td className="max-w-64 px-2 py-2">
-                    <OtaCell row={row} version={props.version} />
-                  </td>
-                  <td className="max-w-56 px-4 py-2">
-                    <StoreCell binary={row.testers} version={props.version} now={props.now} />
-                  </td>
-                </tr>
-              ))}
+                      </td>
+                    </tr>
+                    {build.variants.map((variant) => (
+                      <Fragment key={variant.key}>
+                        {single ? null : (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="pt-1.5 pb-0 pl-8 text-xs text-muted-foreground"
+                            >
+                              {variant.name ?? EMPTY}
+                            </td>
+                          </tr>
+                        )}
+                        {variant.rows.map((row) => (
+                          <AppRow
+                            key={row.key}
+                            row={row}
+                            nested={!single}
+                            version={props.version}
+                            now={props.now}
+                          />
+                        ))}
+                      </Fragment>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           ))}
         </table>
       </div>
+      {unknownReach ? (
+        <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+          OTA reach is unknown where it isn't shown: those store builds don't report their runtime.
+        </p>
+      ) : null}
     </Section>
   );
 }

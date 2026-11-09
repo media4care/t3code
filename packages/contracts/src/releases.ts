@@ -138,7 +138,10 @@ export const ReleaseTarget = Schema.Struct({
   group: ShortText,
   /** Parts joined by " · "; targets sharing binaries merge and keep the parts that differ. */
   detail: Schema.optionalKey(ShortText),
+  /** The build within the app, such as "swOnly"; `platform` says which platform. */
   name: ShortText,
+  /** Splits a build's platforms, such as "managed" or "in-app". */
+  variant: Schema.optionalKey(ShortText),
   platform: Schema.optionalKey(Schema.Literals(["android", "ios", "web"])),
   binaries: Schema.Array(ReleaseBinary).check(Schema.isMaxLength(40)),
   ota: Schema.optionalKey(

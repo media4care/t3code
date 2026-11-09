@@ -163,7 +163,7 @@ function ProjectReleases(props: {
       ? version
       : null) ?? (document ? defaultReleaseVersion(document) : null);
   const updated = releaseAge(document?.generatedAt, now);
-  const apps = document ? releaseApps(document) : [];
+  const apps = document ? releaseApps(document, snapshot?.icons) : [];
   const openCredentials = () => {
     void navigate({
       to: "/settings/projects",

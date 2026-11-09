@@ -1,4 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { Image } from "expo-image";
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { Linking, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -244,7 +245,13 @@ function ProjectReleases(props: {
         </Text>
       ) : null}
       {document && selected ? (
-        <ReleaseDetails document={document} version={selected} now={now} onVersion={setVersion} />
+        <ReleaseDetails
+          document={document}
+          icons={snapshot?.icons}
+          version={selected}
+          now={now}
+          onVersion={setVersion}
+        />
       ) : null}
     </ScrollView>
   );
@@ -354,7 +361,8 @@ function OtaLines(props: { row: ReleaseAppRow; version: string }) {
       </View>
     );
   return props.row.ota.map((lane) => {
-    const reach = lane.reach ? RELEASE_REACH[lane.reach] : null;
+    // Unknown reach is said once under the apps, not on every line.
+    const reach = lane.reach && lane.reach !== "unknown" ? RELEASE_REACH[lane.reach] : null;
     return (
       <Pressable
         key={lane.key}
@@ -383,14 +391,41 @@ function OtaLines(props: { row: ReleaseAppRow; version: string }) {
   });
 }
 
+function AppRowCard(props: { row: ReleaseAppRow; version: string; now: number }) {
+  const { row, version, now } = props;
+  return (
+    <View
+      className={
+        row.tone === "error" || row.tone === "warning"
+          ? "gap-1.5 rounded-xl border border-warning-border bg-card p-3"
+          : "gap-1.5 rounded-xl border border-border-subtle bg-card p-3"
+      }
+    >
+      <View className="flex-row items-center gap-2">
+        <PlatformIcon platform={row.platform} />
+        <Text className="flex-1 font-t3-semibold">
+          {row.platform ? PLATFORM_LABEL[row.platform] : row.name}
+          {row.detail ? (
+            <Text className="text-sm text-foreground-muted"> · {row.detail}</Text>
+          ) : null}
+        </Text>
+      </View>
+      <BinaryLine title="Store" binary={row.store} version={version} now={now} />
+      <OtaLines row={row} version={version} />
+      <BinaryLine title="Testers" binary={row.testers} version={version} now={now} />
+    </View>
+  );
+}
+
 function ReleaseDetails(props: {
   document: ReleaseStatusDocument;
+  icons: Readonly<Record<string, string>> | undefined;
   version: string;
   now: number;
   onVersion: (version: string) => void;
 }) {
   const { document, version, now } = props;
-  const apps = releaseApps(document);
+  const apps = releaseApps(document, props.icons);
   const attention = releaseAttention(document, apps);
   const gates = releaseGates(document, version);
   return (
@@ -538,32 +573,53 @@ function ReleaseDetails(props: {
           <Text className="text-lg font-t3-semibold">Apps</Text>
           {apps.map((app) => (
             <View key={app.key} className="gap-2">
-              <Text className="text-sm font-t3-semibold">{app.name}</Text>
-              {app.rows.map((row) => (
-                <View
-                  key={row.key}
-                  className={
-                    row.tone === "error" || row.tone === "warning"
-                      ? "gap-1.5 rounded-xl border border-warning-border bg-card p-3"
-                      : "gap-1.5 rounded-xl border border-border-subtle bg-card p-3"
-                  }
-                >
-                  <View className="flex-row items-center gap-2">
-                    <PlatformIcon platform={row.platform} />
-                    <Text className="flex-1 font-t3-semibold">
-                      {row.name}
-                      {row.detail ? (
-                        <Text className="text-sm text-foreground-muted"> · {row.detail}</Text>
+              <View className="flex-row items-center gap-2.5">
+                {app.icon ? (
+                  <Image
+                    source={{ uri: app.icon }}
+                    style={{ width: 28, height: 28, borderRadius: 7 }}
+                  />
+                ) : null}
+                <Text className="text-base font-t3-semibold">{app.name}</Text>
+              </View>
+              {app.builds.map((build) => {
+                const single = build.variants.length === 1;
+                return (
+                  <View key={build.key} className="gap-2">
+                    <Text className="text-sm font-t3-semibold">
+                      {build.name}
+                      {single && build.variants[0]?.name ? (
+                        <Text className="text-sm text-foreground-muted">
+                          {" "}
+                          · {build.variants[0].name}
+                        </Text>
                       ) : null}
                     </Text>
+                    {build.variants.map((variant) => (
+                      <View key={variant.key} className={single ? "gap-2" : "gap-2 pl-3"}>
+                        {single ? null : (
+                          <Text className="text-xs text-foreground-muted">
+                            {variant.name ?? "–"}
+                          </Text>
+                        )}
+                        {variant.rows.map((row) => (
+                          <AppRowCard key={row.key} row={row} version={version} now={now} />
+                        ))}
+                      </View>
+                    ))}
                   </View>
-                  <BinaryLine title="Store" binary={row.store} version={version} now={now} />
-                  <OtaLines row={row} version={version} />
-                  <BinaryLine title="Testers" binary={row.testers} version={version} now={now} />
-                </View>
-              ))}
+                );
+              })}
             </View>
           ))}
+          {apps.some((app) =>
+            app.rows.some((row) => row.ota.some((lane) => lane.reach === "unknown")),
+          ) ? (
+            <Text className="text-xs text-foreground-muted">
+              OTA reach is unknown where it isn't shown: those store builds don't report their
+              runtime.
+            </Text>
+          ) : null}
           <Text className="text-xs text-foreground-muted">
             Percentages are the share of users offered an update, not installs.
           </Text>
