@@ -178,6 +178,10 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
 
+const GitCheckoutBlockingPaths = Schema.Array(
+  Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(4096)),
+).check(Schema.isMinLength(1), Schema.isMaxLength(2000));
+
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
@@ -193,6 +197,8 @@ export type VcsCreateRefResult = typeof VcsCreateRefResult.Type;
 export const VcsSwitchRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
+  /** Repository-relative paths, from a `local_changes_would_be_overwritten` error, to reset to HEAD first. */
+  discardPaths: Schema.optional(GitCheckoutBlockingPaths),
 });
 export type VcsSwitchRefInput = typeof VcsSwitchRefInput.Type;
 
@@ -356,6 +362,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "branch_checked_out_in_worktree",
   "config_locked",
   "host_key_unverified",
+  "local_changes_would_be_overwritten",
   "not_a_repository",
   "path_already_exists",
   "push_rejected_by_remote",
@@ -363,6 +370,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "ref_not_found",
   "remote_unreachable",
   "tag_would_be_clobbered",
+  "untracked_files_would_be_overwritten",
 ]);
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
 
@@ -377,6 +385,8 @@ export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitC
   outputLength: Schema.optional(Schema.Number),
   reason: ForwardCompatibleOptional(GitCommandFailureReason),
   detail: Schema.String,
+  /** Files Git named as blocking a checkout. */
+  paths: Schema.optional(GitCheckoutBlockingPaths),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {

@@ -1488,7 +1488,11 @@ const make = Effect.gen(function* () {
               reason: "branch-in-use",
             });
           if (input.action === "switch") {
-            yield* git.switchRef({ cwd, refName: shortName });
+            yield* git.switchRef({
+              cwd,
+              refName: shortName,
+              ...(input.filePaths ? { discardPaths: input.filePaths } : {}),
+            });
             return { message: `Switched to ${shortName}.` };
           }
           if (

@@ -1,4 +1,9 @@
-import { prepareGitExplorerBranchDeletion } from "@t3tools/client-runtime/git-explorer";
+import {
+  checkoutBlockingPaths,
+  describeCheckoutDiscard,
+  describeGitFailure,
+  prepareGitExplorerBranchDeletion,
+} from "@t3tools/client-runtime/git-explorer";
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -87,37 +92,57 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
       title: "Switch branch",
       message: `Switch ${overview.selectedWorktreePath} to ${ref.shortName}. Local changes are kept; Git will refuse if they would be overwritten.`,
       confirmText: "Switch branch",
-      onConfirm: () => {
-        if (pending.current) return;
-        pending.current = true;
-        setBusyBranch(ref.name);
-        void runSwitch({
-          ...target,
-          input: {
-            ...target.input,
-            action: "switch",
-            branchName: ref.name,
-            branchHash: ref.hash,
-            expectedHead: overview.headHash,
-            expectedBranch: overview.headBranch,
-          },
-        })
-          .then((result) => {
-            if (AsyncResult.isFailure(result)) {
-              const failure = squashAtomCommandFailure(result);
-              Dialog.alert(
-                "Could not switch branch",
-                failure instanceof Error ? failure.message : "Refresh and try again.",
-              );
-            }
-          })
-          .finally(() => {
-            pending.current = false;
-            setBusyBranch(null);
-            onRefresh();
-          });
-      },
+      onConfirm: () => runSwitchTo(ref, overview),
     });
+  };
+  const runSwitchTo = (
+    ref: GitExplorerRef,
+    overview: GitExplorerOverviewResult,
+    filePaths?: readonly string[],
+  ) => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusyBranch(ref.name);
+    void runSwitch({
+      ...target,
+      input: {
+        ...target.input,
+        action: "switch",
+        branchName: ref.name,
+        branchHash: ref.hash,
+        expectedHead: overview.headHash,
+        expectedBranch: overview.headBranch,
+        ...(filePaths ? { filePaths } : {}),
+      },
+    })
+      .then((result) => {
+        if (!AsyncResult.isFailure(result)) return;
+        const failure = squashAtomCommandFailure(result);
+        const blockingPaths = filePaths ? null : checkoutBlockingPaths(failure);
+        if (blockingPaths) {
+          const { title, description, pathList } = describeCheckoutDiscard(
+            ref.shortName,
+            blockingPaths,
+          );
+          Dialog.confirm({
+            title,
+            message: `${description}\n\n${pathList}`,
+            confirmText: "Discard and switch",
+            destructive: true,
+            onConfirm: () => runSwitchTo(ref, overview, blockingPaths),
+          });
+          return;
+        }
+        Dialog.alert(
+          "Could not switch branch",
+          describeGitFailure(failure, "Refresh and try again."),
+        );
+      })
+      .finally(() => {
+        pending.current = false;
+        setBusyBranch(null);
+        onRefresh();
+      });
   };
 
   const confirmDelete = (ref: GitExplorerRef, status: GitExplorerBranchStatus) => {

@@ -1,4 +1,8 @@
-import { AuthOrchestrationOperateScope, AuthSourceControlWriteScope } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthSourceControlWriteScope,
+  GitCommandError,
+} from "@t3tools/contracts";
 import type { VcsListRefsResult } from "@t3tools/contracts";
 import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
@@ -24,6 +28,9 @@ const state = vi.hoisted(() => ({
   statusRefreshes: 0,
   readRefs: vi.fn(),
   cachedRefs: [] as VcsListRefsResult["refs"],
+  blockingPaths: null as string[] | null,
+  confirmDiscard: false,
+  switchRequests: [] as { refName: string; discardPaths?: readonly string[] }[],
 }));
 
 vi.mock("react", () => ({
@@ -88,7 +95,25 @@ vi.mock("./vcs", () => ({
       state.statusRefreshes += 1;
       return AsyncResult.success({ refName: state.branch });
     },
-    switchRef: async ({ input }: { input: { refName: string } }) => {
+    switchRef: async ({
+      input,
+    }: {
+      input: { refName: string; discardPaths?: readonly string[] };
+    }) => {
+      state.switchRequests.push(input);
+      if (state.blockingPaths && !input.discardPaths)
+        return AsyncResult.failure(
+          Cause.fail(
+            new GitCommandError({
+              operation: "GitVcsDriver.switchRef.checkout",
+              command: "git",
+              cwd: "/repo",
+              reason: "local_changes_would_be_overwritten",
+              detail: "blocked",
+              paths: state.blockingPaths,
+            }),
+          ),
+        );
       state.branch = input.refName;
       state.afterGitAction?.();
       return AsyncResult.success({ refName: state.branch });
@@ -124,6 +149,11 @@ vi.mock("./vcs", () => ({
   },
 }));
 
+vi.mock("../components/ui/Dialog", () => ({
+  confirm: (request: { onConfirm: () => void; onCancel?: () => void }) =>
+    state.confirmDiscard ? request.onConfirm() : request.onCancel?.(),
+}));
+
 import { useSelectedThreadGitActions } from "./use-selected-thread-git-actions";
 
 describe("thread Git mutation permissions", () => {
@@ -140,7 +170,27 @@ describe("thread Git mutation permissions", () => {
     state.results = [];
     state.afterGitAction = undefined;
     state.statusRefreshes = 0;
+    state.blockingPaths = null;
+    state.confirmDiscard = false;
+    state.switchRequests = [];
   });
+
+  it.each([false, true])(
+    "discards the files Git says block a checkout only once confirmed: %s",
+    async (confirmed) => {
+      state.scopes.add(AuthOrchestrationOperateScope);
+      state.blockingPaths = ["backend/schema.graphql"];
+      state.confirmDiscard = confirmed;
+      await useSelectedThreadGitActions().onCheckoutSelectedThreadBranch("feature");
+      expect(state.switchRequests).toEqual([
+        { cwd: "/repo", refName: "feature" },
+        ...(confirmed
+          ? [{ cwd: "/repo", refName: "feature", discardPaths: ["backend/schema.graphql"] }]
+          : []),
+      ]);
+      expect(state.branch).toBe(confirmed ? "feature" : "main");
+    },
+  );
 
   it.each([false, true])(
     "requires task permission before creating and attaching a worktree: %s",

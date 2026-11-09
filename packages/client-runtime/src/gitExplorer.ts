@@ -1,8 +1,10 @@
-import type {
-  GitExplorerRef,
-  GitExplorerBranchStatus,
-  GitExplorerSubmodule,
+import {
+  GitCommandError,
+  type GitExplorerRef,
+  type GitExplorerBranchStatus,
+  type GitExplorerSubmodule,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 export interface GitGraphLine {
   readonly from: number;
@@ -403,4 +405,29 @@ export function gitExplorerBranchRows(
   };
   visit(root, "", 0);
   return rows;
+}
+
+const isGitCommandError = Schema.is(GitCommandError);
+
+/** Files whose uncommitted changes made Git refuse a branch switch, or null for any other failure. */
+export function checkoutBlockingPaths(error: unknown): readonly string[] | null {
+  return isGitCommandError(error) && error.reason === "local_changes_would_be_overwritten"
+    ? (error.paths ?? null)
+    : null;
+}
+
+export function describeCheckoutDiscard(branch: string, paths: readonly string[]) {
+  const subject = paths.length === 1 ? "this file" : `these ${paths.length} files`;
+  const more = paths.length > 8 ? `\n…and ${paths.length - 8} more` : "";
+  return {
+    title: `Discard changes and switch to ${branch}?`,
+    description: `Git won't switch because uncommitted changes to ${subject} would be overwritten. Discarding resets ${paths.length === 1 ? "it" : "them"} to the last commit and can't be undone. Other changes are kept.`,
+    pathList: `${paths.slice(0, 8).join("\n")}${more}`,
+  };
+}
+
+/** The readable sentence of a Git failure, without the operation and path its message keeps for logs. */
+export function describeGitFailure(error: unknown, fallback = "An error occurred."): string {
+  if (isGitCommandError(error)) return error.detail;
+  return error instanceof Error ? error.message : fallback;
 }

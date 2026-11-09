@@ -549,7 +549,7 @@ it.effect.each(["bare", "unborn"] as const)(
         assert.equal(Result.isSuccess(result), state === "bare");
         if (Result.isFailure(result)) {
           assert.equal(result.failure.operation, "GitVcsDriver.createWorktree.createBranch");
-          assert.equal(result.failure.detail, "git worktree add failed");
+          assert.equal(result.failure.reason, "ref_not_found");
         }
         assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 1);
         assert.isFalse(spawnedArgs.some((args) => args[0] === "symbolic-ref"));
@@ -1873,54 +1873,53 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
     );
 
     it.effect.each([
-      { action: "worktree add", detail: "git worktree add failed" },
-      { action: "worktree add -b", detail: "git worktree add failed" },
-      { action: "switch", detail: "git checkout failed" },
-    ])(
-      "reports a missing ref during $action with stable, redacted diagnostics",
-      ({ action, detail }) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeTmpDir();
-          yield* initRepoWithCommit(cwd);
-          const path = yield* Path.Path;
-          const refName = "private/deleted-base";
-          const locales: Array<CommandLine.Word | undefined> = [];
-          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-          const spawner = ChildProcessSpawner.make((command) => {
-            if (
-              ChildProcess.isStandardCommand(command) &&
-              (command.args.includes("worktree") ||
-                command.args[0] === "branch" ||
-                command.args[0] === "checkout")
-            ) {
-              locales.push(command.options.env?.LANGUAGE);
-            }
-            return delegate.spawn(command);
-          });
-          const driver = yield* makeGitVcsDriverCore().pipe(
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            Effect.provide(layerServerConfig),
-          );
-          const error =
-            action === "switch"
-              ? yield* driver.switchRef({ cwd, refName }).pipe(Effect.flip)
-              : yield* driver
-                  .createWorktree({
-                    cwd,
-                    refName,
-                    ...(action === "worktree add -b" ? { newRefName: "t3/new-thread" } : {}),
-                    path: path.join(cwd, "worktree"),
-                  })
-                  .pipe(Effect.flip);
+      { action: "worktree add" },
+      { action: "worktree add -b" },
+      { action: "switch" },
+    ])("reports a missing ref during $action with stable, redacted diagnostics", ({ action }) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const path = yield* Path.Path;
+        const refName = "private/deleted-base";
+        const locales: Array<CommandLine.Word | undefined> = [];
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (
+            ChildProcess.isStandardCommand(command) &&
+            (command.args.includes("worktree") ||
+              command.args[0] === "branch" ||
+              command.args[0] === "checkout")
+          ) {
+            locales.push(command.options.env?.LANGUAGE);
+          }
+          return delegate.spawn(command);
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(layerServerConfig),
+        );
+        const error =
+          action === "switch"
+            ? yield* driver.switchRef({ cwd, refName }).pipe(Effect.flip)
+            : yield* driver
+                .createWorktree({
+                  cwd,
+                  refName,
+                  ...(action === "worktree add -b" ? { newRefName: "t3/new-thread" } : {}),
+                  path: path.join(cwd, "worktree"),
+                })
+                .pipe(Effect.flip);
 
-          assert.deepInclude(error, { _tag: "GitCommandError", detail, reason: "ref_not_found" });
-          assert.include(error.message, `${detail} (ref_not_found)`);
-          assert.notInclude(error.message, refName);
-          assert.notInclude(yield* encodeGitCommandError(error), refName);
-          assert.deepEqual(locales, ["C"]);
-          assert.notProperty(error, "stderr");
-          assert.notProperty(error, "args");
-        }),
+        const detail = "That branch or commit doesn't exist. Refresh and pick another one.";
+        assert.deepInclude(error, { _tag: "GitCommandError", detail, reason: "ref_not_found" });
+        assert.include(error.message, `${detail} (ref_not_found)`);
+        assert.notInclude(error.message, refName);
+        assert.notInclude(yield* encodeGitCommandError(error), refName);
+        assert.deepEqual(locales, ["C"]);
+        assert.notProperty(error, "stderr");
+        assert.notProperty(error, "args");
+      }),
     );
 
     it.effect.each([
@@ -4228,6 +4227,67 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           "uncommitted work\n",
         );
         assert.equal(yield* git(cwd, ["branch", "--show-current"]), initialBranch);
+      }),
+    );
+
+    it.effect("names files blocking a switch and discards only the confirmed ones", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* fileSystem.makeDirectory(path.join(cwd, "backend"));
+        yield* writeTextFile(cwd, "backend/schema.graphql", "type Query\n");
+        yield* git(cwd, ["add", "backend/schema.graphql"]);
+        yield* git(cwd, ["commit", "-m", "schema"]);
+        yield* git(cwd, ["checkout", "-q", "-b", "login-events"]);
+        yield* writeTextFile(cwd, "backend/schema.graphql", "type Query\ntype LoginEvent\n");
+        yield* writeTextFile(cwd, "backend/login.graphql", "committed\n");
+        yield* git(cwd, ["add", "backend"]);
+        yield* git(cwd, ["commit", "-m", "login events"]);
+        yield* git(cwd, ["checkout", "-q", initialBranch]);
+        yield* writeTextFile(cwd, "backend/schema.graphql", "regenerated\n");
+        yield* writeTextFile(cwd, "backend/login.graphql", "untracked\n");
+        yield* writeTextFile(cwd, "README.md", "unrelated work\n");
+        const nested = path.join(cwd, "backend");
+
+        const error = yield* driver
+          .switchRef({ cwd: nested, refName: "login-events" })
+          .pipe(Effect.flip);
+
+        assert.equal(error.reason, "local_changes_would_be_overwritten");
+        assert.deepEqual(error.paths, ["backend/schema.graphql"]);
+        assert.include(error.detail, "Files: backend/schema.graphql.");
+
+        // Untracked files are never discarded; Git then names them instead.
+        const untracked = yield* driver
+          .switchRef({
+            cwd: nested,
+            refName: "login-events",
+            discardPaths: ["backend/schema.graphql"],
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(untracked.reason, "untracked_files_would_be_overwritten");
+        assert.include(untracked.detail, "Files: backend/login.graphql.");
+        assert.equal(
+          yield* fileSystem.readFileString(path.join(cwd, "backend/login.graphql")),
+          "untracked\n",
+        );
+
+        yield* fileSystem.remove(path.join(cwd, "backend/login.graphql"));
+        const result = yield* driver.switchRef({ cwd: nested, refName: "login-events" });
+
+        assert.equal(result.refName, "login-events");
+        assert.equal(
+          yield* fileSystem.readFileString(path.join(cwd, "backend/schema.graphql")),
+          "type Query\ntype LoginEvent\n",
+        );
+        assert.equal(
+          yield* fileSystem.readFileString(path.join(cwd, "README.md")),
+          "unrelated work\n",
+        );
       }),
     );
 

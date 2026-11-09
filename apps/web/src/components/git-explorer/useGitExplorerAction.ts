@@ -9,6 +9,7 @@ import type {
   GitExplorerOverviewResult,
   GitExplorerRunActionInput,
 } from "@t3tools/contracts";
+import { describeGitFailure } from "@t3tools/client-runtime/git-explorer";
 import { useRef, useState } from "react";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -34,6 +35,7 @@ export function useGitExplorerAction({
   const inFlight = useRef(false);
   const [pending, setPending] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
+  const [failure, setFailure] = useState<unknown>(null);
   const execute = async (
     action: Omit<
       GitExplorerRunActionInput,
@@ -45,6 +47,7 @@ export function useGitExplorerAction({
     inFlight.current = true;
     setPending(true);
     setFailureMessage(null);
+    setFailure(null);
     onBusyChange(true);
     return run({
       environmentId,
@@ -62,8 +65,9 @@ export function useGitExplorerAction({
         }
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
-          const description = error instanceof Error ? error.message : "Refresh and try again.";
+          const description = describeGitFailure(error, "Refresh and try again.");
           setFailureMessage(description);
+          setFailure(error);
           toastManager.add({
             type: "error",
             title: "Git action failed",
@@ -80,5 +84,5 @@ export function useGitExplorerAction({
         onBusyChange(false);
       });
   };
-  return { execute, pending, allowed, failureMessage };
+  return { execute, pending, allowed, failureMessage, failure };
 }

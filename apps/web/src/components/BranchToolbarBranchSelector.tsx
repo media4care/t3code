@@ -42,6 +42,12 @@ import { cn } from "../lib/utils";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./chat/threadDetailsPanelStyles";
 import { ThreadDetailsPrRows } from "./chat/ThreadDetailsPrRows";
 import { parsePullRequestReference } from "@t3tools/client-runtime/pull-request-link-input";
+import {
+  checkoutBlockingPaths,
+  describeCheckoutDiscard,
+  describeGitFailure,
+} from "@t3tools/client-runtime/git-explorer";
+import { requestConfirmDialog } from "~/confirmDialog";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
@@ -88,10 +94,6 @@ interface BranchToolbarBranchSelectorProps {
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
-}
-
-function toBranchActionErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "An error occurred.";
 }
 
 export function BranchToolbarBranchSelector({
@@ -341,7 +343,7 @@ export function BranchToolbarBranchSelector({
           stackedThreadToast({
             type: "error",
             title: "Failed to copy branch name",
-            description: toBranchActionErrorMessage(error),
+            description: describeGitFailure(error),
           }),
         );
       },
@@ -417,13 +419,34 @@ export function BranchToolbarBranchSelector({
     runBranchAction(async () => {
       const previousBranch = resolvedActiveBranch;
       setOptimisticBranch(selectedBranchName);
-      const checkoutResult = await switchRef({
-        environmentId,
-        input: {
-          cwd: selectionTarget.checkoutCwd,
-          refName: refName.name,
-        },
-      });
+      const checkout = (discardPaths?: readonly string[]) =>
+        switchRef({
+          environmentId,
+          input: {
+            cwd: selectionTarget.checkoutCwd,
+            refName: refName.name,
+            ...(discardPaths ? { discardPaths } : {}),
+          },
+        });
+      let checkoutResult = await checkout();
+      const blockingPaths =
+        checkoutResult._tag === "Failure"
+          ? checkoutBlockingPaths(squashAtomCommandFailure(checkoutResult))
+          : null;
+      if (blockingPaths) {
+        setOptimisticBranch(previousBranch);
+        const { title, description, pathList } = describeCheckoutDiscard(
+          selectedBranchName,
+          blockingPaths,
+        );
+        const confirmed =
+          (await requestConfirmDialog(`${title}\n${description}\n\n${pathList}`, {
+            variant: "destructive",
+          })) ?? false;
+        if (!confirmed) return;
+        setOptimisticBranch(selectedBranchName);
+        checkoutResult = await checkout(blockingPaths);
+      }
       if (checkoutResult._tag === "Success") {
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
@@ -438,7 +461,7 @@ export function BranchToolbarBranchSelector({
           stackedThreadToast({
             type: "error",
             title: "Failed to switch ref.",
-            description: toBranchActionErrorMessage(squashAtomCommandFailure(checkoutResult)),
+            description: describeGitFailure(squashAtomCommandFailure(checkoutResult)),
           }),
         );
       }
@@ -475,7 +498,7 @@ export function BranchToolbarBranchSelector({
           stackedThreadToast({
             type: "error",
             title: "Failed to create and switch ref.",
-            description: toBranchActionErrorMessage(squashAtomCommandFailure(createBranchResult)),
+            description: describeGitFailure(squashAtomCommandFailure(createBranchResult)),
           }),
         );
       }
