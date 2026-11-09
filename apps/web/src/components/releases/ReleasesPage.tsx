@@ -7,10 +7,12 @@ import {
   currentReleases,
   defaultReleaseVersion,
   releaseAge,
-  releaseSourcesLabel,
+  releaseApps,
   releaseAttention,
   releaseGates,
-  releaseTargetGroups,
+  releasePlatformSummaries,
+  releasePresence,
+  releasePresenceLabel,
   RELEASES_CONFIGURATION_EXAMPLE,
 } from "@t3tools/client-runtime/releases";
 import {
@@ -32,10 +34,12 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import {
+  ReleaseAppTable,
   ReleaseAttentionList,
   ReleaseGateList,
+  ReleasePlatformCards,
   ReleaseServiceTable,
-  ReleaseTargetTable,
+  ReleaseSourceList,
 } from "./ReleaseSections";
 
 // An open page asks this often; the server skips the command until the document is stale.
@@ -159,7 +163,14 @@ function ProjectReleases(props: {
       ? version
       : null) ?? (document ? defaultReleaseVersion(document) : null);
   const updated = releaseAge(document?.generatedAt, now);
-  const targetGroups = document && selected ? releaseTargetGroups(document, selected) : [];
+  const apps = document ? releaseApps(document) : [];
+  const openCredentials = () => {
+    void navigate({
+      to: "/settings/projects",
+      search: { project: props.settingsProjectKey, machine: environmentId },
+      hash: "release-credentials",
+    });
+  };
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -168,7 +179,6 @@ function ProjectReleases(props: {
           <p className="mt-1 text-sm text-muted-foreground">
             {props.environmentLabel}
             {!connected ? " · Offline" : ""}
-            {document && document.sources.length > 0 ? ` · ${releaseSourcesLabel(document)}` : ""}
             {updated ? ` · updated ${updated} ago` : ""}
           </p>
         </div>
@@ -192,17 +202,7 @@ function ProjectReleases(props: {
           </Select>
         ) : null}
         {configured ? (
-          <Button
-            variant="outline"
-            aria-label="Release credentials"
-            onClick={() => {
-              void navigate({
-                to: "/settings/projects",
-                search: { project: props.settingsProjectKey, machine: environmentId },
-                hash: "release-credentials",
-              });
-            }}
-          >
+          <Button variant="outline" aria-label="Release credentials" onClick={openCredentials}>
             <KeyRoundIcon />
             <span className="hidden sm:inline">Credentials</span>
           </Button>
@@ -265,6 +265,12 @@ function ProjectReleases(props: {
           Reading release status. The first run can take a minute.
         </p>
       ) : null}
+      {document ? (
+        <ReleaseSourceList
+          sources={document.sources}
+          onConnect={configured ? openCredentials : undefined}
+        />
+      ) : null}
       {document && selected ? (
         <>
           <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-border pt-3 text-sm text-muted-foreground">
@@ -294,10 +300,16 @@ function ProjectReleases(props: {
               </span>
             ) : null}
           </div>
-          <ReleaseAttentionList items={releaseAttention(document)} now={now} />
+          {apps.length > 0 ? (
+            <p className="-mt-3 text-sm">
+              {releasePresenceLabel(selected, releasePresence(apps, selected))}
+            </p>
+          ) : null}
+          <ReleasePlatformCards summaries={releasePlatformSummaries(apps)} version={selected} />
+          <ReleaseAttentionList items={releaseAttention(document, apps)} now={now} />
           <ReleaseGateList gates={releaseGates(document, selected)} version={selected} />
-          <ReleaseTargetTable groups={targetGroups} version={selected} />
-          {targetGroups.length > 0 ? (
+          <ReleaseAppTable apps={apps} version={selected} now={now} />
+          {apps.length > 0 ? (
             <p className="-mt-4 text-xs text-muted-foreground">
               Percentages are the share of users offered an update, not installs.
             </p>
