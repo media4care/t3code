@@ -1266,6 +1266,29 @@ describe("the compact row's single action slot", () => {
     );
   });
 
+  it("chains a rebase into auto-merge only when a required check gates the merge", () => {
+    const actions = ["merge", "enable-auto-merge"];
+    const behind = {
+      baseComparison: "behind",
+      capabilities: {
+        actions,
+        mergeMethods: ["squash"],
+      } as unknown as PullRequestDetailView["capabilities"],
+      viewerPermissions: { actions } as unknown as PullRequestDetailView["viewerPermissions"],
+    } as const;
+    const requiredCheck = { ...check("success"), required: true };
+    expect(
+      resolveThreadPanelPullRequestAction(openDetail({ ...behind, checks: [requiredCheck] })),
+    ).toBe("rebase-and-merge");
+    expect(resolveThreadPanelPullRequestAction(openDetail(behind))).toBe("rebase");
+    expect(
+      resolveThreadPanelPullRequestAction(
+        openDetail({ ...behind, checks: [requiredCheck], autoMergeEnabled: true }),
+      ),
+    ).toBe("rebase");
+    expect(resolveThreadPanelPullRequestAction(openDetail({ autoMergeEnabled: true }))).toBeNull();
+  });
+
   it("offers nothing the viewer may not do, and nothing on settled pull requests", () => {
     expect(
       resolveThreadPanelPullRequestAction(
