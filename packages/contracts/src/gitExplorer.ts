@@ -91,6 +91,8 @@ export const GitExplorerBranchStatus = Schema.Struct({
   deleteBlockedReason: Schema.NullOr(
     Schema.Literals(["checked-out", "protected", "unmerged", "unknown"]),
   ),
+  // Linked worktree holding the branch. When deletion is not blocked, deleting removes it too.
+  checkedOutAt: Schema.optional(Schema.String),
 });
 export type GitExplorerBranchStatus = typeof GitExplorerBranchStatus.Type;
 const GitExplorerLocalBranch = Schema.String.check(
@@ -115,6 +117,8 @@ export const GitExplorerDeleteBranchInput = Schema.Struct({
   expectedTargetHash: Schema.NullOr(GitExplorerHash),
   allowEquivalent: Schema.Boolean,
   force: Schema.optional(Schema.Boolean),
+  // The reviewed `checkedOutAt` worktree, removed before the branch. Without it a checkout blocks deletion.
+  removeWorktree: Schema.optional(Schema.String),
 });
 export type GitExplorerDeleteBranchInput = typeof GitExplorerDeleteBranchInput.Type;
 export const GitExplorerRunActionInput = Schema.Struct({

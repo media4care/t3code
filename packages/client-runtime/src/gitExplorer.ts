@@ -262,7 +262,9 @@ export function gitExplorerBranchDeletionBlock(
     return "This branch has changed. Refresh Git Explorer before deleting it.";
   switch (status.deleteBlockedReason) {
     case "checked-out":
-      return "This branch is checked out in a worktree.";
+      return status.checkedOutAt
+        ? `This branch is checked out in the worktree at ${status.checkedOutAt}, which is locked or has changes or untracked files.`
+        : "This branch is checked out in a worktree.";
     case "protected":
       return "The repository's base branch cannot be deleted here.";
     case "unmerged":
@@ -297,6 +299,7 @@ export function prepareGitExplorerBranchDeletion(
       expectedTargetHash: status.targetHash,
       allowEquivalent: equivalent,
       ...(force ? { force: true } : {}),
+      ...(status.checkedOutAt ? { removeWorktree: status.checkedOutAt } : {}),
     },
     confirmation: [
       `${force ? "Force delete" : "Delete"} branch "${reference.shortName}"?`,
@@ -306,7 +309,9 @@ export function prepareGitExplorerBranchDeletion(
         : equivalent
           ? `Its changes have equivalent patches in ${target}, but the original commits are not ancestors of that branch. Confirming deletes the local branch using patch equivalence.`
           : `Its commits are already merged into ${target}.`,
-      "This removes the branch from the repository on that environment. Branches on Git remotes and worktree files are unchanged.",
+      status.checkedOutAt
+        ? `This first removes the worktree at ${status.checkedOutAt}, which has no changes or untracked files. Its ignored files, such as dependencies and build output, are deleted with it. Branches on Git remotes are unchanged.`
+        : "This removes the branch from the repository on that environment. Branches on Git remotes and worktree files are unchanged.",
       ...(reference.upstream && reference.upstream !== status.targetRef
         ? [gitExplorerUpstreamMergeSummary(reference, status).description]
         : []),

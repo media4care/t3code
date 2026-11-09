@@ -51,6 +51,7 @@ describe("selected branch deletion", () => {
               : ref.shortName === "pending"
                 ? "unmerged"
                 : null,
+        ...(ref.shortName === "fix/two" ? { checkedOutAt: "/work/repo-two" } : {}),
       }),
     );
     const selected = [...refs.slice(0, -1), refs[0]!];
@@ -77,6 +78,10 @@ describe("selected branch deletion", () => {
       true,
     ]);
     expect(forced.eligible[0]?.deletion.input.expectedHash).toBe(refs[0]?.hash);
+    expect(safe.eligible.map(({ deletion }) => deletion.input.removeWorktree)).toEqual([
+      undefined,
+      "/work/repo-two",
+    ]);
     expect(prepareGitExplorerBranchesDeletion([refs[0]!], []).eligible).toEqual([]);
   });
 });

@@ -125,9 +125,11 @@ export function GitExplorerBranchDeletion(props: {
   const rows = [
     ...remaining.map(({ reference, deletion }) => ({
       reference,
-      description: deletion.input.force
-        ? "Force delete"
-        : describeGitExplorerMerge(statusesByName.get(reference.name)),
+      description: `${
+        deletion.input.force
+          ? "Force delete"
+          : describeGitExplorerMerge(statusesByName.get(reference.name))
+      }${deletion.input.removeWorktree ? ` Removes worktree ${deletion.input.removeWorktree}` : ""}`,
     })),
     ...(review?.skipped.map(({ reference, reason }) => ({
       reference,
@@ -156,7 +158,7 @@ export function GitExplorerBranchDeletion(props: {
                 <Text className="text-foreground-muted">
                   Review the branches in the repository on{" "}
                   {environment?.environmentLabel || "the selected environment"}. Branches on Git
-                  remotes and worktree files are unchanged.
+                  remotes are unchanged. A clean worktree holding a branch is removed with it.
                 </Text>
                 {error ? (
                   <Text accessibilityRole="alert" className="text-danger-foreground">

@@ -168,8 +168,8 @@ export function GitExplorerBranchDeletion({
           </DialogTitle>
           <DialogDescription>
             Review the branches in the repository on{" "}
-            {environment?.label || "the selected environment"}. Branches on Git remotes and worktree
-            files are unchanged.
+            {environment?.label || "the selected environment"}. Branches on Git remotes are
+            unchanged. A clean worktree holding a branch is removed with it.
             {folder ? " The folder disappears when no branches remain." : null}
           </DialogDescription>
         </DialogHeader>
@@ -221,6 +221,11 @@ export function GitExplorerBranchDeletion({
                             statusesByName.get(reference.name),
                           ).description
                         }
+                      </span>
+                    ) : null}
+                    {deletion.input.removeWorktree ? (
+                      <span className="block text-muted-foreground">
+                        Removes worktree {deletion.input.removeWorktree}
                       </span>
                     ) : null}
                   </li>

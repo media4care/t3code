@@ -485,7 +485,8 @@ function ReferenceRow({
               <span className="pointer-coarse:hidden max-sm:hidden">Delete</span>
             </TooltipTrigger>
             <TooltipPopup>
-              {deleteBlock ?? `Delete local branch ${reference.shortName}`}
+              {deleteBlock ??
+                `Delete local branch ${reference.shortName}${status?.checkedOutAt ? " and its worktree" : ""}`}
             </TooltipPopup>
           </Tooltip>
         </span>
