@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   status: "success" as PullRequestCheck["status"],
   extraStatus: null as PullRequestCheck["status"] | null,
   mergeMethods: ["merge"] as Array<"merge" | "squash" | "rebase">,
+  behind: false,
   perform: vi.fn(),
   newThread: vi.fn(),
   prepareThread: vi.fn(),
@@ -45,9 +46,18 @@ const queryData = () => ({
     status,
     description: null,
     url: null,
+    required: true,
   })),
-  capabilities: { actions: ["merge"], mergeMethods: state.mergeMethods },
-  viewerPermissions: { actions: ["merge"] },
+  ...(state.behind ? { baseComparison: "behind", behindBy: 3 } : {}),
+  capabilities: {
+    actions: ["merge", "enable-auto-merge", "update-branch"],
+    mergeMethods: state.mergeMethods,
+    updateMethods: ["rebase"],
+  },
+  viewerPermissions: {
+    actions: ["merge", "enable-auto-merge", "update-branch"],
+    updateMethods: ["rebase"],
+  },
   mergeCapabilities: {
     merge: state.mergeMethods.includes("merge"),
     squash: state.mergeMethods.includes("squash"),
@@ -136,6 +146,40 @@ it("merges with the last selected merge method", async () => {
   expect(state.perform).toHaveBeenCalledWith("merge", "squash");
 });
 
+it("arms auto-merge only after the host rebased a branch that is behind", async () => {
+  await using screen = await setup();
+  state.behind = true;
+  state.mergeMethods = ["squash"];
+  state.perform.mockResolvedValue(true);
+  await act(async () => {
+    await screen.rerender(
+      <ThreadDetailsPrRow
+        environmentId={EnvironmentId.make("environment")}
+        pr={null}
+        number={1}
+        status={null}
+        project={null}
+        label="Test PR"
+        openAriaLabel="Open PR"
+        onOpen={vi.fn()}
+      />,
+    );
+  });
+  expect(screen.container.textContent).toContain("3 behind");
+  const click = async (scope: ParentNode) =>
+    await act(async () => {
+      [...scope.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "Rebase & merge")!
+        .click();
+    });
+  await click(screen.container);
+  await click(document.querySelector('[role="alertdialog"]')!);
+  expect(state.perform.mock.calls).toEqual([
+    ["update-branch", undefined, "rebase"],
+    ["enable-auto-merge", "squash"],
+  ]);
+});
+
 it("requires a new merge click after passing checks become pending and pass again", async () => {
   await using screen = await setup();
   const { container } = screen;
@@ -191,6 +235,7 @@ async function setup() {
   state.status = "success";
   state.extraStatus = null;
   state.mergeMethods = ["merge"];
+  state.behind = false;
   useUiStateStore.getState().setPullRequestMergeMethod("merge");
   return renderUi(null);
 }

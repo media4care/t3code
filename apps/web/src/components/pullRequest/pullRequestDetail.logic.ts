@@ -358,10 +358,18 @@ export function groupPullRequestChecks(checks: ReadonlyArray<PullRequestCheck>) 
   };
 }
 
-type ThreadPanelPullRequestAction = "resolve" | "rebase" | "ready" | "fix" | "merge";
+type ThreadPanelPullRequestAction =
+  | "resolve"
+  | "rebase"
+  | "rebase-and-merge"
+  | "ready"
+  | "fix"
+  | "merge";
 
 export function resolveThreadPanelPullRequestAction(
-  detail: (PullRequestActionableDetail & Pick<PullRequestDetail, "checks">) | null,
+  detail:
+    | (PullRequestActionableDetail & Pick<PullRequestDetail, "checks" | "autoMergeEnabled">)
+    | null,
 ): ThreadPanelPullRequestAction | null {
   if (detail === null || detail.state !== "open") return null;
   if (isPullRequestConflicting(detail)) return "resolve";
@@ -370,11 +378,47 @@ export function resolveThreadPanelPullRequestAction(
   }
   const checks = classifyPullRequestChecks(detail.checks);
   if (checks === "failing") return "fix";
-  if (detail.baseComparison === "behind") return "rebase";
-  if (checks === "pending") return null;
+  if (detail.baseComparison === "behind") {
+    // GitHub auto-merge waits only for required checks; without one it merges the rebase untested.
+    return !detail.autoMergeEnabled &&
+      detail.checks.some((check) => check.required === true) &&
+      canPerformPullRequestAction(detail, "enable-auto-merge") &&
+      allowedPullRequestMergeMethods(detail).length > 0
+      ? "rebase-and-merge"
+      : "rebase";
+  }
+  if (detail.autoMergeEnabled || checks === "pending") return null;
   return canPerformPullRequestAction(detail, "merge") &&
     allowedPullRequestMergeMethods(detail).length > 0
     ? "merge"
+    : null;
+}
+
+export function describeThreadPanelBaseStatus(
+  detail: Pick<
+    PullRequestDetail,
+    "state" | "mergeability" | "baseComparison" | "behindBy" | "baseBranch" | "autoMergeEnabled"
+  > | null,
+): { readonly label: string; readonly tooltip: string; readonly behind: boolean } | null {
+  if (detail === null || detail.state !== "open" || detail.mergeability === "conflicting") {
+    return null;
+  }
+  if (detail.baseComparison === "behind") {
+    const count = detail.behindBy ?? null;
+    return {
+      label: count === null ? "Behind" : `${count.toLocaleString()} behind`,
+      tooltip:
+        count === null
+          ? `Behind ${detail.baseBranch}`
+          : `${count.toLocaleString()} ${count === 1 ? "commit" : "commits"} behind ${detail.baseBranch}`,
+      behind: true,
+    };
+  }
+  if (detail.autoMergeEnabled) {
+    return { label: "Auto-merge on", tooltip: "Merges once checks pass", behind: false };
+  }
+  return detail.baseComparison === "up-to-date"
+    ? { label: "Up to date", tooltip: `Up to date with ${detail.baseBranch}`, behind: false }
     : null;
 }
 

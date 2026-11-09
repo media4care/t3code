@@ -38,6 +38,7 @@ import {
   resolveBaseFreshness,
   classifyPullRequestChecks,
   describePullRequestChecks,
+  describeThreadPanelBaseStatus,
   isPullRequestConflicting,
   resolvePullRequestMergeMethod,
   allowedPullRequestMergeMethods,
@@ -184,9 +185,11 @@ export function ThreadDetailsPrRow({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
 
   const rowAction = resolveThreadPanelPullRequestAction(detail);
-  if (confirmingMerge && rowAction !== "merge") {
+  const confirmsMerge = rowAction === "merge" || rowAction === "rebase-and-merge";
+  if (confirmingMerge && !confirmsMerge) {
     setConfirmingMerge(false);
   }
+  const baseStatus = describeThreadPanelBaseStatus(detail);
   const conflicting = isPullRequestConflicting(detail);
   const checksState = detail === null ? "none" : classifyPullRequestChecks(detail.checks);
   const checksRollup = detail === null ? null : pullRequestChecksState(detail.checks);
@@ -204,6 +207,9 @@ export function ThreadDetailsPrRow({
       resolveBaseFreshness(detail)?.methods.includes("rebase") &&
       (await perform("update-branch", undefined, "rebase"))
     ) {
+      if (rowAction === "rebase-and-merge") {
+        await perform("enable-auto-merge", selectedMergeMethod);
+      }
       return;
     }
     void rebaseLaunch.launch({
@@ -361,27 +367,37 @@ export function ThreadDetailsPrRow({
             tooltip: `Mark this ${terminology.singular} as ready for review`,
             onClick: () => void perform("ready"),
           }
-        : rowAction === "fix"
+        : rowAction === "rebase-and-merge"
           ? {
-              label: "Fix",
-              pendingLabel: "Preparing...",
-              pending: handoff === "findings",
-              destructive: true,
-              suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
-              tooltip: "Fix the failing checks in a new thread",
-              onClick: startFixChecks,
+              label: "Rebase & merge",
+              pendingLabel: "Rebasing...",
+              pending: rebaseLaunch.launching || actionPending,
+              destructive: false,
+              suffix: null,
+              tooltip: `Rebase onto ${detail?.baseBranch}, then merge (${selectedMergeMethod}) once checks pass. If it conflicts, an agent takes over`,
+              onClick: () => setConfirmingMerge(true),
             }
-          : rowAction === "merge"
+          : rowAction === "fix"
             ? {
-                label: "Merge",
-                pendingLabel: "Merging...",
-                pending: actionPending,
-                destructive: false,
-                suffix: null,
-                tooltip: `Merge this ${terminology.singular} (${selectedMergeMethod})`,
-                onClick: () => setConfirmingMerge(true),
+                label: "Fix",
+                pendingLabel: "Preparing...",
+                pending: handoff === "findings",
+                destructive: true,
+                suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
+                tooltip: "Fix the failing checks in a new thread",
+                onClick: startFixChecks,
               }
-            : null;
+            : rowAction === "merge"
+              ? {
+                  label: "Merge",
+                  pendingLabel: "Merging...",
+                  pending: actionPending,
+                  destructive: false,
+                  suffix: null,
+                  tooltip: `Merge this ${terminology.singular} (${selectedMergeMethod})`,
+                  onClick: () => setConfirmingMerge(true),
+                }
+              : null;
 
   const watching =
     onStopWatching !== undefined && (detail?.state ?? pr?.state ?? "open") === "open";
@@ -458,7 +474,8 @@ export function ThreadDetailsPrRow({
 
   return (
     <>
-      {detail !== null && (showChecks || trailingAction !== null || watching) ? (
+      {detail !== null &&
+      (showChecks || trailingAction !== null || watching || baseStatus !== null) ? (
         <div className="pb-1.5">
           {openRow(detail.title, "row", true)}
           <div className="mt-1.5 flex h-5 min-w-0 items-center gap-0.5 ps-9 pe-2.5 text-xs text-muted-foreground">
@@ -472,6 +489,23 @@ export function ThreadDetailsPrRow({
               />
             ) : null}
             {watchControl("icon")}
+            {baseStatus !== null ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className={cn(
+                        "ms-1 min-w-0 truncate",
+                        baseStatus.behind && "text-warning-foreground",
+                      )}
+                    />
+                  }
+                >
+                  {baseStatus.label}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{baseStatus.tooltip}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             <span className="flex-1" />
             {trailingAction ? (
               <Tooltip>
@@ -505,13 +539,18 @@ export function ThreadDetailsPrRow({
       ) : (
         openRow(label, "row")
       )}
-      {rowAction === "merge" ? (
+      {confirmsMerge ? (
         <AlertDialog open={confirmingMerge} onOpenChange={(open) => setConfirmingMerge(open)}>
           <AlertDialogPopup>
             <AlertDialogHeader>
-              <AlertDialogTitle>Merge {terminology.singular}?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {rowAction === "rebase-and-merge" ? "Rebase and merge" : "Merge"}{" "}
+                {terminology.singular}?
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                This merges #{number} using {selectedMergeMethod}.
+                {rowAction === "rebase-and-merge"
+                  ? `This rebases #${number} onto ${detail?.baseBranch} and merges it using ${selectedMergeMethod} once checks pass on the rebased branch.`
+                  : `This merges #${number} using ${selectedMergeMethod}.`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -523,10 +562,11 @@ export function ThreadDetailsPrRow({
                 disabled={actionPending}
                 onClick={() => {
                   setConfirmingMerge(false);
-                  void perform("merge", selectedMergeMethod);
+                  if (rowAction === "rebase-and-merge") void rebaseOntoBase();
+                  else void perform("merge", selectedMergeMethod);
                 }}
               >
-                Merge
+                {rowAction === "rebase-and-merge" ? "Rebase & merge" : "Merge"}
               </Button>
             </AlertDialogFooter>
           </AlertDialogPopup>
