@@ -89,6 +89,10 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
       label: "environment-data:git-explorer:read-branch-statuses",
       tag: WS_METHODS.gitExplorerBranchStatuses,
     }),
+    readPatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git-explorer:read-patch",
+      tag: WS_METHODS.gitExplorerPatch,
+    }),
     runAction: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:git-explorer:run-action",
       tag: WS_METHODS.gitExplorerRunAction,

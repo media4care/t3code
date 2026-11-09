@@ -1720,38 +1720,76 @@ const make = Effect.gen(function* () {
             break;
           }
           case "discard": {
-            const filePath = input.filePaths?.[0];
+            const filePaths = input.filePaths ?? [];
+            const stages = input.fileStages ?? (input.fileStage ? [input.fileStage] : []);
+            const tokens = input.changeTokens ?? (input.changeToken ? [input.changeToken] : []);
             if (
-              !filePath ||
-              input.filePaths?.length !== 1 ||
-              !input.fileStage ||
-              !input.changeToken
+              filePaths.length === 0 ||
+              new Set(filePaths).size !== filePaths.length ||
+              stages.length !== filePaths.length ||
+              tokens.length !== filePaths.length
             )
               return yield* new GitExplorerError({
                 operation: input.action,
                 reason: "invalid-path",
               });
-            const current = yield* patch({
-              ...input,
-              revision: null,
-              path: filePath,
-              stage: input.fileStage,
-            });
-            if (current.truncated || current.changeToken !== input.changeToken)
+            const current = yield* Effect.forEach(
+              filePaths,
+              (filePath, index) =>
+                patch({ ...input, revision: null, path: filePath, stage: stages[index]! }),
+              { concurrency: 4 },
+            );
+            if (current.some((file, index) => file.truncated || file.changeToken !== tokens[index]))
               return yield* new GitExplorerError({
                 operation: input.action,
                 reason: "changes-changed",
               });
             const review = yield* details({ ...input, revision: null });
-            if (review.files.some((file) => file.path === filePath && file.status === "unmerged"))
+            if (
+              review.files.some(
+                (file) => file.status === "unmerged" && filePaths.includes(file.path),
+              )
+            )
               return yield* new GitExplorerError({
                 operation: input.action,
                 reason: "invalid-path",
               });
-            args =
-              input.fileStage === "untracked"
-                ? ["clean", "-f", "--", filePath]
-                : ["restore", "--worktree", "--", filePath];
+            const untracked = filePaths.filter((_, index) => stages[index] === "untracked");
+            const tracked = filePaths.filter((_, index) => stages[index] === "unstaged");
+            const gitlinks = tracked.length
+              ? (yield* run(cwd, ["ls-files", "--stage", "-z", "--", ...tracked])).stdout
+                  .split("\0")
+                  .filter((record) => record.startsWith("160000 "))
+                  .map((record) => record.slice(record.indexOf("\t") + 1))
+              : [];
+            // Restoring a gitlink checks out the recorded commit inside the submodule, overwriting its edits.
+            for (const gitlink of gitlinks) {
+              const status = yield* run(path.join(cwd, gitlink), ["status", "--porcelain"], {
+                allowNonZero: true,
+              });
+              if (status.exitCode !== 0 || status.stdout.trim())
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "submodule-has-changes",
+                });
+            }
+            if (untracked.length && tracked.length)
+              yield* git.execute({
+                operation: "GitExplorer.discard",
+                cwd,
+                args: ["--literal-pathspecs", "clean", "-f", "--", ...untracked],
+                env: { GIT_TERMINAL_PROMPT: "0" },
+                timeoutMs: null,
+              });
+            args = tracked.length
+              ? [
+                  "restore",
+                  ...(gitlinks.length ? ["--recurse-submodules"] : []),
+                  "--worktree",
+                  "--",
+                  ...tracked,
+                ]
+              : ["clean", "-f", "--", ...untracked];
             break;
           }
           case "commit": {

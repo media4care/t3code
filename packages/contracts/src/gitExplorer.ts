@@ -158,6 +158,11 @@ export const GitExplorerRunActionInput = Schema.Struct({
   ),
   fileStage: Schema.optional(Schema.Literals(["unstaged", "untracked"])),
   changeToken: Schema.optional(Schema.String),
+  // Discarding several files: one stage and reviewed patch token per `filePaths` entry.
+  fileStages: Schema.optional(
+    Schema.Array(Schema.Literals(["unstaged", "untracked"])).check(Schema.isMaxLength(2000)),
+  ),
+  changeTokens: Schema.optional(Schema.Array(Schema.String).check(Schema.isMaxLength(2000))),
   indexVersion: Schema.optional(Schema.String),
   amend: Schema.optional(Schema.Boolean),
   tagName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
@@ -277,6 +282,7 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "invalid-tag",
     "tag-changed",
     "invalid-remote",
+    "submodule-has-changes",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -334,6 +340,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "This tag changed or was removed. Refresh Git Explorer and try again.";
       case "invalid-remote":
         return "Choose a configured Git remote.";
+      case "submodule-has-changes":
+        return "A submodule has uncommitted changes. Commit or discard them inside the submodule first.";
       case "write-failed":
         return "Git Explorer could not delete this branch.";
     }
