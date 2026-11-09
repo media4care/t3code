@@ -94,9 +94,20 @@ export const ReleaseRolloutState = Schema.Literals([
 ]);
 export type ReleaseRolloutState = typeof ReleaseRolloutState.Type;
 
+/** Where a binary is distributed; `direct` covers downloads outside any store. */
+export const ReleaseStore = Schema.Literals([
+  "app-store",
+  "testflight",
+  "play",
+  "firebase",
+  "direct",
+]);
+export type ReleaseStore = typeof ReleaseStore.Type;
+
 export const ReleaseBinary = Schema.Struct({
   /** Where it is installed from, such as "Play production" or "TestFlight". */
   label: ShortText,
+  store: Schema.optionalKey(ReleaseStore),
   audience: ReleaseAudience,
   version: ShortText,
   build: Schema.optionalKey(ShortText),
