@@ -34,8 +34,13 @@ Branches checked out in another worktree cannot be switched to or renamed here.
 
 In **Working Tree** on web and desktop, stage or unstage whole files, then commit the staged
 content. Unstaged edits stay out of the commit. **Amend latest commit** replaces the latest
-commit, including its hash. **Discard** restores the selected file's unstaged changes while
+commit, including its hash. **Discard** restores the selected files' unstaged changes while
 keeping staged content; discarding an untracked file deletes it after confirmation.
+**Discard all** does the same for every unstaged and untracked file. Discarding a submodule
+checks it out at the commit the repository records, and is refused while the submodule has
+uncommitted changes of its own. On web and desktop, Cmd-click (Ctrl-click on Windows and Linux)
+or Shift-click working-tree files to select several, then use the toolbar or right-click them
+to stage, unstage, or discard them together.
 
 On web and desktop, search branches and tags by name, or search history by message, author,
 commit hash, or a repository-relative file or directory path. History search includes commits

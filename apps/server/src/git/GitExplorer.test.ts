@@ -612,6 +612,83 @@ it.layer(layer)("GitExplorer", (it) => {
       assert.equal(yield* git(["ls-files", "--others", "--exclude-standard"]), "n.txt");
     }),
   );
+  it.effect("discards several reviewed files together and resets a moved submodule", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, fs, path, cwd } = yield* fixture;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const gitIn = (directory: string, args: readonly string[]) =>
+        driver
+          .execute({
+            operation: "GitExplorer.test",
+            cwd: directory,
+            args: ["-c", "protocol.file.allow=always", ...args],
+          })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      const library = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-explorer-library-" });
+      yield* gitIn(library, ["init", "--initial-branch=main"]);
+      for (const message of ["first", "second"])
+        yield* gitIn(library, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          message,
+        ]);
+      const recorded = yield* gitIn(library, ["rev-parse", "HEAD"]);
+      yield* git(["-c", "protocol.file.allow=always", "submodule", "add", library, "lib"]);
+      yield* git(["commit", "-m", "add submodule"]);
+      const head = yield* git(["rev-parse", "HEAD"]);
+      const submodule = path.join(cwd, "lib");
+      yield* gitIn(submodule, ["checkout", "-q", "HEAD~1"]);
+      yield* write("hello.txt", "changed\n");
+      yield* write("new.txt", "remove\n");
+      const files = [
+        { path: "hello.txt", stage: "unstaged" },
+        { path: "lib", stage: "unstaged" },
+        { path: "new.txt", stage: "untracked" },
+      ] as const;
+      const tokens = yield* Effect.forEach(files, (file) =>
+        explorer
+          .patch({ ...scope, revision: null, ...file })
+          .pipe(Effect.map((patch) => patch.changeToken ?? "")),
+      );
+      const discard = (changeTokens: string[]) =>
+        explorer
+          .runAction({
+            ...scope,
+            expectedHead: head,
+            expectedBranch: "main",
+            action: "discard",
+            filePaths: files.map((file) => file.path),
+            fileStages: files.map((file) => file.stage),
+            changeTokens,
+          })
+          .pipe(
+            Effect.flip,
+            Effect.map((error) => error.reason),
+          );
+      assert.equal(yield* discard([tokens[0]!, tokens[1]!, "stale"]), "changes-changed");
+      yield* fs.writeFileString(path.join(submodule, "scratch.txt"), "inside\n");
+      assert.equal(yield* discard(tokens), "submodule-has-changes");
+      assert.equal(yield* git(["status", "--porcelain"]), "M hello.txt\n M lib\n?? new.txt");
+      yield* fs.remove(path.join(submodule, "scratch.txt"));
+
+      yield* explorer.runAction({
+        ...scope,
+        expectedHead: head,
+        expectedBranch: "main",
+        action: "discard",
+        filePaths: files.map((file) => file.path),
+        fileStages: files.map((file) => file.stage),
+        changeTokens: tokens,
+      });
+      assert.equal(yield* git(["status", "--porcelain"]), "");
+      assert.equal(yield* gitIn(submodule, ["rev-parse", "HEAD"]), recorded);
+    }),
+  );
   it.effect("switches existing branches and renames without losing local changes or upstream", () =>
     Effect.gen(function* () {
       const { explorer, git, write, root } = yield* fixture;

@@ -14,7 +14,7 @@ import {
   FileIcon,
   Rows3Icon,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState, type MouseEvent } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { updateClientSettings, useClientSettings } from "~/hooks/useSettings";
@@ -38,6 +38,7 @@ import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
 import {
   GitExplorerWorkingTree,
   type GitExplorerWorkingTreeActions,
+  type GitExplorerWorkingTreeHandle,
 } from "./GitExplorerWorkingTree";
 
 import { useGitExplorerFileMenu } from "./useGitExplorerFileMenu";
@@ -294,11 +295,40 @@ export function GitExplorerReview({
   const details = detailsQuery.data;
   const files = details?.files ?? [];
   const selectedFile = files.find((file) => fileKey(file) === selectedFileKey) ?? files[0] ?? null;
+  // Working-tree rows support Cmd/Ctrl and Shift selection; the diff follows the anchor row.
+  const multiSelect = revision === null && workingTreeActions !== undefined;
+  const [checkedKeys, setCheckedKeys] = useState<ReadonlySet<string>>(new Set());
+  const checkedFiles = files.filter((file) => checkedKeys.has(fileKey(file)));
+  const selectedFiles = checkedFiles.length ? checkedFiles : selectedFile ? [selectedFile] : [];
+  const selectedKeys = new Set(selectedFiles.map(fileKey));
+  const workingTree = useRef<GitExplorerWorkingTreeHandle>(null);
   const stageCounts = new Map<string, number>();
   for (const file of files) stageCounts.set(file.stage, (stageCounts.get(file.stage) ?? 0) + 1);
   const selectFile = (file: GitExplorerFile) => {
     setSelectedFileKey(fileKey(file));
+    setCheckedKeys(new Set());
     setShowDiff(true);
+  };
+  const clickFile = (event: MouseEvent, index: number) => {
+    const file = files[index]!;
+    const key = fileKey(file);
+    if (multiSelect && (event.metaKey || event.ctrlKey)) {
+      const next = new Set(selectedKeys);
+      if (next.has(key) && next.size > 1) next.delete(key);
+      else next.add(key);
+      setCheckedKeys(next);
+      if (next.has(key)) setSelectedFileKey(key);
+      else if (selectedFile && !next.has(fileKey(selectedFile)))
+        setSelectedFileKey(next.values().next().value ?? null);
+      return;
+    }
+    if (multiSelect && event.shiftKey && selectedFile) {
+      const anchor = files.indexOf(selectedFile);
+      const range = files.slice(Math.min(anchor, index), Math.max(anchor, index) + 1);
+      setCheckedKeys(new Set(range.map(fileKey)));
+      return;
+    }
+    navigation.optionProps(index).onClick();
   };
   const navigation = useGitExplorerListNavigation({
     count: files.length,
@@ -333,7 +363,8 @@ export function GitExplorerReview({
               environmentId={environmentId}
               input={input}
               details={details}
-              selectedFile={selectedFile}
+              selectedFiles={selectedFiles}
+              ref={workingTree}
             />
           ) : null}
           {details.truncated ? (
@@ -376,26 +407,35 @@ export function GitExplorerReview({
                 <LegendList
                   {...navigation.listProps}
                   aria-label="Changed files"
+                  aria-multiselectable={multiSelect || undefined}
                   data={files}
                   keyExtractor={fileKey}
                   estimatedItemSize={fileRowHeight}
                   getFixedItemSize={() => fileRowHeight}
-                  extraData={selectedFile ? fileKey(selectedFile) : null}
+                  extraData={[...selectedKeys].join("\0")}
                   className="min-h-0 flex-1 overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   renderItem={({ item: file, index }) => (
                     <button
                       type="button"
                       {...navigation.optionProps(index)}
+                      {...(multiSelect ? { "aria-selected": selectedKeys.has(fileKey(file)) } : {})}
+                      onClick={(event) => clickFile(event, index)}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        void showFileMenu(file, gitExplorerMenuPosition(event));
+                        const targets = selectedKeys.has(fileKey(file)) ? selectedFiles : [file];
+                        if (targets[0] === file && targets.length === 1) selectFile(file);
+                        void showFileMenu(
+                          file,
+                          gitExplorerMenuPosition(event),
+                          workingTree.current?.fileMenu(targets),
+                        );
                       }}
                       aria-current={
                         selectedFile && fileKey(file) === fileKey(selectedFile) ? "true" : undefined
                       }
                       style={{ height: fileRowHeight }}
-                      className="flex w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/10"
+                      className="flex w-full items-center gap-2 px-3 text-left outline-none select-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-current:bg-primary/10 aria-selected:bg-primary/10"
                     >
                       <span
                         className={cn(

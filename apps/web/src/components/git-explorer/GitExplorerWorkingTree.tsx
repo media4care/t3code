@@ -5,9 +5,10 @@ import type {
   GitExplorerDetailsResult,
   GitExplorerFile,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { useImperativeHandle, useState, type Ref } from "react";
 import { ensureLocalApi } from "~/localApi";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import {
@@ -20,6 +21,8 @@ import {
 } from "../ui/dialog";
 import { useGitExplorerAction } from "./useGitExplorerAction";
 import { useGitExplorerQuery } from "./useGitExplorerQuery";
+import type { GitExplorerFileMenuExtra } from "./useGitExplorerFileMenu";
+import { toastManager } from "../ui/toast";
 
 export interface GitExplorerWorkingTreeActions {
   overview: GitExplorerOverviewResult;
@@ -28,19 +31,29 @@ export interface GitExplorerWorkingTreeActions {
   onBusyChange: (busy: boolean) => void;
 }
 
+export interface GitExplorerWorkingTreeHandle {
+  fileMenu: (files: readonly GitExplorerFile[]) => GitExplorerFileMenuExtra;
+}
+
+const isDiscardable = (file: GitExplorerFile) =>
+  (file.stage === "unstaged" || file.stage === "untracked") && file.status !== "unmerged";
+
 export function GitExplorerWorkingTree({
   environmentId,
   input,
   details,
-  selectedFile,
+  selectedFiles,
+  ref,
   ...actions
 }: GitExplorerWorkingTreeActions & {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   details: GitExplorerDetailsResult;
-  selectedFile: GitExplorerFile | null;
+  selectedFiles: readonly GitExplorerFile[];
+  ref?: Ref<GitExplorerWorkingTreeHandle>;
 }) {
   const { execute, pending, allowed } = useGitExplorerAction({ environmentId, input, ...actions });
+  const readPatch = useAtomCommand(gitExplorerEnvironment.readPatch, { reportFailure: false });
   const [commitOpen, setCommitOpen] = useState(false);
   const [commitReview, setCommitReview] = useState<{
     overview: GitExplorerOverviewResult;
@@ -58,14 +71,6 @@ export function GitExplorerWorkingTree({
         })
       : null,
   );
-  const patch = useGitExplorerQuery(
-    selectedFile && (selectedFile.stage === "unstaged" || selectedFile.stage === "untracked")
-      ? gitExplorerEnvironment.patch({
-          environmentId,
-          input: { ...input, revision: null, path: selectedFile.path, stage: selectedFile.stage },
-        })
-      : null,
-  );
   const staged = details.files.filter((file) => file.stage === "staged");
   const unstaged = details.files.filter(
     (file) => file.stage === "unstaged" || file.stage === "untracked",
@@ -76,37 +81,115 @@ export function GitExplorerWorkingTree({
       ? [head.data.commit.subject, head.data.commit.body].filter(Boolean).join("\n\n")
       : "");
   const blocked = !allowed || actions.busy || pending || confirming;
-  const discard = async () => {
-    if (
-      blocked ||
-      !selectedFile ||
-      !patch.data?.changeToken ||
-      (selectedFile.stage !== "unstaged" && selectedFile.stage !== "untracked")
-    )
-      return;
-    const file = selectedFile;
-    const changeToken = patch.data.changeToken;
+  const stageable = (files: readonly GitExplorerFile[]) =>
+    files.filter((file) => file.stage === "unstaged" || file.stage === "untracked");
+  const unstageable = (files: readonly GitExplorerFile[]) =>
+    files.filter((file) => file.stage === "staged");
+  const stage = (files: readonly GitExplorerFile[]) => {
+    const paths = [...new Set(stageable(files).map((file) => file.path))];
+    if (!blocked && paths.length) void execute({ action: "stage", filePaths: paths });
+  };
+  const unstage = (files: readonly GitExplorerFile[]) => {
+    const paths = unstageable(files).map((file) => file.path);
+    if (!blocked && paths.length) void execute({ action: "unstage", filePaths: paths });
+  };
+  const discard = (selection: readonly GitExplorerFile[]) => {
+    const files = selection.filter(isDiscardable);
+    if (blocked || !files.length) return;
     setConfirming(true);
-    return ensureLocalApi()
-      .dialogs.confirm(
-        file.stage === "untracked"
-          ? `Delete the untracked file ${file.path}? It has no committed version to restore.`
-          : `Discard unstaged changes in ${file.path}? Staged changes are kept.`,
-        { variant: "destructive" },
-      )
-      .then(async (confirmed) => {
-        if (confirmed)
-          await execute({
-            action: "discard",
-            filePaths: [file.path],
-            fileStage: file.stage as "unstaged" | "untracked",
-            changeToken,
+    return reviewDiscard(files).finally(() => setConfirming(false));
+  };
+  const reviewDiscard = async (files: readonly GitExplorerFile[]) => {
+    const tokens: string[] = [];
+    // Each token pins the reviewed change; the server refuses files that changed since.
+    for (let index = 0; index < files.length; index += 8) {
+      const results = await Promise.all(
+        files.slice(index, index + 8).map((file) =>
+          readPatch({
+            environmentId,
+            input: { ...input, revision: null, path: file.path, stage: file.stage },
+          }),
+        ),
+      );
+      for (const result of results) {
+        if (result._tag !== "Success" || !result.value.changeToken) {
+          toastManager.add({
+            type: "error",
+            title: "Could not discard changes",
+            description:
+              "A change is too large to review here or could not be read. Refresh and try again.",
           });
-      })
-      .finally(() => {
-        setConfirming(false);
+          return;
+        }
+        tokens.push(result.value.changeToken);
+      }
+    }
+    const untracked = files.filter((file) => file.stage === "untracked").length;
+    const submodules = files.filter((file) =>
+      actions.overview.submodules?.some((submodule) => submodule.path === file.path),
+    ).length;
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      [
+        files.length === 1
+          ? files[0]!.stage === "untracked"
+            ? `Delete the untracked file ${files[0]!.path}? It has no committed version to restore.`
+            : `Discard unstaged changes in ${files[0]!.path}? Staged changes are kept.`
+          : `Discard unstaged changes in ${files.length} files? Staged changes are kept.`,
+        ...(files.length > 1
+          ? [
+              files
+                .slice(0, 8)
+                .map((file) => file.path)
+                .join("\n") + (files.length > 8 ? `\n…and ${files.length - 8} more` : ""),
+            ]
+          : []),
+        ...(files.length > 1 && untracked
+          ? [`${untracked} untracked ${untracked === 1 ? "file is" : "files are"} deleted.`]
+          : []),
+        ...(submodules
+          ? [
+              `${submodules === 1 ? "The submodule is" : `${submodules} submodules are`} checked out at the commit this repository records.`,
+            ]
+          : []),
+      ].join("\n\n"),
+      { variant: "destructive" },
+    );
+    if (confirmed)
+      await execute({
+        action: "discard",
+        filePaths: files.map((file) => file.path),
+        fileStages: files.map((file) => file.stage as "unstaged" | "untracked"),
+        changeTokens: tokens,
       });
   };
+  useImperativeHandle(ref, () => ({
+    fileMenu: (files) => ({
+      items: [
+        {
+          id: "stage",
+          label: files.length > 1 ? `Stage ${files.length} files` : "Stage",
+          disabled: blocked || !stageable(files).length,
+        },
+        {
+          id: "unstage",
+          label: files.length > 1 ? `Unstage ${files.length} files` : "Unstage",
+          disabled: blocked || !unstageable(files).length,
+        },
+        {
+          id: "discard",
+          label: "Discard changes…",
+          destructive: true,
+          disabled: blocked || !files.some(isDiscardable),
+        },
+      ],
+      activate: (id) => {
+        if (id === "stage") stage(files);
+        else if (id === "unstage") unstage(files);
+        else if (id === "discard") void discard(files);
+      },
+    }),
+  }));
+  const count = selectedFiles.length;
   return (
     <>
       <div
@@ -116,41 +199,32 @@ export function GitExplorerWorkingTree({
         <Button
           size="xs"
           variant="ghost"
-          disabled={blocked || !selectedFile || selectedFile.stage === "staged"}
-          onClick={() => {
-            if (selectedFile) void execute({ action: "stage", filePaths: [selectedFile.path] });
-          }}
+          disabled={blocked || !stageable(selectedFiles).length}
+          onClick={() => stage(selectedFiles)}
         >
-          Stage file
+          {count > 1 ? `Stage ${count} files` : "Stage file"}
         </Button>
         <Button
           size="xs"
           variant="ghost"
-          disabled={blocked || selectedFile?.stage !== "staged"}
-          onClick={() => {
-            if (selectedFile) void execute({ action: "unstage", filePaths: [selectedFile.path] });
-          }}
+          disabled={blocked || !unstageable(selectedFiles).length}
+          onClick={() => unstage(selectedFiles)}
         >
-          Unstage file
+          {count > 1 ? `Unstage ${count} files` : "Unstage file"}
         </Button>
         <Button
           size="xs"
           variant="ghost-destructive"
-          disabled={blocked || !patch.data?.changeToken || selectedFile?.status === "unmerged"}
-          onClick={() => void discard()}
+          disabled={blocked || !selectedFiles.some(isDiscardable)}
+          onClick={() => void discard(selectedFiles)}
         >
-          Discard…
+          {count > 1 ? `Discard ${count} files…` : "Discard…"}
         </Button>
         <Button
           size="xs"
           variant="ghost"
           disabled={blocked || !unstaged.length || details.truncated}
-          onClick={() =>
-            void execute({
-              action: "stage",
-              filePaths: [...new Set(unstaged.map((file) => file.path))],
-            })
-          }
+          onClick={() => stage(unstaged)}
         >
           Stage all
         </Button>
@@ -158,11 +232,17 @@ export function GitExplorerWorkingTree({
           size="xs"
           variant="ghost"
           disabled={blocked || !staged.length || details.truncated}
-          onClick={() =>
-            void execute({ action: "unstage", filePaths: staged.map((file) => file.path) })
-          }
+          onClick={() => unstage(staged)}
         >
           Unstage all
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost-destructive"
+          disabled={blocked || !unstaged.some(isDiscardable) || details.truncated}
+          onClick={() => void discard(unstaged)}
+        >
+          Discard all…
         </Button>
         <Button
           size="xs"
