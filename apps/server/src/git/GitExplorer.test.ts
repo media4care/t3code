@@ -1753,6 +1753,64 @@ it.layer(layer)("GitExplorer branch review", (it) => {
     }),
   );
 
+  it.effect("removes a clean linked worktree before deleting the merged branch it holds", () =>
+    Effect.gen(function* () {
+      const { explorer, git, statuses, target, root, cwd, fs, path } = yield* branchFixture;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-delete-worktree-" });
+      const linked = path.join(parent, "linked");
+      yield* git(["worktree", "add", linked, "done"]);
+      yield* fs.symlink(cwd, path.join(linked, "node_modules"));
+      const [reviewed] = yield* statuses(["done"]);
+      assert.equal(reviewed?.deleteBlockedReason, null);
+      assert.equal(yield* fs.realPath(reviewed?.checkedOutAt ?? ""), yield* fs.realPath(linked));
+      const request = {
+        ...scope,
+        branchName: "refs/heads/done",
+        expectedHash: root,
+        expectedTargetRef: "refs/remotes/origin/main",
+        expectedTargetHash: target,
+        allowEquivalent: false,
+      };
+      assert.equal(
+        (yield* explorer.deleteBranch(request).pipe(Effect.flip)).reason,
+        "branch-checked-out",
+      );
+      const removeWorktree = reviewed!.checkedOutAt!;
+      for (const [file, contents] of [
+        ["scratch.txt", "untracked\n"],
+        ["hello.txt", "modified\n"],
+      ] as const) {
+        const original = yield* fs.readFileString(path.join(linked, file)).pipe(Effect.option);
+        yield* fs.writeFileString(path.join(linked, file), contents);
+        assert.equal((yield* statuses(["done"]))[0]?.deleteBlockedReason, "checked-out");
+        assert.equal(
+          (yield* explorer.deleteBranch({ ...request, removeWorktree }).pipe(Effect.flip)).reason,
+          "branch-checked-out",
+        );
+        yield* Option.isSome(original)
+          ? fs.writeFileString(path.join(linked, file), original.value)
+          : fs.remove(path.join(linked, file));
+      }
+      yield* git(["worktree", "lock", linked]);
+      assert.equal((yield* statuses(["done"]))[0]?.deleteBlockedReason, "checked-out");
+      yield* git(["worktree", "unlock", linked]);
+      const viewing = yield* explorer.overview({ ...scope, worktreePath: linked });
+      const fromLinked = yield* explorer.branchStatuses({
+        ...scope,
+        worktreePath: linked,
+        snapshotId: viewing.snapshotId,
+        branches: ["refs/heads/done"],
+      });
+      assert.equal(fromLinked.branches[0]?.deleteBlockedReason, "checked-out");
+      assert.isTrue(yield* fs.exists(linked));
+
+      yield* explorer.deleteBranch({ ...request, removeWorktree });
+      assert.isFalse(yield* fs.exists(linked));
+      assert.equal(yield* git(["branch", "--list", "done"]), "");
+      assert.isTrue(yield* fs.exists(path.join(cwd, "hello.txt")));
+    }),
+  );
+
   it.effect("protects a merged branch reserved by detached rebase and bisect operations", () =>
     Effect.gen(function* () {
       const { explorer, git, target, root, cwd, fs, path } = yield* branchFixture;

@@ -94,7 +94,10 @@ Review the list before confirming. On web and desktop, deleting a branch folder 
 branches inside it. Select **Force delete unmerged or unverified branches** in the review to
 include those branches. If a deletion fails, earlier deletions remain completed and the remaining
 branches are kept; close the review and select them again to retry. Base branches and
-branches checked out in any worktree are protected. Remote branches are never deleted.
+branches checked out in the main checkout or the worktree you are viewing are protected. A
+branch checked out in another worktree can be deleted when that worktree is unlocked and has no
+changes or untracked files. Deleting the branch removes that worktree folder too, including
+ignored files such as dependencies and build output. Remote branches are never deleted.
 Branch-specific Git configuration is retained.
 
 ## Connect an account

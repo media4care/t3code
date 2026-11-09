@@ -800,10 +800,47 @@ const make = Effect.gen(function* () {
         ),
     );
   };
-  const branchDeletionContext = (
+  // Untracked symlinks (agents link node_modules into worktrees) lose nothing when removed.
+  const worktreeIsClean = Effect.fn("GitExplorer.worktreeIsClean")(function* (cwd: string) {
+    const status = yield* run(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"], {
+      allowNonZero: true,
+    });
+    if (status.exitCode !== 0) return false;
+    const entries = status.stdout.split("\0").filter(Boolean);
+    if (entries.length > 32 || entries.some((entry) => !entry.startsWith("?? "))) return false;
+    const links = yield* Effect.forEach(
+      entries,
+      (entry) =>
+        entry.endsWith("/")
+          ? Effect.succeed(false)
+          : fs.readLink(path.join(cwd, entry.slice(3))).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+      { concurrency: 4 },
+    );
+    return links.every(Boolean);
+  });
+  // A clean linked worktree holding the branch is removed with it; any other checkout blocks deletion.
+  const branchWorktree = Effect.fn("GitExplorer.branchWorktree")(function* (
+    worktrees: readonly GitExplorerWorktree[],
+    selectedPath: string,
+    ref: GitExplorerRef,
+  ): Effect.fn.Return<Pick<GitExplorerBranchStatus, "deleteBlockedReason" | "checkedOutAt">> {
+    const index = worktrees.findIndex((worktree) => worktree.branch === ref.shortName);
+    if (index === -1) return { deleteBlockedReason: null };
+    const worktree = worktrees[index]!;
+    if (index === 0 || worktree.bare) return { deleteBlockedReason: "checked-out" };
+    const checkout = yield* canonical(worktree.path).pipe(Effect.orElseSucceed(() => null));
+    if (checkout === null || checkout === selectedPath)
+      return { deleteBlockedReason: "checked-out" };
+    const removable = !worktree.locked && (yield* worktreeIsClean(checkout));
+    return { deleteBlockedReason: removable ? null : "checked-out", checkedOutAt: worktree.path };
+  });
+  const branchDeletionContext = Effect.fn("GitExplorer.branchDeletionContext")(function* (
     snapshot: Snapshot,
     ref: GitExplorerRef,
-  ): GitExplorerBranchStatus => {
+  ) {
     const targetRef = baseForBranch(snapshot, ref.name);
     const targetHash = targetRef ? (snapshot.refsByName.get(targetRef)?.hash ?? null) : null;
     return {
@@ -813,13 +850,15 @@ const make = Effect.gen(function* () {
       targetHash,
       mergeStatus: "unknown",
       reason: null,
-      deleteBlockedReason: protectedBranch(snapshot, ref)
-        ? "protected"
-        : snapshot.overview.worktrees.some((worktree) => worktree.branch === ref.shortName)
-          ? "checked-out"
-          : null,
-    };
-  };
+      ...(protectedBranch(snapshot, ref)
+        ? { deleteBlockedReason: "protected" }
+        : yield* branchWorktree(
+            snapshot.overview.worktrees,
+            snapshot.overview.selectedWorktreePath,
+            ref,
+          )),
+    } satisfies GitExplorerBranchStatus;
+  });
   const computeMergeAssessment = Effect.fn("GitExplorer.computeMergeAssessment")(
     function* (
       snapshot: Snapshot,
@@ -924,7 +963,7 @@ const make = Effect.gen(function* () {
     snapshot: Snapshot,
     ref: GitExplorerRef,
   ) {
-    const result = branchDeletionContext(snapshot, ref);
+    const result = yield* branchDeletionContext(snapshot, ref);
     const status = {
       ...result,
       ...(yield* computeMergeAssessment(snapshot, ref.hash, result.targetHash)),
@@ -994,7 +1033,12 @@ const make = Effect.gen(function* () {
                 },
               }
             : local;
-          if (result.reason !== "read-failed" && result.upstream?.reason !== "read-failed")
+          // Worktree changes do not change the snapshot signature, so recheck their cleanliness.
+          if (
+            result.reason !== "read-failed" &&
+            result.upstream?.reason !== "read-failed" &&
+            result.checkedOutAt === undefined
+          )
             snapshot.branchStatuses.set(ref.name, result);
           return result;
         }),
@@ -1042,7 +1086,7 @@ const make = Effect.gen(function* () {
           reason: "branch-changed",
         });
       const status = input.force
-        ? branchDeletionContext(snapshot, ref)
+        ? yield* branchDeletionContext(snapshot, ref)
         : yield* computeBranchStatus(snapshot, ref);
       if (
         status.targetRef !== input.expectedTargetRef ||
@@ -1071,6 +1115,36 @@ const make = Effect.gen(function* () {
           operation: "delete-branch",
           reason: "branch-not-merged",
         });
+      if (status.checkedOutAt !== undefined) {
+        if (input.removeWorktree === undefined)
+          return yield* new GitExplorerError({
+            operation: "delete-branch",
+            reason: "branch-checked-out",
+          });
+        if (input.removeWorktree !== status.checkedOutAt)
+          return yield* new GitExplorerError({
+            operation: "delete-branch",
+            reason: "branch-changed",
+          });
+        // A single --force removes the reviewed untracked symlinks but still refuses a locked worktree.
+        yield* git
+          .execute({
+            operation: "GitExplorer.removeWorktree",
+            cwd: context.cwd,
+            args: ["worktree", "remove", "--force", "--", status.checkedOutAt],
+            env: { GIT_TERMINAL_PROMPT: "0" },
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitExplorerError({
+                  operation: "delete-branch-worktree",
+                  reason: "write-failed",
+                  cause,
+                }),
+            ),
+          );
+      }
       const latest = yield* resolve(input);
       if (latest.worktrees.some((worktree) => worktree.branch === ref.shortName))
         return yield* new GitExplorerError({
