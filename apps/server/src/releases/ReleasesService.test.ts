@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -143,6 +144,37 @@ describe("ReleasesService", () => {
 
       yield* service.refresh({ projectId, force: true });
       yield* finishedAfter(service, snapshot);
+      assert.strictEqual(yield* fs.readFileString(path.join(root, "runs.txt")), "xx");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("runs once more for forced refreshes that arrive mid-run", () =>
+    Effect.gen(function* () {
+      const processes = yield* ProcessRunner.ProcessRunner;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let first = true;
+      const gated = ProcessRunner.ProcessRunner.of({
+        run: (input) => {
+          if (!first) return processes.run(input);
+          first = false;
+          return Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(processes.run(input)),
+          );
+        },
+      });
+      const { service, root, fs, path } = yield* fixture(
+        `require("node:fs").appendFileSync("runs.txt", "x");
+        console.log(JSON.stringify(${encodeJson(document)}));`,
+      ).pipe(Effect.provideService(ProcessRunner.ProcessRunner, gated));
+      yield* service.refresh({ projectId, force: true });
+      yield* Deferred.await(started);
+      // Two credentials saved while the first run is going.
+      yield* service.refresh({ projectId, force: true });
+      yield* service.refresh({ projectId, force: true });
+      yield* Deferred.succeed(release, undefined);
+      yield* finishedAfter(service, null);
       assert.strictEqual(yield* fs.readFileString(path.join(root, "runs.txt")), "xx");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
