@@ -27,6 +27,8 @@ export const ReleasesConfiguration = Schema.Struct({
 export type ReleasesConfiguration = typeof ReleasesConfiguration.Type;
 
 export const RELEASES_DEFAULT_REFRESH_MINUTES = 15;
+export const RELEASE_ICON_MAX_BYTES = 16 * 1024;
+const RELEASE_ICON_DATA_URL_MAX = Math.ceil(RELEASE_ICON_MAX_BYTES / 3) * 4 + 64;
 
 export const ReleaseSource = Schema.Struct({
   id: ShortText,
@@ -132,6 +134,7 @@ export type ReleaseOtaUpdate = typeof ReleaseOtaUpdate.Type;
 /** One installable app variant, with its store binaries and its OTA channel. */
 export const ReleaseTarget = Schema.Struct({
   id: ShortText,
+  /** The app, matching a `groups` entry for its store name and icon. */
   group: ShortText,
   /** Parts joined by " · "; targets sharing binaries merge and keep the parts that differ. */
   detail: Schema.optionalKey(ShortText),
@@ -182,11 +185,21 @@ export const ReleaseService = Schema.Struct({
 });
 export type ReleaseService = typeof ReleaseService.Type;
 
+export const ReleaseGroup = Schema.Struct({
+  id: ShortText,
+  /** The app's store name, shown instead of the group id. */
+  name: Schema.optionalKey(ShortText),
+  /** A PNG, JPEG or WebP file of at most 16 KB, relative to the folder holding `t3.json`. */
+  icon: Schema.optionalKey(RelativePath),
+});
+export type ReleaseGroup = typeof ReleaseGroup.Type;
+
 /** What a project's release command prints. */
 export const ReleaseStatusDocument = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   generatedAt: IsoDateTime,
   title: Schema.optionalKey(ShortText),
+  groups: Schema.optionalKey(Schema.Array(ReleaseGroup).check(Schema.isMaxLength(50))),
   sources: Schema.Array(ReleaseSource).check(Schema.isMaxLength(20)),
   releases: Schema.Array(ReleaseVersion).check(Schema.isMaxLength(100)),
   unreleased: Schema.optionalKey(ReleaseUnreleased),
@@ -212,6 +225,13 @@ export const ReleasesSnapshot = Schema.Struct({
   ),
   /** The last document the command produced, kept when a later run fails. */
   document: Schema.NullOr(ReleaseStatusDocument),
+  /** Group icons from `groups`, as data URLs by group id. */
+  icons: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.String.check(Schema.isMaxLength(RELEASE_ICON_DATA_URL_MAX)),
+    ),
+  ),
 });
 export type ReleasesSnapshot = typeof ReleasesSnapshot.Type;
 

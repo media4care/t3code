@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
+  RELEASE_ICON_MAX_BYTES,
   SecretProviderId,
   type ReleaseStatusDocument,
   type ReleasesSnapshot,
@@ -193,6 +194,33 @@ describe("ReleasesService", () => {
       const snapshot = yield* finishedAfter(service, first);
       assert.deepStrictEqual(snapshot.document, document);
       assert.include(snapshot.lastRun?.error ?? "", "schemaVersion");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("sends group icons from the repository and skips files that are not small images", () =>
+    Effect.gen(function* () {
+      const withGroups: ReleaseStatusDocument = {
+        ...document,
+        groups: [
+          { id: "app", name: "App", icon: "icons/app.png" },
+          { id: "renamed", icon: "icons/secret.png" },
+          { id: "large", icon: "icons/large.png" },
+          { id: "missing", icon: "icons/missing.png" },
+        ],
+      };
+      const { service, root, fs, path } = yield* fixture(
+        `console.log(JSON.stringify(${encodeJson(withGroups)}));`,
+      );
+      const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+      yield* fs.makeDirectory(path.join(root, "icons"));
+      yield* fs.writeFile(path.join(root, "icons/app.png"), new Uint8Array(png));
+      yield* fs.writeFileString(path.join(root, "icons/secret.png"), "TOKEN=abc");
+      const large = new Uint8Array(RELEASE_ICON_MAX_BYTES + 1);
+      large.set(png);
+      yield* fs.writeFile(path.join(root, "icons/large.png"), large);
+
+      const snapshot = yield* service.read({ projectId });
+      assert.deepStrictEqual(snapshot.icons, { app: "data:image/png;base64,iVBORw0KGgo=" });
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

@@ -1,4 +1,5 @@
 import {
+  RELEASE_ICON_MAX_BYTES,
   ReleaseStatusDocument,
   ReleasesConfiguration,
   ReleasesError,
@@ -28,6 +29,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { fileHeaderMimeType } from "../workspace/fileHeaderMimeType.ts";
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 const ERROR_LIMIT = 2000;
@@ -35,6 +37,7 @@ const decodeConfig = Schema.decodeEffect(
   fromLenientJson(Schema.Struct({ releases: Schema.optionalKey(ReleasesConfiguration) })),
 );
 const decodeDocument = Schema.decodeEffect(Schema.fromJsonString(ReleaseStatusDocument));
+const ICON_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 interface ProjectState {
   readonly running: boolean;
@@ -42,8 +45,15 @@ interface ProjectState {
   readonly rerun: boolean;
   readonly lastRun: ReleasesSnapshot["lastRun"];
   readonly document: ReleaseStatusDocument | null;
+  readonly icons: Readonly<Record<string, string>>;
 }
-const EMPTY: ProjectState = { running: false, rerun: false, lastRun: null, document: null };
+const EMPTY: ProjectState = {
+  running: false,
+  rerun: false,
+  lastRun: null,
+  document: null,
+  icons: {},
+};
 
 const tail = (text: string) => text.trim().slice(-ERROR_LIMIT);
 
@@ -139,6 +149,7 @@ const make = Effect.gen(function* () {
       running: state.running,
       lastRun: state.lastRun,
       document: state.document,
+      icons: state.icons,
     } satisfies ReleasesSnapshot;
   });
 
@@ -161,6 +172,38 @@ const make = Effect.gen(function* () {
     },
     Effect.mapError((error) => (typeof error === "string" ? error : tail(error.message))),
   );
+
+  /** Group icons as data URLs, read once per document; a missing, large or non-image file is skipped. */
+  const icons = Effect.fn("ReleasesService.icons")(function* (
+    root: string,
+    document: ReleaseStatusDocument,
+  ) {
+    const entries = yield* Effect.forEach(
+      document.groups ?? [],
+      (group) => {
+        if (!group.icon) return Effect.succeed([]);
+        const file = path.join(root, group.icon);
+        return Effect.gen(function* () {
+          const size = Number((yield* fs.stat(file)).size);
+          if (size > RELEASE_ICON_MAX_BYTES)
+            return yield* Effect.fail(`it is larger than ${RELEASE_ICON_MAX_BYTES / 1024} KB`);
+          const bytes = yield* fs.readFile(file);
+          const type = fileHeaderMimeType(bytes);
+          if (!type || !ICON_TYPES.has(type))
+            return yield* Effect.fail("it is not a PNG, JPEG or WebP image");
+          return [[group.id, `data:${type};base64,${Buffer.from(bytes).toString("base64")}`]];
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(
+              `Skipping the release icon ${group.icon}: ${typeof error === "string" ? error : error.message}`,
+            ).pipe(Effect.as([])),
+          ),
+        );
+      },
+      { concurrency: 4 },
+    );
+    return Object.fromEntries(entries.flat());
+  });
 
   /** Marks the project running and returns the run, or nothing to do while the document is fresh. */
   const start = Effect.fn("ReleasesService.start")(function* (input: ReleasesRefreshInput) {
@@ -188,12 +231,14 @@ const make = Effect.gen(function* () {
       while (true) {
         const startedAt = DateTime.formatIso(yield* DateTime.now);
         const outcome = yield* run(input.projectId, root, config).pipe(Effect.result);
+        const resolved = outcome._tag === "Success" ? yield* icons(root, outcome.success) : null;
         const finishedAt = DateTime.formatIso(yield* DateTime.now);
         const current = stateOf(input.projectId);
         states.set(input.projectId, {
           running: current.rerun,
           rerun: false,
           document: outcome._tag === "Success" ? outcome.success : current.document,
+          icons: resolved ?? current.icons,
           lastRun: {
             startedAt,
             finishedAt,
