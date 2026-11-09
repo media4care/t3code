@@ -261,3 +261,57 @@ export const RELEASES_CONFIGURATION_EXAMPLE = `{
     "command": "yarn --silent release:status --json"
   }
 }`;
+
+export interface ReleaseCredential {
+  /** The environment variable the release command reads. */
+  readonly name: string;
+  readonly label: string;
+  readonly description: string;
+  readonly sensitive: boolean;
+  readonly placeholder?: string;
+}
+
+/** What the release status command reads, as the Releases settings offer it. */
+export const RELEASE_CREDENTIALS: ReadonlyArray<ReleaseCredential> = [
+  {
+    name: "CIRCLECI_TOKEN",
+    label: "CircleCI token",
+    description: "Personal API token. Shows pipelines and the approvals waiting on you.",
+    sensitive: true,
+  },
+  {
+    name: "EXPO_TOKEN",
+    label: "Expo token",
+    description:
+      "Access token for OTA updates. Not needed when the project’s machine is signed in to EAS.",
+    sensitive: true,
+  },
+  {
+    name: "APP_STORE_CONNECT_KEY_ID",
+    label: "App Store Connect key ID",
+    description: "ID of the API key under Users and Access → Integrations.",
+    sensitive: false,
+    placeholder: "ABC123DEFG",
+  },
+  {
+    name: "APP_STORE_CONNECT_ISSUER_ID",
+    label: "App Store Connect issuer ID",
+    description: "Shown above the API keys list.",
+    sensitive: false,
+    placeholder: "00000000-0000-0000-0000-000000000000",
+  },
+  {
+    name: "APP_STORE_CONNECT_KEY_FILE",
+    label: "App Store Connect key file",
+    description: "Full path to the downloaded .p8 key on the project’s machine.",
+    sensitive: false,
+    placeholder: "/path/to/AuthKey_ABC123DEFG.p8",
+  },
+  {
+    name: "GOOGLE_PLAY_SERVICE_ACCOUNT_FILE",
+    label: "Google Play service account",
+    description: "Full path to the service account’s JSON key on the project’s machine.",
+    sensitive: false,
+    placeholder: "/path/to/play-service-account.json",
+  },
+];

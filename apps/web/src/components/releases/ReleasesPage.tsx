@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useContext, useEffect, useState } from "react";
-import { ArrowLeftIcon, PackageIcon, RefreshCwIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { ArrowLeftIcon, KeyRoundIcon, PackageIcon, RefreshCwIcon } from "lucide-react";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   currentReleases,
@@ -12,7 +13,13 @@ import {
   releaseTargetGroups,
   RELEASES_CONFIGURATION_EXAMPLE,
 } from "@t3tools/client-runtime/releases";
+import {
+  deriveLogicalProjectKeyFromSettings,
+  selectProjectGroupingSettings,
+} from "@t3tools/client-runtime/state/project-grouping";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+
+import { useClientSettings } from "../../hooks/useSettings";
 
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
@@ -21,7 +28,6 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
-import { ReleaseEnvironmentSection } from "./ReleaseEnvironmentSection";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
@@ -51,6 +57,7 @@ export function ReleasesPage() {
     (candidate) => candidate.environmentId === project?.environmentId,
   );
   const back = useNavigateToMainApp();
+  const grouping = useClientSettings(selectProjectGroupingSettings);
   return (
     <SidebarInset className="h-dvh">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
@@ -91,6 +98,7 @@ export function ReleasesPage() {
               key={key(project)}
               environmentId={project.environmentId}
               projectId={project.id}
+              settingsProjectKey={deriveLogicalProjectKeyFromSettings(project, grouping)}
               connected={environment?.connection.phase === "connected"}
               environmentLabel={environment?.label ?? "Environment"}
             />
@@ -111,6 +119,7 @@ export function ReleasesPage() {
 function ProjectReleases(props: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  settingsProjectKey: string;
   connected: boolean;
   environmentLabel: string;
 }) {
@@ -119,6 +128,7 @@ function ProjectReleases(props: {
     serverEnvironment.releasesLive({ environmentId, input: { projectId } }),
   );
   const refresh = useAtomCommand(serverEnvironment.refreshReleases);
+  const navigate = useNavigate();
   const registry = useContext(RegistryContext);
   const canRefresh = useAtomValue(serverEnvironment.refreshReleases.permissionAtom(environmentId));
   const [version, setVersion] = useState<string | null>(null);
@@ -180,6 +190,22 @@ function ProjectReleases(props: {
               ))}
             </SelectPopup>
           </Select>
+        ) : null}
+        {configured ? (
+          <Button
+            variant="outline"
+            aria-label="Release credentials"
+            onClick={() => {
+              void navigate({
+                to: "/settings/projects",
+                search: { project: props.settingsProjectKey, machine: environmentId },
+                hash: "release-credentials",
+              });
+            }}
+          >
+            <KeyRoundIcon />
+            <span className="hidden sm:inline">Credentials</span>
+          </Button>
         ) : null}
         {configured ? (
           <Button
@@ -278,12 +304,6 @@ function ProjectReleases(props: {
           ) : null}
           <ReleaseServiceTable services={document.services} now={now} />
         </>
-      ) : null}
-      {snapshot && configured ? (
-        <ReleaseEnvironmentSection
-          environmentId={environmentId}
-          environmentKey={snapshot.environmentKey}
-        />
       ) : null}
     </>
   );
