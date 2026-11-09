@@ -26,7 +26,7 @@ import {
   insightTrial,
   insightTrialSummary,
 } from "@t3tools/client-runtime/insights";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   FlatList,
   Linking,
@@ -36,15 +36,18 @@ import {
   Switch,
   TextInput,
   View,
+  type TextInputInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { Chip } from "../../components/ui/Chip";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Menu } from "../../components/ui/Menu";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
+import { SearchField } from "../../components/ui/SearchField";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useLinkedEnvironments } from "../../state/peerLinks";
@@ -53,6 +56,23 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+
+const VIEWS = [
+  { value: "review", label: "Dashboard" },
+  { value: "recommendations", label: "Recommendations" },
+  { value: "history", label: "Implementation" },
+] as const;
+const STATUS_FILTERS = [
+  { value: "active", label: "Actionable" },
+  { value: "all", label: "All statuses" },
+  ...INSIGHT_IMPLEMENTATION_FILTERS,
+  ...Object.entries(INSIGHT_STATUS_LABELS)
+    .filter(([value]) => value !== "implemented")
+    .map(([value, label]) => ({ value, label })),
+];
+const defaultFilter = (tab: string) => (tab === "history" ? "all" : "active");
 
 function Picker({
   label,
@@ -93,14 +113,16 @@ export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?
   const environment = environments.find((e) => e.environmentId === selected) ?? environments[0];
   const navigation = useNavigation();
   const environmentPicker = (
-    <Picker
-      label="Insights environment"
-      value={environment?.environmentId ?? ""}
-      choices={environments.map((e) => ({
-        value: e.environmentId,
-        label: `${e.label}${e.connection.phase === "connected" ? "" : " · Offline"}`,
+    <ListFilterMenu
+      label={environment?.label ?? "Environment"}
+      accessibilityLabel="Insights environment"
+      actions={environments.map((e) => ({
+        id: e.environmentId,
+        title: e.label,
+        ...(e.connection.phase === "connected" ? {} : { subtitle: "Offline" }),
+        state: e.environmentId === environment?.environmentId ? ("on" as const) : ("off" as const),
       }))}
-      onChange={(id) => setSelected(EnvironmentId.make(id))}
+      onSelect={(id) => setSelected(EnvironmentId.make(id))}
     />
   );
   return (
@@ -158,8 +180,10 @@ function EnvironmentInsights({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [focusedRecommendationId, setFocusedRecommendationId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const searchRef = useRef<TextInputInstance>(null);
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
+  const { themeAppearance } = useAppearancePreferences();
   const run = useAtomCommand(serverEnvironment.runInsights);
   const configure = useAtomCommand(serverEnvironment.configureInsights);
   const snapshot = query.data;
@@ -202,7 +226,7 @@ function EnvironmentInsights({
       keyboardShouldPersistTaps="handled"
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
-        padding: 16,
+        paddingHorizontal: 16,
         paddingBottom: Math.max(insets.bottom, workspace?.bottomClearance ?? 0) + 24,
         gap: 12,
       }}
@@ -211,7 +235,56 @@ function EnvironmentInsights({
       }
       ListHeaderComponent={
         <View className="gap-4">
-          {environmentPicker}
+          <ListFilterRow bleed={16}>
+            {environmentPicker}
+            <ListFilterMenu
+              label={VIEWS.find((view) => view.value === tab)?.label ?? "Dashboard"}
+              accessibilityLabel="Insights view"
+              actions={VIEWS.map((view) => ({
+                id: view.value,
+                title: view.label,
+                state: view.value === tab ? ("on" as const) : ("off" as const),
+              }))}
+              onSelect={(value) => {
+                setFocusedRecommendationId(null);
+                setTab(value);
+                setFilter(defaultFilter(value));
+              }}
+            />
+            {tab === "review" ? null : (
+              <ListFilterMenu
+                label={STATUS_FILTERS.find((choice) => choice.value === filter)?.label ?? "Status"}
+                active={filter !== defaultFilter(tab)}
+                accessibilityLabel="Recommendation status"
+                actions={STATUS_FILTERS.map((choice) => ({
+                  id: choice.value,
+                  title: choice.label,
+                  state: choice.value === filter ? ("on" as const) : ("off" as const),
+                }))}
+                onSelect={setFilter}
+              />
+            )}
+            <Chip
+              label={busy || active ? "Refreshing…" : "Refresh"}
+              icon="arrow.clockwise"
+              glass
+              colorScheme={themeAppearance}
+              accessibilityLabel="Run a fresh review and show the latest insights"
+              disabled={!snapshot?.settings || !canOperate || !connected || busy || active}
+              onPress={() => {
+                void runNow();
+              }}
+            />
+            <Chip
+              label="Settings"
+              icon="gearshape"
+              glass
+              selected={settingsOpen}
+              colorScheme={themeAppearance}
+              accessibilityLabel="Insights settings"
+              onPress={() => setSettingsOpen(!settingsOpen)}
+            />
+          </ListFilterRow>
           <Text className="font-t3-semibold text-2xl text-foreground">Workflow overview</Text>
           {!connected && (
             <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
@@ -223,23 +296,6 @@ function EnvironmentInsights({
               {query.error}
             </Text>
           )}
-          <View className="flex-row flex-wrap gap-2">
-            <Button
-              label={busy || active ? "Refreshing insights…" : "Refresh insights"}
-              tone="primary"
-              icon="arrow.clockwise"
-              accessibilityHint="Run a fresh Astra max review and show the latest insights."
-              disabled={!snapshot?.settings || !canOperate || !connected || busy || active}
-              onPress={() => {
-                void runNow();
-              }}
-            />
-            <Button
-              label="Settings"
-              icon="gearshape"
-              onPress={() => setSettingsOpen(!settingsOpen)}
-            />
-          </View>
           {snapshot?.settings && (
             <View className="gap-2">
               <Text className="text-xs text-foreground-muted">
@@ -298,20 +354,6 @@ function EnvironmentInsights({
               }}
             />
           )}
-          <Picker
-            label="Insights view"
-            value={tab}
-            choices={[
-              { value: "review", label: "Dashboard" },
-              { value: "recommendations", label: "Recommendations" },
-              { value: "history", label: "Implementation" },
-            ]}
-            onChange={(value) => {
-              setFocusedRecommendationId(null);
-              setTab(value);
-              setFilter(value === "history" ? "all" : "active");
-            }}
-          />
           {tab === "review" ? (
             snapshot?.reports.length ? (
               <DailyReview
@@ -342,29 +384,17 @@ function EnvironmentInsights({
             )
           ) : (
             <>
-              <TextInput
-                accessibilityLabel="Search recommendations"
-                placeholder="Search recommendations…"
-                value={search}
-                onChangeText={setSearch}
-                className="min-h-12 rounded-xl border border-border-subtle px-4 text-foreground"
-              />
-              <Picker
-                label="Recommendation status"
-                value={filter}
-                choices={[
-                  { value: "active", label: "Actionable" },
-                  { value: "all", label: "All statuses" },
-                  ...INSIGHT_IMPLEMENTATION_FILTERS,
-                  ...Object.entries(INSIGHT_STATUS_LABELS)
-                    .filter(([value]) => value !== "implemented")
-                    .map(([value, label]) => ({
-                      value,
-                      label,
-                    })),
-                ]}
-                onChange={setFilter}
-              />
+              <View className="flex-row">
+                <SearchField
+                  inputRef={searchRef}
+                  autoFocus={false}
+                  accessibilityLabel="Search recommendations"
+                  clearAccessibilityLabel="Clear recommendation search"
+                  placeholder="Search recommendations…"
+                  value={search}
+                  onChangeText={setSearch}
+                />
+              </View>
               {snapshot?.truncated && (
                 <Text className="text-xs text-foreground-muted">
                   Showing the 250 most recently updated recommendations.

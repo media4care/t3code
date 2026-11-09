@@ -20,8 +20,8 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
-import { Menu } from "../../components/ui/Menu";
 import { SearchField } from "../../components/ui/SearchField";
+import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
 
 const KINDS = {
   unit: {
@@ -178,50 +178,35 @@ export function QaDashboard({
           onChangeText={setSearch}
         />
       </View>
-      <View className="flex-row flex-wrap gap-2">
-        <Menu
+      <ListFilterRow>
+        <ListFilterMenu
+          label={QA_GROUP_OPTIONS.find(({ value }) => value === grouping)?.label ?? "Group"}
+          accessibilityLabel="Group suites by"
           actions={QA_GROUP_OPTIONS.map(({ value, label }) => ({
             id: value,
             title: label,
-            state: value === grouping ? "on" : "off",
+            state: value === grouping ? ("on" as const) : ("off" as const),
           }))}
-          onPressAction={({ nativeEvent }) => {
-            const option = QA_GROUP_OPTIONS.find(({ value }) => value === nativeEvent.event);
+          onSelect={(id) => {
+            const option = QA_GROUP_OPTIONS.find(({ value }) => value === id);
             if (option) setGrouping(option.value);
           }}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Group suites by"
-            className="min-h-11 justify-center rounded-xl border border-border-subtle px-3"
-          >
-            <Text className="text-sm">
-              {QA_GROUP_OPTIONS.find(({ value }) => value === grouping)?.label} ▾
-            </Text>
-          </Pressable>
-        </Menu>
-        <Menu
+        />
+        <ListFilterMenu
+          label={QA_FILTER_OPTIONS.find(({ value }) => value === filter)?.label ?? "Results"}
+          active={filter !== "all"}
+          accessibilityLabel="Filter suite results"
           actions={QA_FILTER_OPTIONS.map(({ value, label }) => ({
             id: value,
             title: label,
-            state: value === filter ? "on" : "off",
+            state: value === filter ? ("on" as const) : ("off" as const),
           }))}
-          onPressAction={({ nativeEvent }) => {
-            const option = QA_FILTER_OPTIONS.find(({ value }) => value === nativeEvent.event);
+          onSelect={(id) => {
+            const option = QA_FILTER_OPTIONS.find(({ value }) => value === id);
             if (option) setFilter(option.value);
           }}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Filter suite results"
-            className="min-h-11 justify-center rounded-xl border border-border-subtle px-3"
-          >
-            <Text className="text-sm">
-              {QA_FILTER_OPTIONS.find(({ value }) => value === filter)?.label} ▾
-            </Text>
-          </Pressable>
-        </Menu>
-      </View>
+        />
+      </ListFilterRow>
       <Text className="text-xs text-foreground-muted">
         {visibleCount} of {counts.total} suites
       </Text>

@@ -1,4 +1,5 @@
-import { Platform, Pressable } from "react-native";
+import type { ReactNode } from "react";
+import { Platform, Pressable, ScrollView } from "react-native";
 import { Chip } from "../../components/ui/Chip";
 import { Menu } from "../../components/ui/Menu";
 import type { MenuProps } from "../../components/ui/Menu.types";
@@ -9,6 +10,24 @@ export const LIST_FILTER_ROW_STYLE =
   Platform.OS === "android"
     ? { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, gap: 8 }
     : { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 10, gap: 8 };
+
+/**
+ * A scrolling row of filter and action chips. A row at the top of padded content passes that
+ * padding as `bleed`, so it scrolls edge to edge with the list's chip inset.
+ */
+export function ListFilterRow(props: { readonly children: ReactNode; readonly bleed?: number }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      style={{ flexGrow: 0, marginHorizontal: -(props.bleed ?? 0) }}
+      contentContainerStyle={props.bleed === undefined ? { gap: 8 } : LIST_FILTER_ROW_STYLE}
+    >
+      {props.children}
+    </ScrollView>
+  );
+}
 
 export function ListFilterMenu(props: {
   readonly label: string;
