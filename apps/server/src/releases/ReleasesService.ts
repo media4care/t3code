@@ -15,6 +15,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -37,10 +38,12 @@ const decodeDocument = Schema.decodeEffect(Schema.fromJsonString(ReleaseStatusDo
 
 interface ProjectState {
   readonly running: boolean;
+  /** A forced refresh arrived mid-run, possibly with new credentials, so run once more. */
+  readonly rerun: boolean;
   readonly lastRun: ReleasesSnapshot["lastRun"];
   readonly document: ReleaseStatusDocument | null;
 }
-const EMPTY: ProjectState = { running: false, lastRun: null, document: null };
+const EMPTY: ProjectState = { running: false, rerun: false, lastRun: null, document: null };
 
 const tail = (text: string) => text.trim().slice(-ERROR_LIMIT);
 
@@ -169,35 +172,38 @@ const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const state = stateOf(input.projectId);
     const minutes = config.refreshMinutes ?? RELEASES_DEFAULT_REFRESH_MINUTES;
+    if (state.running) {
+      if (input.force) states.set(input.projectId, { ...state, rerun: true });
+      return Effect.void;
+    }
     if (
-      state.running ||
-      (!input.force &&
-        state.lastRun &&
-        now - Date.parse(state.lastRun.finishedAt) < minutes * 60_000)
+      !input.force &&
+      state.lastRun &&
+      now - Date.parse(state.lastRun.finishedAt) < minutes * 60_000
     )
       return Effect.void;
     states.set(input.projectId, { ...state, running: true });
     yield* PubSub.publish(updates, input.projectId);
-    const startedAt = DateTime.formatIso(yield* DateTime.now);
-    return run(input.projectId, root, config).pipe(
-      Effect.result,
-      Effect.flatMap((outcome) =>
-        Effect.gen(function* () {
-          const finishedAt = DateTime.formatIso(yield* DateTime.now);
-          states.set(input.projectId, {
-            running: false,
-            document:
-              outcome._tag === "Success" ? outcome.success : stateOf(input.projectId).document,
-            lastRun: {
-              startedAt,
-              finishedAt,
-              error: outcome._tag === "Failure" ? outcome.failure : null,
-            },
-          });
-          yield* PubSub.publish(updates, input.projectId);
-        }),
-      ),
-    );
+    return Effect.gen(function* () {
+      while (true) {
+        const startedAt = DateTime.formatIso(yield* DateTime.now);
+        const outcome = yield* run(input.projectId, root, config).pipe(Effect.result);
+        const finishedAt = DateTime.formatIso(yield* DateTime.now);
+        const current = stateOf(input.projectId);
+        states.set(input.projectId, {
+          running: current.rerun,
+          rerun: false,
+          document: outcome._tag === "Success" ? outcome.success : current.document,
+          lastRun: {
+            startedAt,
+            finishedAt,
+            error: outcome._tag === "Failure" ? outcome.failure : null,
+          },
+        });
+        yield* PubSub.publish(updates, input.projectId);
+        if (!current.rerun) return;
+      }
+    });
   });
 
   return ReleasesService.of({
@@ -205,7 +211,8 @@ const make = Effect.gen(function* () {
       yield* Effect.forkIn(yield* start(input), scope);
     }),
     read: Effect.fn("ReleasesService.read")(function* (input) {
-      yield* yield* start(input);
+      // Joined, not inlined: an interrupted caller must not strand the project as running.
+      yield* Fiber.join(yield* Effect.forkIn(yield* start(input), scope));
       return yield* snapshot(input.projectId);
     }),
     subscribe: (input) =>

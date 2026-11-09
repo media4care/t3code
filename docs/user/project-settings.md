@@ -312,7 +312,9 @@ same shell as QA suites, so it can read credentials from files there. You can
 also enter its credentials (CircleCI and Expo tokens, App Store Connect and
 Google Play keys) under **Settings → Projects → Releases**, or with
 **Credentials** on the Releases page. They apply to every checkout of the same
-repository on that environment, and tokens can come from a secret provider. While
+repository on that environment, and tokens can come from a secret provider.
+Saving or removing one runs the command again and shows what each source
+reported under the fields, so a rejected token shows up there. While
 Releases is open, T3 Code runs it again once the last result is older than
 `refreshMinutes` (default 15); **Refresh** runs it immediately. If a run fails,
 the page keeps the last status and shows the error.
