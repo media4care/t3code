@@ -10,7 +10,7 @@ export const layer = McpToolAccess.toLayer(ReleasesToolkit, {
     Effect.gen(function* () {
       const releases = yield* Releases.ReleasesService;
       const projectId = yield* resolveProjectId(yield* loadCaller(), input.projectId);
-      return yield* releases
+      const { icons: _icons, ...snapshot } = yield* releases
         .read({ projectId })
         .pipe(
           Effect.mapError(
@@ -18,6 +18,7 @@ export const layer = McpToolAccess.toLayer(ReleasesToolkit, {
               new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
           ),
         );
+      return snapshot;
     }),
   ),
 });
