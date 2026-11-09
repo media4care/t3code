@@ -49,6 +49,7 @@ import {
   ProjectFaviconPickerDialog,
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
+import { ReleaseCredentialsSettings } from "./ReleaseCredentialsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import {
   defaultProjectIcon,
@@ -655,6 +656,19 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
+        {Array.from(checkoutsByEnvironment, ([environmentId, members], index) => (
+          <ReleaseCredentialsSettings
+            key={environmentId}
+            {...(index === 0 ? { id: "release-credentials" } : {})}
+            environmentId={environmentId}
+            projectId={members[0]!.id}
+            title={
+              checkoutsByEnvironment.size > 1
+                ? `Releases · ${members[0]!.environmentLabel ?? "Environment"}`
+                : "Releases"
+            }
+          />
+        ))}
         {checkoutChoices}
         <SettingsSection title="Danger">
           <SettingsRow

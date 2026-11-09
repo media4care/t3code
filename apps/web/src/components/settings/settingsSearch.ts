@@ -1055,6 +1055,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },
   {
+    id: "release-credentials",
+    title: "Releases",
+    to: "/settings/projects",
+    searchTerms: [
+      "release credentials token circleci expo app store connect testflight google play key",
+    ],
+  },
+  {
     id: "environment-icon",
     title: "Environment icon",
     to: "/settings/access",
