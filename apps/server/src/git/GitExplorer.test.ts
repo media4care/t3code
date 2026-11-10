@@ -429,6 +429,21 @@ it.layer(layer)("GitExplorer", (it) => {
         search: feature.slice(0, 10),
       });
       assert.isEmpty(excluded.commits);
+      const branch = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        historyScope: "refs/heads/feature",
+      });
+      assert.deepEqual(
+        branch.commits.map((commit) => commit.hash),
+        [feature, root],
+      );
+      const missing = yield* explorer.history({
+        ...scope,
+        snapshotId,
+        historyScope: "refs/heads/deleted",
+      });
+      assert.isEmpty(missing.commits);
       const included = yield* explorer.history({
         ...scope,
         snapshotId,

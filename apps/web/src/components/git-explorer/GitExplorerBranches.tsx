@@ -255,6 +255,7 @@ function ReferenceRow({
   actions,
   selection,
   tagActions,
+  onShowHistory,
 }: {
   reference: GitExplorerRef;
   color: number;
@@ -268,6 +269,7 @@ function ReferenceRow({
   actions?: BranchActions;
   selection?: BranchSelection;
   tagActions?: TagActions;
+  onShowHistory?: (reference: GitExplorerRef) => void;
 }) {
   const palette = GIT_EXPLORER_COLORS[color % GIT_EXPLORER_COLORS.length]!;
   const mergeDescription = statusError
@@ -289,13 +291,17 @@ function ReferenceRow({
     const blocked =
       !canManage || actions.deleteUnavailable !== null || actions.pendingBranch !== null;
     return showGitExplorerContextMenu<
-      "copy-name" | "copy-hash" | "switch" | "rename" | "push-tag" | "delete-tag"
+      "show-history" | "copy-name" | "copy-hash" | "switch" | "rename" | "push-tag" | "delete-tag"
     >(
       [
+        ...(onShowHistory
+          ? [{ id: "show-history" as const, label: "Show only this branch's history" }]
+          : []),
         {
           id: "copy-name",
           label: reference.kind === "tag" ? "Copy tag name" : "Copy branch name",
           icon: "copy",
+          separatorBefore: onShowHistory !== undefined,
         },
         { id: "copy-hash", label: "Copy commit hash", icon: "copy" },
         ...(reference.kind === "tag" && tagActions
@@ -327,7 +333,8 @@ function ReferenceRow({
       ],
       position,
       async (action) => {
-        if (action === "copy-name")
+        if (action === "show-history") onShowHistory?.(reference);
+        else if (action === "copy-name")
           await copyGitExplorerValue(
             reference.shortName,
             reference.kind === "tag" ? "tag name" : "branch name",
@@ -508,6 +515,7 @@ function LocalBranchChunk({
   active,
   actions,
   selection,
+  onShowHistory,
 }: {
   rows: readonly GitExplorerBranchTreeRow[];
   colors: ReadonlyMap<string, number>;
@@ -521,6 +529,7 @@ function LocalBranchChunk({
   active: boolean;
   actions: BranchActions;
   selection?: BranchSelection;
+  onShowHistory: (reference: GitExplorerRef) => void;
 }) {
   const [visible, setVisible] = useState(false);
   const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
@@ -578,6 +587,7 @@ function LocalBranchChunk({
               statusError={query.error}
               actions={actions}
               {...(selection ? { selection } : {})}
+              onShowHistory={onShowHistory}
             />
           </div>
         );
@@ -748,6 +758,7 @@ export function GitExplorerBranches({
   stashActions,
   onOpenSubmodule,
   tagActions,
+  onShowHistory,
 }: {
   overview: GitExplorerOverviewResult;
   selectedRevision: string | null | undefined;
@@ -759,6 +770,7 @@ export function GitExplorerBranches({
   stashActions: StashActions;
   onOpenSubmodule: (path: string) => void;
   tagActions?: TagActions;
+  onShowHistory: (reference: GitExplorerRef) => void;
 }) {
   const [search, setSearch] = useState("");
   const [collapsedSections, setCollapsedSections] = useLocalStorage(
@@ -932,6 +944,7 @@ export function GitExplorerBranches({
               active={active}
               actions={actions}
               {...(selection ? { selection } : {})}
+              onShowHistory={onShowHistory}
             />
           ))}
           {localRefs.length === 0 ? (
@@ -983,6 +996,7 @@ export function GitExplorerBranches({
                         current={false}
                         selected={selectedRevision === row.reference.hash}
                         onSelect={onSelect}
+                        onShowHistory={onShowHistory}
                       />
                     )}
                   </div>

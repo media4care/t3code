@@ -1898,12 +1898,15 @@ const make = Effect.gen(function* () {
       snapshot.touchedAt = now;
       const limit = Math.max(1, Math.min(200, input.limit ?? 100));
       const cursor = Math.max(0, Math.min(1_000_000, input.cursor ?? 0));
-      let tips =
-        input.historyScope === "current"
+      const scope = input.historyScope ?? "all";
+      const scopeHash =
+        scope === "current"
           ? snapshot.overview.headHash
-            ? [snapshot.overview.headHash]
-            : []
-          : snapshot.tips;
+          : scope === "all"
+            ? null
+            : (snapshot.overview.refs.find((ref) => ref.kind !== "tag" && ref.name === scope)
+                ?.hash ?? null);
+      let tips = scope === "all" ? snapshot.tips : scopeHash ? [scopeHash] : [];
       if (tips.length === 0) return { commits: [], nextCursor: null };
       const search = input.search?.trim() ?? "";
       const filters: string[] = [];

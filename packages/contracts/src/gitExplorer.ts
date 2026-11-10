@@ -178,7 +178,16 @@ export const GitExplorerHistoryInput = Schema.Struct({
   snapshotId: Schema.String,
   cursor: Schema.optional(NonNegativeInt.check(Schema.isLessThanOrEqualTo(1_000_000))),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(200))),
-  historyScope: Schema.optional(Schema.Literals(["all", "current"])),
+  // A ref name limits history to that one branch.
+  historyScope: Schema.optional(
+    Schema.Union([
+      Schema.Literals(["all", "current"]),
+      Schema.String.check(
+        Schema.isPattern(/^refs\/(?:heads|remotes)\/.+/),
+        Schema.isMaxLength(1024),
+      ),
+    ]),
+  ),
   searchField: Schema.optional(Schema.Literals(["message", "author", "hash", "path"])),
   search: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
 });

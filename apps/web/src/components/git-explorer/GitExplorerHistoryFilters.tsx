@@ -1,23 +1,36 @@
-import type { GitExplorerHistoryInput } from "@t3tools/contracts";
+import type { GitExplorerHistoryInput, GitExplorerRef } from "@t3tools/contracts";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 
 export interface GitExplorerHistoryFilters {
-  historyScope: "all" | "current";
+  historyScope: NonNullable<GitExplorerHistoryInput["historyScope"]>;
   searchField: NonNullable<GitExplorerHistoryInput["searchField"]>;
   search: string;
 }
 
 export function GitExplorerHistoryFilters({
   filters,
+  refs,
   onChange,
 }: {
   filters: GitExplorerHistoryFilters;
+  refs: readonly GitExplorerRef[];
   onChange: (filters: GitExplorerHistoryFilters) => void;
 }) {
   const { historyScope, searchField, search: query } = filters;
+  const branches = refs.filter(
+    (ref) => ref.kind === "local" || (ref.kind === "remote" && ref.name === historyScope),
+  );
   return (
     <div className="flex min-w-96 flex-1 items-center gap-1" aria-label="History filters">
       <Select
@@ -27,11 +40,27 @@ export function GitExplorerHistoryFilters({
         }}
       >
         <SelectTrigger size="compact" variant="ghost" aria-label="History scope">
-          <SelectValue>{historyScope === "all" ? "All branches" : "Current branch"}</SelectValue>
+          <SelectValue>
+            {historyScope === "all"
+              ? "All branches"
+              : historyScope === "current"
+                ? "Current branch"
+                : (refs.find((ref) => ref.name === historyScope)?.shortName ?? historyScope)}
+          </SelectValue>
         </SelectTrigger>
         <SelectPopup>
           <SelectItem value="all">All branches</SelectItem>
           <SelectItem value="current">Current branch</SelectItem>
+          {branches.length > 0 ? (
+            <SelectGroup>
+              <SelectGroupLabel>Only one branch</SelectGroupLabel>
+              {branches.map((ref) => (
+                <SelectItem key={ref.name} value={ref.name}>
+                  {ref.shortName}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
         </SelectPopup>
       </Select>
       <Select
