@@ -117,7 +117,7 @@ vi.mock("../../state/query", () => ({
   },
 }));
 // The device pool reads device state of its own; these tests cover suites and runs.
-vi.mock("./QaDevicePool", () => ({ QaDevicePool: () => null }));
+vi.mock("./QaDevicePool", () => ({ QaDevicePool: () => null, QaSimlockNote: () => null }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand:
     (command: { kind: string }) =>

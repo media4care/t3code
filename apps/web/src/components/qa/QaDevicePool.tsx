@@ -1,7 +1,5 @@
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
-import * as Option from "effect/Option";
-import { AsyncResult } from "effect/reactivity";
 import {
   ActivityIcon,
   ChevronDownIcon,
@@ -12,7 +10,6 @@ import {
   PlugZapIcon,
   PowerIcon,
   RefreshCwIcon,
-  ServerIcon,
   UnplugIcon,
   XIcon,
 } from "lucide-react";
@@ -20,7 +17,6 @@ import type { DevicePoolEntry, DeviceServiceState, EnvironmentId } from "@t3tool
 import {
   DEVICE_FORM_FACTOR_LABELS,
   DEVICE_POOL_STATE_LABELS,
-  devicePoolCategory,
   devicePoolCounts,
   devicePoolGroups,
   devicePoolKind,
@@ -32,8 +28,6 @@ import {
   NO_DEVICE_PROBE_ATOM,
   useDeviceState,
 } from "../../state/device";
-import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
-import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
@@ -72,16 +66,6 @@ const METRICS = [
   },
 ] as const;
 
-const otherPoolsAtom = environmentAtomList("web-qa-device-pools", (environmentId) =>
-  deviceEnvironment.pool({ environmentId, input: {} }),
-);
-const otherStatesAtom = environmentAtomList("web-qa-device-states", (environmentId) =>
-  deviceEnvironment.state({ environmentId, input: {} }),
-);
-
-const devicesOff = (state: DeviceServiceState) =>
-  !state.onboardingCompleted || state.hostStatus === "disabled";
-
 const hostFailures = (state: DeviceServiceState) =>
   state.hosts.flatMap((host) => {
     const status = state.hostStatuses[host.id];
@@ -90,19 +74,7 @@ const hostFailures = (state: DeviceServiceState) =>
       : [];
   });
 
-const joinLabels = (labels: ReadonlyArray<string>) =>
-  labels.length < 2 ? (labels[0] ?? "") : `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
-
-/** One environment's devices; its commands run on its own machine. */
-interface PoolSection {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  /** Null while its pool loads. */
-  readonly entries: ReadonlyArray<DevicePoolEntry> | null;
-  readonly hostLabels: ReadonlyMap<string, string>;
-}
-
-/** The project environment's pool, then that of each other connected environment with devices on. */
+/** The QA environment's pool: its suites run on its own machine, so only its devices count. */
 export function QaDevicePool({
   environmentId,
   environmentLabel,
@@ -119,68 +91,15 @@ export function QaDevicePool({
   const needsSetup = loaded && (!state.onboardingCompleted || state.hostStatus === "disabled");
   useAtomMount(loaded && !needsSetup ? deviceHostProbeAtom(environmentId) : NO_DEVICE_PROBE_ATOM);
 
-  const { environments } = useEnvironments();
-  const others = environments.filter(
-    (environment) =>
-      environment.environmentId !== environmentId && environment.connection.phase === "connected",
-  );
-  const othersKey = environmentIdsKey(others.map((environment) => environment.environmentId));
-  const otherPools = useAtomValue(otherPoolsAtom(othersKey));
-  const otherStates = useAtomValue(otherStatesAtom(othersKey));
-  const remote = others.flatMap((environment, index) => {
-    const result = otherStates[index];
-    const remoteState = result ? Option.getOrUndefined(AsyncResult.value(result)) : undefined;
-    if (!remoteState) return [];
-    const remotePool = otherPools[index];
-    return [
-      {
-        environmentId: environment.environmentId,
-        label: environment.label,
-        state: remoteState,
-        entries: remotePool
-          ? (Option.getOrUndefined(AsyncResult.value(remotePool))?.entries ?? null)
-          : null,
-      },
-    ];
-  });
-  // Like Settings → Devices, an environment with devices off shows no section, only a note.
-  const off = remote.filter((section) => devicesOff(section.state));
-  const sections: ReadonlyArray<PoolSection> = [
-    {
-      environmentId,
-      label: environmentLabel,
-      entries: needsSetup ? [] : (pool.data?.entries ?? null),
-      hostLabels: new Map(state.hosts.map((host) => [host.id, host.label])),
-    },
-    ...remote
-      .filter((section) => !devicesOff(section.state))
-      .map((section) => ({
-        ...section,
-        hostLabels: new Map(section.state.hosts.map((host) => [host.id, host.label])),
-      })),
-  ];
-  const multiple = sections.length > 1;
-  const entries = sections.flatMap((section) => section.entries ?? []);
+  const entries = needsSetup ? [] : (pool.data?.entries ?? []);
+  const hostLabels = new Map(state.hosts.map((host) => [host.id, host.label]));
   const counts = devicePoolCounts(entries);
   const { busy } = deviceHubReadiness(state);
-  const failures = [
-    ...(needsSetup ? [] : hostFailures(state)),
-    ...remote
-      .filter((section) => !devicesOff(section.state))
-      .flatMap((section) =>
-        hostFailures(section.state).map((failure) => ({
-          ...failure,
-          id: `${section.environmentId}:${failure.id}`,
-          label: `${section.label} · ${failure.label}`,
-        })),
-      ),
-  ];
+  const failures = needsSetup ? [] : hostFailures(state);
 
   const refresh = () => {
     setRefreshing(true);
-    void Promise.all(
-      sections.map((section) => list({ environmentId: section.environmentId, input: {} })),
-    ).finally(() => setRefreshing(false));
+    void list({ environmentId, input: {} }).finally(() => setRefreshing(false));
   };
 
   return (
@@ -195,11 +114,10 @@ export function QaDevicePool({
             <h3 className="font-semibold">Device pool</h3>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Simulators, emulators, and physical devices on{" "}
-            {joinLabels(sections.map((section) => section.label))}
+            Simulators, emulators, and physical devices on {environmentLabel}
           </p>
         </div>
-        {needsSetup && !multiple ? (
+        {needsSetup ? (
           <Button size="sm" onClick={() => setSetupOpen(true)}>
             Set up devices
           </Button>
@@ -212,20 +130,8 @@ export function QaDevicePool({
       </div>
       {needsSetup ? (
         <p className="mt-3 text-sm text-muted-foreground">
-          Turn on device support{multiple ? ` on ${environmentLabel}` : ""} to see the simulators
-          and emulators you can start and the Android devices connected over ADB.
-          {multiple ? (
-            <>
-              {" "}
-              <button
-                type="button"
-                className="text-foreground underline underline-offset-2"
-                onClick={() => setSetupOpen(true)}
-              >
-                Set up devices
-              </button>
-            </>
-          ) : null}
+          Turn on device support to see the simulators and emulators you can start and the Android
+          devices connected over ADB.
         </p>
       ) : null}
       {failures.map((failure) => (
@@ -264,22 +170,12 @@ export function QaDevicePool({
             ))}
           </div>
           <div className="mt-5 grid gap-6">
-            {multiple ? (
-              sections.map((section) => (
-                <EnvironmentDevices
-                  key={section.environmentId}
-                  section={section}
-                  filter={filter}
-                  home={section.environmentId === environmentId}
-                />
-              ))
-            ) : devicePoolGroups(entries, filter).length > 0 ? (
+            {devicePoolGroups(entries, filter).length > 0 ? (
               <DeviceGroups
                 environmentId={environmentId}
                 entries={entries}
                 filter={filter}
-                hostLabels={sections[0]!.hostLabels}
-                heading="h4"
+                hostLabels={hostLabels}
               />
             ) : (
               <NoDevicesInState onShowAll={() => setFilter("all")} />
@@ -299,12 +195,6 @@ export function QaDevicePool({
           </p>
         </div>
       ) : null}
-      {off.length > 0 ? (
-        <p className="mt-4 text-xs text-muted-foreground">
-          Devices are off on {joinLabels(off.map((section) => section.label))}. Turn them on in
-          Settings → Devices to see them here.
-        </p>
-      ) : null}
       <Dialog open={setupOpen && needsSetup} onOpenChange={setSetupOpen}>
         <WizardPopup>
           <DeviceSetup
@@ -318,60 +208,16 @@ export function QaDevicePool({
   );
 }
 
-function EnvironmentDevices({
-  section,
-  filter,
-  home,
-}: {
-  section: PoolSection;
-  filter: DevicePoolFilter;
-  home: boolean;
-}) {
-  const visible =
-    section.entries?.filter((entry) => filter === "all" || devicePoolCategory(entry) === filter) ??
-    [];
-  return (
-    <section aria-label={`Devices on ${section.label}`} className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2">
-        <ServerIcon className="size-4 shrink-0 text-muted-foreground" />
-        <h4 className="text-sm font-semibold">{section.label}</h4>
-        <span className="text-xs text-muted-foreground">
-          {home ? "This project runs its suites here" : "Used by projects on this environment"}
-        </span>
-      </div>
-      {section.entries === null ? (
-        <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Spinner size="xs" /> Finding devices…
-        </p>
-      ) : visible.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {section.entries.length === 0 ? "No devices found." : "No devices in this state."}
-        </p>
-      ) : (
-        <DeviceGroups
-          environmentId={section.environmentId}
-          entries={visible}
-          filter="all"
-          hostLabels={section.hostLabels}
-          heading="h5"
-        />
-      )}
-    </section>
-  );
-}
-
 function DeviceGroups({
   environmentId,
   entries,
   filter,
   hostLabels,
-  heading: Heading,
 }: {
   environmentId: EnvironmentId;
   entries: ReadonlyArray<DevicePoolEntry>;
   filter: DevicePoolFilter;
   hostLabels: ReadonlyMap<string, string>;
-  heading: "h4" | "h5";
 }) {
   const forget = useAtomCommand(deviceEnvironment.forget);
   const canForget = useAtomValue(deviceEnvironment.forget.permissionAtom(environmentId));
@@ -379,13 +225,7 @@ function DeviceGroups({
   return devicePoolGroups(entries, filter).map((group) => (
     <details key={group.id} open className="group/devices">
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
-        <Heading
-          className={
-            Heading === "h4" ? "text-sm font-semibold" : "text-xs font-medium text-muted-foreground"
-          }
-        >
-          {group.label}
-        </Heading>
+        <h4 className="text-sm font-semibold">{group.label}</h4>
         <span className="text-xs text-muted-foreground">{group.entries.length}</span>
         <ChevronDownIcon className="ml-auto size-4 -rotate-90 text-muted-foreground group-open/devices:rotate-0" />
       </summary>
@@ -538,4 +378,24 @@ function DeviceStateBadge({ entry }: { entry: DevicePoolEntry }) {
         </Badge>
       );
   }
+}
+
+/** Shown in place of the pool when QA leases its devices from this machine's Simlock. */
+export function QaSimlockNote({ environmentLabel }: { environmentLabel: string }) {
+  return (
+    <section
+      aria-label="Device pool"
+      className="min-w-0 rounded-xl border border-border bg-card p-5"
+    >
+      <div className="flex items-center gap-2">
+        <MonitorSmartphoneIcon className="size-5 text-primary" />
+        <h3 className="font-semibold">Devices from Simlock</h3>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Each run leases fresh simulators and emulators from the Simlock worker on {environmentLabel}{" "}
+        and returns them when it ends. A run that cannot get one is recorded as not run with
+        Simlock’s reason. Change this in Settings → Devices → QA.
+      </p>
+    </section>
+  );
 }

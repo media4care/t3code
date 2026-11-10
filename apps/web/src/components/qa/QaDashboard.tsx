@@ -30,11 +30,13 @@ import type { qaDashboard } from "@t3tools/client-runtime/qa";
 import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { QaSuiteDevices } from "./QaSuiteDevices";
+import { QaSimlockDevices, QaSuiteDevices } from "./QaSuiteDevices";
 
 export interface QaSuiteDeviceChoices {
   /** The project whose suites these are; its runs keep the devices they hold. */
   readonly projectId: string;
+  /** Simlock leases each run's devices, so there is nothing to pick from the pool. */
+  readonly simlock: boolean;
   /** Null while the device pool loads. */
   readonly pool: ReadonlyArray<DevicePoolEntry> | null;
   readonly selections: ReadonlyArray<QaDeviceSelection>;
@@ -274,10 +276,11 @@ function SuiteCard({
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
-  const assignments = suite.devices?.length
-    ? devices.pool &&
-      qaDeviceAssignments(suite, devices.pool, devices.selections, devices.projectId)
-    : undefined;
+  const assignments =
+    suite.devices?.length && !devices.simlock
+      ? devices.pool &&
+        qaDeviceAssignments(suite, devices.pool, devices.selections, devices.projectId)
+      : undefined;
   // A suite waiting for a busy device can still run; it starts when the device is free.
   const blocked =
     assignments?.some((assignment) => !assignment.device && !assignment.busy) ?? false;
@@ -299,7 +302,9 @@ function SuiteCard({
         </div>
       </div>
       <h4 className="mt-3 font-semibold leading-snug">{suite.name}</h4>
-      {assignments !== undefined ? (
+      {suite.devices?.length && devices.simlock ? (
+        <QaSimlockDevices requirements={suite.devices} />
+      ) : assignments !== undefined ? (
         <QaSuiteDevices
           assignments={assignments}
           canChoose={devices.canChoose}

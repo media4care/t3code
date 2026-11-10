@@ -108,6 +108,11 @@ app as your command requires. One suite runs at a time per project; closing QA
 or disconnecting the client does not stop it. Cancel stops the command and its
 child processes. A server interruption is recorded separately from test failure.
 
+When several machines share your projects, pick the one that runs QA. On each other
+environment, turn off **Settings → Devices → QA → Run QA here**. QA then lists each
+project only on the environment that tests it, and the other environments refuse runs
+and new schedules. Their existing schedules wait until QA is turned back on.
+
 For test counts and a saved report, add `"report": "junit"` and configure the
 command to write JUnit XML to the `T3_QA_REPORT_PATH` environment variable. For
 example, a Vitest command can end with
@@ -191,10 +196,8 @@ not a guarantee about untracked external state or complete test coverage.
 QA also shows the environment's **Device pool**: the iOS simulators and Android
 emulators it can start and the Android devices connected over ADB. Turn on device
 support there to list them. A physical device that has connected before stays listed
-as offline, with the time it was last seen, until you forget it. The pool also lists the
-devices of every other connected environment with devices turned on, each under its
-own heading. A device open in a Device panel shows **In use**; one a QA run holds shows
-which suite holds it.
+as offline, with the time it was last seen, until you forget it. A device open in a
+Device panel shows **In use**; one a QA run holds shows which suite holds it.
 
 When a suite needs a device, list it under `devices`:
 
@@ -232,6 +235,21 @@ device, `ANDROID_SERIAL` for the first Android device, `T3_QA_DEVICE_ID_<ID>` fo
 device with an `id`, and `T3_QA_DEVICES` as JSON describing them all. Run details
 record the devices used. Commands run on the environment's machine, so only its own
 devices can be used.
+
+To let [Simlock](https://incubator.callstack.com/simlock/) hand out the devices, run a
+Simlock worker on the QA machine and set **Settings → Devices → QA → QA devices** to
+**Simlock on this machine**. T3 Code does not install Simlock; the `simlock` command
+must be on the server's `PATH`. Each run then leases its devices with
+`simlock --local lease`, using the requirement's `platform`, its `defaultDevice` as the
+model or else its `formFactor` as the class, and `--physical` for a `physical` type.
+Simlock queues the request while every device is busy, for up to 30 minutes. The run
+returns its devices when it ends, and Simlock wipes them. Commands receive the same
+variables, with the simulator's UDID or the emulator's serial as the device ID, plus
+the variables Simlock provides, such as `SIMLOCK_IOS_DEVICE_SET`. Simlock keeps its
+simulators in that device set, so pass it to tools that look for simulators, for
+example `xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET"`. The device pool and per-suite
+device choices do not apply in this mode. If Simlock is missing or cannot lease a
+device, the run is recorded as not run with Simlock's reason.
 
 **Run affected suites** rechecks freshness and runs changed, expired, unknown,
 untested, and unsuccessful suites sequentially on the selected environment.

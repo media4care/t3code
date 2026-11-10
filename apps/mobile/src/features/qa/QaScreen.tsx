@@ -6,10 +6,12 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
   qaDashboard,
+  qaProjects,
   qaStatusLabel,
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  QA_OFF_EVERYWHERE,
   QA_SHARED_RESULTS_NOTICE,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
@@ -31,8 +33,9 @@ import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 export function QaScreen() {
-  const projects = useProjects();
+  const allProjects = useProjects();
   const { environments } = useEnvironments();
+  const projects = qaProjects(allProjects, environments);
   const [selection, setSelection] = useState<string | null>(null);
   const projectKey = (project: (typeof projects)[number]) =>
     `${project.environmentId}:${project.id}`;
@@ -69,7 +72,9 @@ export function QaScreen() {
             environmentLabel={environment?.label ?? "Environment"}
           />
         ) : (
-          <Text className="p-6 text-foreground-muted">Add a project to see its QA suites.</Text>
+          <Text className="p-6 text-foreground-muted">
+            {allProjects.length > 0 ? QA_OFF_EVERYWHERE : "Add a project to see its QA suites."}
+          </Text>
         )}
       </ScreenContent>
     </>

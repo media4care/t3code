@@ -52,6 +52,7 @@ import * as NodeUtil from "node:util";
 import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { parseJunitReport } from "./junit.ts";
 import {
   InputEvidence,
@@ -62,6 +63,7 @@ import {
 } from "./inputs.ts";
 import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
+import { leaseFromSimlock } from "./simlockLease.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   nextScheduledRunAt,
@@ -155,6 +157,16 @@ const make = Effect.gen(function* () {
   const sharedResults = yield* makeSharedResults;
   const deviceSelections = yield* makeDeviceSelections;
   const devicePool = yield* DevicePool.DevicePool;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const qaSettings = settings.getSettings.pipe(
+    Effect.map(({ qaEnabled, qaDeviceSource }) => ({ qaEnabled, qaDeviceSource })),
+    Effect.mapError((cause) => new QaError({ reason: "storage", cause })),
+  );
+  const ensureEnabled = qaSettings.pipe(
+    Effect.flatMap(({ qaEnabled }) =>
+      qaEnabled ? Effect.void : Effect.fail(new QaError({ reason: "disabled" })),
+    ),
+  );
   const batches = new Map<
     string,
     {
@@ -432,6 +444,40 @@ const make = Effect.gen(function* () {
     };
   };
 
+  /** Leases each device from this machine's Simlock worker; Simlock keeps runs off each other's. */
+  const leaseDevices = Effect.fn("QaService.leaseDevices")(function* (
+    entry: ActiveRun,
+    stop: (note: string) => null,
+  ) {
+    const { suite, id } = entry.details.run;
+    const devices: Array<QaRunDevice> = [];
+    const leaseEnvironment: Record<string, string> = {};
+    for (const [index, requirement] of (suite.devices ?? []).entries()) {
+      const key = qaDeviceRequirementKey(requirement, index);
+      const label = qaDeviceRequirementLabel(requirement);
+      appendOutput(entry, `[T3 QA] Leasing ${label} from Simlock…\n`);
+      const leased = yield* leaseFromSimlock(requirement, {
+        key,
+        agentId: `t3-qa-${id}-${key}`,
+        timeout: `${Duration.toMinutes(DEVICE_WAIT)}m`,
+        path: environment.PATH,
+        onProgress: (line) => Effect.sync(() => appendOutput(entry, `[Simlock] ${line}\n`)),
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.result,
+      );
+      if (leased._tag === "Failure") return stop(`Not run. ${leased.failure.message}`);
+      appendOutput(
+        entry,
+        `[T3 QA] ${label}: ${leased.success.device.name} (${leased.success.device.deviceId})\n`,
+      );
+      devices.push(leased.success.device);
+      Object.assign(leaseEnvironment, leased.success.environment);
+    }
+    entry.details = { ...entry.details, run: { ...entry.details.run, devices } };
+    return { ...leaseEnvironment, ...deviceEnvironment(suite, devices) };
+  });
+
   /** Starts the run's devices; none when it cannot get them, which leaves the run incomplete. */
   const prepareDevices = Effect.fn("QaService.prepareDevices")(function* (entry: ActiveRun) {
     const suite = entry.details.run.suite;
@@ -444,6 +490,7 @@ const make = Effect.gen(function* () {
       };
       return null;
     };
+    if ((yield* qaSettings).qaDeviceSource === "simlock") return yield* leaseDevices(entry, stop);
     const { projectId } = entry.details.run;
     const holder = { projectId, suiteId: suite.id, suiteName: suite.name };
     const giveUpAt = (yield* Clock.currentTimeMillis) + Duration.toMillis(DEVICE_WAIT);
@@ -658,6 +705,7 @@ const make = Effect.gen(function* () {
   const startRun = Effect.fn("QaService.startRun")(function* (
     input: QaStartInput & { expectedBranch?: string },
   ) {
+    yield* ensureEnabled;
     const root = yield* workspace(input);
     const config = yield* catalog(root);
     const suite = config.suites.find((candidate) => candidate.id === input.suiteId);
@@ -732,6 +780,7 @@ const make = Effect.gen(function* () {
 
   const startBatch = Effect.fn("QaService.startBatch")(
     function* (input: QaProjectInput, scheduled?: QaSchedule) {
+      yield* ensureEnabled;
       if (
         batches.has(input.projectId) ||
         [...active.values()].some((entry) => entry.details.run.projectId === input.projectId)
@@ -830,6 +879,7 @@ const make = Effect.gen(function* () {
         yield* sql`DELETE FROM qa_schedules WHERE project_id = ${input.projectId}`;
       } else {
         const configuration = input.configuration;
+        if (configuration.enabled) yield* ensureEnabled;
         const suites = configuration.enabled ? (yield* catalog(root)).suites : [];
         const next = nextDue(configuration, yield* DateTime.now);
         const target = configuration.target;
@@ -972,6 +1022,9 @@ const make = Effect.gen(function* () {
   });
 
   const runDue = Effect.fn("QaService.runDue")(function* () {
+    // Schedules on an environment with QA off wait, rather than piling up failed attempts.
+    if (!(yield* qaSettings.pipe(Effect.orElseSucceed(() => ({ qaEnabled: false })))).qaEnabled)
+      return;
     const due = yield* sql<{
       project_id: string;
       schedule_json: string;
