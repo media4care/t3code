@@ -21,6 +21,9 @@ export const QaTestKind = Schema.Literals([
 ]);
 export type QaTestKind = typeof QaTestKind.Type;
 
+export const QaDeviceSource = Schema.Literals(["machine", "simlock"]);
+export type QaDeviceSource = typeof QaDeviceSource.Type;
+
 export const QaDeviceType = Schema.Literals(["any", "virtual", "physical"]);
 export type QaDeviceType = typeof QaDeviceType.Type;
 
@@ -304,6 +307,7 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
     "branch",
     "report",
     "duplicate",
+    "disabled",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -331,6 +335,8 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
         return "The CI report must contain valid JUnit XML (maximum 2 MiB) and valid completion times.";
       case "duplicate":
         return "This CI run ID already has a different report. Use a separate ID for each attempt.";
+      case "disabled":
+        return "QA is turned off on this environment. Turn on Run QA here in Settings → Devices.";
     }
   }
 }

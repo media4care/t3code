@@ -14,22 +14,11 @@ const state = vi.hoisted(() => ({
   devices: {} as Record<string, DeviceServiceState>,
 }));
 
-vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({
-    environments: [
-      { environmentId: "laptop", label: "MacBook", connection: { phase: "connected" } },
-      { environmentId: "mini", label: "mac-mini", connection: { phase: "connected" } },
-      { environmentId: "old", label: "Old laptop", connection: { phase: "connected" } },
-      { environmentId: "studio", label: "Studio", connection: { phase: "disconnected" } },
-    ],
-  }),
-}));
 vi.mock("../../state/device", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
     deviceEnvironment: {
       pool: ({ environmentId }: { environmentId: string }) => ({ kind: "pool", environmentId }),
-      state: ({ environmentId }: { environmentId: string }) => ({ kind: "state", environmentId }),
       list: { kind: "list" },
       forget: { kind: "forget", permissionAtom: () => Atom.make(true) },
     },
@@ -41,25 +30,6 @@ vi.mock("../../state/device", async () => {
       error: null,
       refresh: () => {},
     }),
-  };
-});
-vi.mock("../../state/environmentAtomList", async () => {
-  const { Atom, AsyncResult } = await import("effect/reactivity");
-  return {
-    environmentIdsKey: (ids: ReadonlyArray<string>) => ids.join("\n"),
-    environmentAtomList: (
-      _label: string,
-      atom: (environmentId: string) => { kind: string; environmentId: string },
-    ) =>
-      Atom.family((key: string) =>
-        Atom.make(
-          (key === "" ? [] : key.split("\n")).map((environmentId) =>
-            atom(environmentId).kind === "pool"
-              ? AsyncResult.success({ entries: state.pools[environmentId] ?? [] })
-              : AsyncResult.success(state.devices[environmentId]),
-          ),
-        ),
-      ),
   };
 });
 vi.mock("../../state/query", () => ({
@@ -76,13 +46,13 @@ vi.mock("../device/DeviceSetup", () => ({
   deviceHubReadiness: () => ({ busy: false }),
 }));
 
-const devices = (onboardingCompleted = true): DeviceServiceState => ({
+const devices = (): DeviceServiceState => ({
   hosts: [],
   hostStatus: "ready",
   hostStatuses: {},
   devices: [],
   sessions: [],
-  onboardingCompleted,
+  onboardingCompleted: true,
   agentAccessEnabled: false,
   hubBasePath: "/api/device-hub",
   revision: 0,
@@ -100,8 +70,8 @@ const device = (value: Pick<DevicePoolEntry, "key" | "name"> & Partial<DevicePoo
   ...value,
 });
 
-it("shows the devices of every connected environment and the QA run holding each", async () => {
-  state.devices = { laptop: devices(), mini: devices(), old: devices(false) };
+it("shows the environment's devices, the QA run holding each, and filters them", async () => {
+  state.devices = { laptop: devices() };
   state.pools = {
     laptop: [
       device({
@@ -112,14 +82,6 @@ it("shows the devices of every connected environment and the QA run holding each
       }),
       device({ key: "tv", name: "Television_1080p", formFactor: "tv" }),
     ],
-    mini: [
-      device({
-        key: "ipad",
-        name: "iPad Pro 11-inch (M4)",
-        platform: "ios",
-        version: "iOS 26.0",
-      }),
-    ],
   };
   await using screen = await render(
     <QaDevicePool environmentId={EnvironmentId.make("laptop")} environmentLabel="MacBook" />,
@@ -127,25 +89,14 @@ it("shows the devices of every connected environment and the QA run holding each
   );
 
   await expect
-    .element(
-      screen.getByText("Simulators, emulators, and physical devices on MacBook and mac-mini"),
-    )
+    .element(screen.getByText("Simulators, emulators, and physical devices on MacBook"))
     .toBeVisible();
   await expect
     .element(screen.getByRole("button", { name: /All devices/ }))
-    .toHaveTextContent("All devices3");
-  const laptop = screen.getByRole("region", { name: "Devices on MacBook" });
-  await expect.element(laptop.getByText("This project runs its suites here")).toBeVisible();
-  await expect.element(laptop.getByText("In use by Senior B2C")).toBeVisible();
-  const mini = screen.getByRole("region", { name: "Devices on mac-mini" });
-  await expect.element(mini.getByText("iPad Pro 11-inch (M4)")).toBeVisible();
-  // An environment with devices off gets a note, and a disconnected one is left out.
-  await expect.element(screen.getByText(/^Devices are off on Old laptop\./)).toBeVisible();
-  await expect.element(screen.getByText(/Studio/)).not.toBeInTheDocument();
+    .toHaveTextContent("All devices2");
+  await expect.element(screen.getByText("In use by Senior B2C")).toBeVisible();
 
-  // The filters apply to every environment.
   await screen.getByRole("button", { name: /Available now/ }).click();
-  await expect.element(laptop.getByText("Tablet_7")).toBeVisible();
-  await expect.element(laptop.getByText("Television_1080p")).not.toBeInTheDocument();
-  await expect.element(mini.getByText("No devices in this state.")).toBeVisible();
+  await expect.element(screen.getByText("Tablet_7")).toBeVisible();
+  await expect.element(screen.getByText("Television_1080p")).not.toBeInTheDocument();
 });

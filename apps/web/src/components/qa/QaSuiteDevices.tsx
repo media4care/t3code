@@ -1,5 +1,9 @@
 import { CircleAlertIcon, MonitorSmartphoneIcon } from "lucide-react";
-import type { DevicePoolEntry } from "@t3tools/contracts";
+import {
+  qaDeviceRequirementKey,
+  type DevicePoolEntry,
+  type QaDeviceRequirement,
+} from "@t3tools/contracts";
 import {
   DEVICE_POOL_CATEGORY_LABELS,
   DEVICE_POOL_STATE_LABELS,
@@ -49,6 +53,36 @@ export function QaSuiteDevices({
       ) : (
         <p className="text-xs text-muted-foreground">Checking devices…</p>
       )}
+    </div>
+  );
+}
+
+/** The devices a suite needs when Simlock leases them; each run gets fresh ones. */
+export function QaSimlockDevices({
+  requirements,
+}: {
+  requirements: ReadonlyArray<QaDeviceRequirement>;
+}) {
+  return (
+    <div role="group" aria-label="Devices" className="mt-3 space-y-2 rounded-lg bg-muted/40 p-3">
+      {requirements.map((requirement, index) => {
+        const Icon = requirement.formFactor
+          ? DEVICE_FORM_FACTOR_ICONS[requirement.formFactor]
+          : MonitorSmartphoneIcon;
+        return (
+          <p
+            key={qaDeviceRequirementKey(requirement, index)}
+            className="flex items-center gap-2 text-xs"
+          >
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="font-medium">{qaDeviceRequirementLabel(requirement)}</span>
+            {requirement.defaultDevice ? (
+              <span className="text-muted-foreground">· {requirement.defaultDevice}</span>
+            ) : null}
+          </p>
+        );
+      })}
+      <p className="text-xs text-muted-foreground">Leased from Simlock for each run.</p>
     </div>
   );
 }

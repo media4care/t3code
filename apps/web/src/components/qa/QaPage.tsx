@@ -15,9 +15,11 @@ import {
   QA_GROUP_OPTIONS,
   groupQaSuites,
   qaDashboard,
+  qaProjects,
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  QA_OFF_EVERYWHERE,
   QA_SHARED_RESULTS_NOTICE,
   type QaGrouping,
   type QaResultFilter,
@@ -36,12 +38,13 @@ import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
-import { QaDevicePool } from "./QaDevicePool";
+import { QaDevicePool, QaSimlockNote } from "./QaDevicePool";
 import { QaTestList } from "./QaTestList";
 
 export function QaPage() {
-  const projects = useProjects();
+  const allProjects = useProjects();
   const { environments } = useEnvironments();
+  const projects = qaProjects(allProjects, environments);
   const [selection, setSelection] = useState<string | null>(null);
   const key = (project: (typeof projects)[number]) => `${project.environmentId}:${project.id}`;
   const project = projects.find((candidate) => key(candidate) === selection) ?? projects[0];
@@ -91,12 +94,15 @@ export function QaPage() {
               projectId={project.id}
               connected={environment?.connection.phase === "connected"}
               environmentLabel={environment?.label ?? "Environment"}
+              simlock={environment?.serverConfig?.settings.qaDeviceSource === "simlock"}
             />
           ) : (
             <div className="rounded-xl border border-dashed border-border p-10 text-center">
               <h2 className="text-xl font-semibold">Your test suites, in one place</h2>
               <p className="mt-2 text-muted-foreground">
-                Add a project to see its QA suites and execution history.
+                {allProjects.length > 0
+                  ? QA_OFF_EVERYWHERE
+                  : "Add a project to see its QA suites and execution history."}
               </p>
             </div>
           )}
@@ -111,11 +117,14 @@ function ProjectQa({
   projectId,
   connected,
   environmentLabel,
+  simlock,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   connected: boolean;
   environmentLabel: string;
+  /** Runs lease their devices from this machine's Simlock instead of using its pool. */
+  simlock: boolean;
 }) {
   const query = useEnvironmentQuery(
     serverEnvironment.qaLive({ environmentId, input: { projectId } }),
@@ -238,9 +247,11 @@ function ProjectQa({
           onView={setSelectedRun}
         />
       ) : null}
-      {connected ? (
+      {!connected ? null : simlock ? (
+        <QaSimlockNote environmentLabel={environmentLabel} />
+      ) : (
         <QaDevicePool environmentId={environmentId} environmentLabel={environmentLabel} />
-      ) : null}
+      )}
       {snapshot?.freshness && counts.total > 0 ? (
         <section
           aria-label="Input freshness"
@@ -392,6 +403,7 @@ function ProjectQa({
                 showComponent={grouping !== "component"}
                 devices={{
                   projectId,
+                  simlock,
                   pool: pool.data?.entries ?? null,
                   selections: snapshot?.deviceSelections ?? [],
                   canChoose: connected && canSetDevice,

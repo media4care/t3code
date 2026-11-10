@@ -1,5 +1,6 @@
 import {
   QaCiReport,
+  type EnvironmentId,
   type QaFreshness,
   type QaRun,
   type QaRunStatus,
@@ -43,6 +44,25 @@ export function qaRunSource(run: QaRun) {
         ? "Scheduled"
         : "Manual";
 }
+
+/** Projects on environments that run QA; one whose settings are unknown yet still counts. */
+export function qaProjects<Project extends { readonly environmentId: EnvironmentId }>(
+  projects: ReadonlyArray<Project>,
+  environments: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly serverConfig: { readonly settings: { readonly qaEnabled: boolean } } | null;
+  }>,
+) {
+  const off = new Set(
+    environments
+      .filter((environment) => environment.serverConfig?.settings.qaEnabled === false)
+      .map((environment) => environment.environmentId),
+  );
+  return projects.filter((project) => !off.has(project.environmentId));
+}
+
+export const QA_OFF_EVERYWHERE =
+  "QA is off on every environment with projects. Turn on Run QA here in Settings → Devices on the machine that should run your suites.";
 
 export const QA_SHARED_RESULTS_NOTICE =
   "Run summaries are saved in t3.qa-results/. Commit and share these files with your changes so other checkouts can reuse matching results. Full logs and reports stay on the execution environment.";

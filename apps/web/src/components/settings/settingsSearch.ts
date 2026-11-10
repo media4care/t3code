@@ -865,6 +865,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["device hub simulator emulator ios android install start version"],
   },
   {
+    id: "qa-run-here",
+    title: "Run QA here",
+    to: "/settings/devices",
+    targetId: "qa",
+    scope: "environment",
+    searchTerms: ["qa test suites schedules machine environment runner turn off"],
+  },
+  {
+    id: "qa-devices",
+    title: "QA devices",
+    to: "/settings/devices",
+    targetId: "qa",
+    scope: "environment",
+    searchTerms: ["qa simlock lease simulator emulator test devices source"],
+  },
+  {
     id: "device-platform-support",
     title: "Local simulators",
     to: "/settings/devices",

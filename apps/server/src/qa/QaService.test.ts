@@ -11,6 +11,7 @@ import {
   type QaSuite,
   type QaCiReport,
   type QaScheduleConfiguration,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -28,8 +29,10 @@ import * as ServerConfig from "../config.ts";
 import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Qa from "./QaService.ts";
+import { SIMLOCK_NOT_INSTALLED } from "./simlockLease.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   AuthSessionId,
@@ -86,6 +89,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     readonly pool?: ReadonlyArray<DevicePoolEntry>;
     readonly prepare?: DevicePool.DevicePool["Service"]["prepare"];
   } = {},
+  settings: Partial<Pick<ServerSettings, "qaEnabled" | "qaDeviceSource">> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -173,6 +177,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     Layer.provide(schedulerLayer),
     Layer.provide(devicePoolLayer),
     Layer.provide(ServerConfig.layerTest(root, stateDir)),
+    Layer.provide(ServerSettingsService.layerTest(settings)),
   );
   const context = yield* Layer.build(Layer.fresh(serviceLayer));
   return {
@@ -1247,6 +1252,40 @@ describe("QA runs", () => {
         assert.equal((yield* service.snapshot({ projectId })).recentRuns.length, 1);
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
+  it.live(
+    "refuses runs and new schedules while QA is off, and still lets a schedule be removed",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, path, root } = yield* fixture(
+          "require('node:fs').writeFileSync('ran.txt', '')",
+          [suite],
+          {},
+          {},
+          { qaEnabled: false },
+        );
+        assert.equal(
+          (yield* service.start({ projectId, suiteId: suite.id }).pipe(Effect.flip)).reason,
+          "disabled",
+        );
+        assert.equal(
+          (yield* service.startAffected({ projectId }).pipe(Effect.flip)).reason,
+          "disabled",
+        );
+        const configuration: QaScheduleConfiguration = {
+          enabled: true,
+          branch: "main",
+          timeZone: "Europe/Berlin",
+          timing: { type: "fixed_time", timeOfDay: "09:00" },
+          target: { type: "all" },
+        };
+        assert.equal(
+          (yield* service.setSchedule({ projectId, configuration }).pipe(Effect.flip)).reason,
+          "disabled",
+        );
+        yield* service.setSchedule({ projectId, configuration: null });
+        assert.isFalse(yield* fs.exists(path.join(root, "ran.txt")));
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
 });
 
 describe("QA devices", () => {
@@ -1447,6 +1486,119 @@ describe("QA devices", () => {
       assert.equal(failed.run.status, "incomplete");
       assert.equal(failed.run.note, "Could not start Pixel_Tablet. The disk is full.");
       assert.isFalse(yield* failing.fs.exists(failing.path.join(failing.root, "ran.txt")));
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  const fakeSimlock = (body: string) => `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(__dirname + "/args.json", JSON.stringify(process.argv.slice(2)));
+${body}`;
+  /** A service whose PATH finds a fake `simlock` in `bin`, or none with an empty `bin`. */
+  const withSimlock = Effect.fn("Qa.test.withSimlock")(function* (
+    setup: Effect.Success<ReturnType<typeof fixture>>,
+    script: string | null,
+  ) {
+    const bin = yield* setup.fs.makeTempDirectoryScoped({ prefix: "t3-qa-simlock-" });
+    if (script !== null) {
+      yield* setup.fs.writeFileString(setup.path.join(bin, "simlock"), script);
+      yield* setup.fs.chmod(setup.path.join(bin, "simlock"), 0o755);
+    }
+    const PATH = script === null ? bin : `${bin}${setup.path.delimiter}${process.env.PATH ?? ""}`;
+    const context = yield* Layer.build(
+      Layer.fresh(setup.serviceLayer).pipe(
+        Layer.provide(Layer.succeed(HostProcess.Environment, { ...process.env, PATH })),
+      ),
+    );
+    return { service: Context.get(context, Qa.QaService), bin };
+  });
+
+  it.live("leases each device from this machine's Simlock and releases it when the run ends", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture(
+        "console.log(['ANDROID_SERIAL', 'T3_QA_DEVICE_ID_TABLET', 'SIMLOCK_IOS_DEVICE_SET'].map((name) => name + '=' + process.env[name]).join(' '));",
+        [flows],
+        {},
+        // The pool's own devices are not used when Simlock serves QA.
+        { pool: [emulator], prepare: () => Effect.die("QA used a pool device") },
+        { qaDeviceSource: "simlock" },
+      );
+      const { service, bin } = yield* withSimlock(
+        setup,
+        fakeSimlock(`process.stderr.write(JSON.stringify({ push: "progress", stage: "booting" }) + "\\n");
+process.stdout.write(JSON.stringify({
+  device: { id: "dev_1", driverDeviceId: "sim-udid", address: "emulator-5556", physical: false, mode: "full",
+    spec: { physical: false, platform: "android", model: "Pixel Tablet", osVersion: "15" } },
+  environment: { SIMLOCK_IOS_DEVICE_SET: "/simlock/devices/ios" },
+  lease: { id: "lse_1" },
+}) + "\\n");
+process.on("SIGTERM", () => { fs.writeFileSync(__dirname + "/released", ""); process.exit(0); });
+setInterval(() => {}, 1000);`),
+      );
+      const { id } = yield* service.start({ projectId, suiteId: flows.id });
+      const finished = yield* completed(service, id);
+      assert.equal(finished.run.status, "passed");
+      assert.include(
+        finished.output,
+        "ANDROID_SERIAL=emulator-5556 T3_QA_DEVICE_ID_TABLET=emulator-5556 SIMLOCK_IOS_DEVICE_SET=/simlock/devices/ios",
+      );
+      assert.include(finished.output, '[Simlock] {"push":"progress","stage":"booting"}');
+      assert.deepEqual(finished.run.devices, [
+        {
+          requirement: "tablet",
+          deviceId: "emulator-5556",
+          name: "Pixel Tablet (Simlock lse_1)",
+          platform: "android",
+          physical: false,
+          version: "15",
+        },
+      ]);
+      assert.deepEqual(
+        JSON.parse(yield* setup.fs.readFileString(setup.path.join(bin, "args.json"))),
+        [
+          "--local",
+          "lease",
+          "--platform",
+          "android",
+          "--class",
+          "tablet",
+          "--agent-id",
+          `t3-qa-${id}-tablet`,
+          "--timeout",
+          "30m",
+        ],
+      );
+      assert.isTrue(yield* setup.fs.exists(setup.path.join(bin, "released")));
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("records a run as not run when Simlock is missing or cannot lease a device", () =>
+    Effect.gen(function* () {
+      const ran = "require('node:fs').writeFileSync('ran.txt', '')";
+      const setup = yield* fixture(ran, [flows], {}, {}, { qaDeviceSource: "simlock" });
+      const missing = (yield* withSimlock(setup, null)).service;
+      const notInstalled = yield* completed(
+        missing,
+        (yield* missing.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(notInstalled.run.status, "incomplete");
+      assert.equal(notInstalled.run.note, `Not run. ${SIMLOCK_NOT_INSTALLED}`);
+
+      const full = (yield* withSimlock(
+        setup,
+        fakeSimlock(
+          'process.stderr.write(JSON.stringify({ error: { code: "NO_CAPACITY", message: "No device fits." } }) + "\\n"); process.exit(11);',
+        ),
+      )).service;
+      const noCapacity = yield* completed(
+        full,
+        (yield* full.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(noCapacity.run.status, "incomplete");
+      assert.equal(
+        noCapacity.run.note,
+        "Not run. Simlock did not lease a device (exit 11). No device fits.",
+      );
+      assert.isFalse(yield* setup.fs.exists(setup.path.join(setup.root, "ran.txt")));
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });
