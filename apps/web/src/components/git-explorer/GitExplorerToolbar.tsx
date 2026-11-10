@@ -25,6 +25,7 @@ import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogPopup,
@@ -68,6 +69,8 @@ export function GitExplorerToolbar({
   const [pending, setPending] = useState<GitExplorerRunActionInput["action"] | null>(null);
   const inFlight = useRef(false);
   const [stashOpen, setStashOpen] = useState(false);
+  const [pushOpen, setPushOpen] = useState(false);
+  const [force, setForce] = useState(true);
   const [message, setMessage] = useState("");
   const stash = overview.stashes.find((entry) => entry.hash === selectedRevision);
   const branch = overview.refs.find(
@@ -93,6 +96,7 @@ export function GitExplorerToolbar({
         expectedHead: overview.headHash,
         expectedBranch: overview.headBranch,
         ...(action === "stash" ? { message } : {}),
+        ...(action === "push" ? { force } : {}),
       },
     });
     if (result._tag === "Success") {
@@ -101,6 +105,7 @@ export function GitExplorerToolbar({
         setStashOpen(false);
         setMessage("");
       }
+      if (action === "push") setPushOpen(false);
     } else if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
@@ -170,7 +175,13 @@ export function GitExplorerToolbar({
             size="xs"
             title={unavailable ?? blocked ?? hint}
             disabled={unavailable !== null || blocked !== null}
-            onClick={() => (action === "stash" ? setStashOpen(true) : void execute(action))}
+            onClick={() => {
+              if (action === "stash") setStashOpen(true);
+              else if (action === "push") {
+                setForce(true);
+                setPushOpen(true);
+              } else void execute(action);
+            }}
           >
             {pending === action ? <Spinner size="xs" /> : <Icon className="size-3.5" aria-hidden />}
             {label}
@@ -198,6 +209,57 @@ export function GitExplorerToolbar({
             ))
           : null}
       </div>
+      <Dialog
+        open={pushOpen}
+        onOpenChange={(open) => {
+          if (!pending) setPushOpen(open);
+        }}
+      >
+        <DialogPopup>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void execute("push");
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Push {overview.headBranch}</DialogTitle>
+              <DialogDescription>
+                {branch?.upstream
+                  ? `Push ${overview.headBranch} to ${overview.refs.find((ref) => ref.name === branch.upstream)?.shortName ?? branch.upstream}.`
+                  : `Publish ${overview.headBranch} and set its upstream.`}
+              </DialogDescription>
+            </DialogHeader>
+            <label className="flex items-start gap-2 px-6 py-4 text-sm">
+              <span className="mt-0.5 flex">
+                <Checkbox
+                  checked={force}
+                  onCheckedChange={(checked) => setForce(checked === true)}
+                />
+              </span>
+              <span>
+                Force push
+                <span className="block text-xs text-muted-foreground">
+                  Overwrites the remote branch with your history (--force-with-lease). Stops if the
+                  remote has commits you have not fetched.
+                </span>
+              </span>
+            </label>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                disabled={pending !== null}
+                onClick={() => setPushOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={unavailable !== null} autoFocus>
+                {pending === "push" ? "Pushing…" : force ? "Force push" : "Push"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogPopup>
+      </Dialog>
       <Dialog
         open={stashOpen}
         onOpenChange={(open) => {

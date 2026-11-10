@@ -165,6 +165,8 @@ export const GitExplorerRunActionInput = Schema.Struct({
   changeTokens: Schema.optional(Schema.Array(Schema.String).check(Schema.isMaxLength(2000))),
   indexVersion: Schema.optional(Schema.String),
   amend: Schema.optional(Schema.Boolean),
+  // Push with --force-with-lease.
+  force: Schema.optional(Schema.Boolean),
   tagName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   revision: Schema.optional(GitExplorerHash),
   resetMode: Schema.optional(Schema.Literals(["soft", "mixed", "hard"])),

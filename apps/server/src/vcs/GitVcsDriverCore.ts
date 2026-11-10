@@ -2712,13 +2712,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
+    const push = options?.force ? ["push", "--force-with-lease"] : ["push"];
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
       const publishBranch = yield* resolvePublishBranchName(cwd, branch);
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
-        ["push", "--", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
+        [...push, "--", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
         { timeoutMs: null },
       );
       return {
@@ -2794,7 +2795,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
         cwd,
-        ["push", "--", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
+        [...push, "--", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
         { timeoutMs: null },
       );
       return {
@@ -2838,7 +2839,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         yield* runGit(
           "GitVcsDriver.pushCurrentBranch.pushOwnBranch",
           cwd,
-          ["push", "--", remoteName, `HEAD:refs/heads/${publishBranch}`],
+          [...push, "--", remoteName, `HEAD:refs/heads/${publishBranch}`],
           { timeoutMs: null },
         );
         return {
@@ -2852,7 +2853,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushUpstream",
         cwd,
-        ["push", "--", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
+        [
+          ...push,
+          "--",
+          currentUpstream.remoteName,
+          `HEAD:refs/heads/${currentUpstream.branchName}`,
+        ],
         { timeoutMs: null },
       );
       return {
@@ -2863,7 +2869,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
-    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], { timeoutMs: null });
+    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, push, { timeoutMs: null });
     return {
       status: "pushed" as const,
       branch,

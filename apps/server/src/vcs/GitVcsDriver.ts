@@ -329,7 +329,8 @@ export class GitVcsDriver extends Context.Service<
     readonly pushCurrentBranch: (
       cwd: string,
       fallbackBranch: string | null,
-      options?: { readonly remoteName?: string | null },
+      // `force` pushes with --force-with-lease, so remote commits we have not fetched are kept.
+      options?: { readonly remoteName?: string | null; readonly force?: boolean },
     ) => Effect.Effect<GitPushResult, GitCommandError>;
     readonly readRangeContext: (
       cwd: string,
