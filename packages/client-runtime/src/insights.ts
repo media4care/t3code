@@ -1,13 +1,17 @@
 import type {
   EnvironmentId,
+  InsightEdit,
   InsightRecommendation,
   InsightsReport,
   InsightTask,
   InsightsSettings,
+  ModelSelection,
   ProjectId,
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
+
+import { resolveProviderInstanceDisplayName } from "./state/providerInstanceDisplay.ts";
 
 export function insightsModelChoices(providers: readonly ServerProvider[]) {
   return providers
@@ -25,6 +29,30 @@ export function insightsModelChoices(providers: readonly ServerProvider[]) {
           },
         })),
     );
+}
+
+/** Models a thread applying a recommendation can run on; `default` is the analysis model. */
+export function insightsApplyModelChoices(providers: readonly ServerProvider[]) {
+  return [
+    { key: "default", label: "Analysis model at its default effort", selection: null },
+    ...providers
+      .filter((provider) => provider.enabled)
+      .flatMap((provider) =>
+        provider.models.map((model) => ({
+          key: `${provider.instanceId}/${model.slug}`,
+          label: `${resolveProviderInstanceDisplayName(provider)} · ${model.name}`,
+          selection: { instanceId: provider.instanceId, model: model.slug },
+        })),
+      ),
+  ];
+}
+
+export function setInsightsApplyModel(
+  settings: InsightsSettings,
+  selection: ModelSelection | null,
+): InsightsSettings {
+  const { implementationModelSelection: _previous, ...rest } = settings;
+  return selection ? { ...rest, implementationModelSelection: selection } : rest;
 }
 
 export function defaultInsightsSettings(
@@ -112,6 +140,57 @@ export function actionableInsight(
       Date.parse(recommendation.deferredUntil) <= now)
   );
 }
+
+const editLines = (text: string) =>
+  text === "" ? [] : (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
+
+/** An edit as diff rows: the lines both texts start and end with frame what changes between. */
+function insightEditRows(edit: Pick<InsightEdit, "find" | "replace">) {
+  const before = editLines(edit.find);
+  const after = editLines(edit.replace);
+  const shortest = Math.min(before.length, after.length);
+  let head = 0;
+  while (head < shortest && before[head] === after[head]) head++;
+  let tail = 0;
+  while (tail < shortest - head && before.at(-1 - tail) === after.at(-1 - tail)) tail++;
+  const rows = (kind: "context" | "remove" | "add", lines: ReadonlyArray<string>) =>
+    lines.map((text) => ({ kind, text }));
+  return [
+    ...rows("context", before.slice(0, head)),
+    ...rows("remove", before.slice(head, before.length - tail)),
+    ...rows("add", after.slice(head, after.length - tail)),
+    ...rows("context", before.slice(before.length - tail)),
+  ];
+}
+
+/**
+ * A recommendation's exact change as diff rows per file. The list's copy carries no edit text, so
+ * this is `"loading"` until the full record arrives, and null where prose describes the change.
+ */
+export function insightChange(
+  summary: Pick<InsightRecommendation, "edits">,
+  loaded: Pick<InsightRecommendation, "edits"> | null | undefined,
+) {
+  if (!loaded) return summary.edits ? ("loading" as const) : null;
+  if (!loaded.edits?.length) return null;
+  return loaded.edits.map((edit) => ({
+    file: edit.file,
+    created: edit.find === "",
+    rows: insightEditRows(edit),
+  }));
+}
+
+/** The control that starts a recommendation's change, and what it does. */
+export const insightStartChange = (exact: boolean) =>
+  exact
+    ? {
+        label: "Open a PR with this change",
+        hint: "Starts a thread that applies exactly this edit and opens a pull request for you to review.",
+      }
+    : {
+        label: "Have an agent make this change",
+        hint: "Starts a thread that works out the edit from this description and opens a pull request for you to review.",
+      };
 
 export const INSIGHT_IMPLEMENTATION_LABELS = {
   not_implemented: "Not implemented",

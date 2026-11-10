@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  type InsightEdit,
   type InsightsEvidenceResult,
   InsightsSettings,
   InsightsSubmitInput,
@@ -12,13 +13,16 @@ import {
   ProviderDriverKind,
   ScheduledTask,
   ScheduledTaskId,
+  type ScheduledTaskUpsertInput,
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -31,14 +35,25 @@ import * as ThreadSkills from "../orchestration-v2/ThreadSkills.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as Insights from "./InsightsService.ts";
+import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
 
 const studio = EnvironmentId.make("studio");
+
+/** Records what an implementation thread would start with; the launch itself is not needed. */
+const launcher = (launches: Array<ThreadLaunch.ThreadLaunchInput>) =>
+  Layer.mock(ThreadLaunch.ThreadLaunchService)({
+    launch: (input) => {
+      launches.push(input);
+      return Effect.die("not needed");
+    },
+  });
 
 /** A linked Mac Studio answering each evidence call with the next response, or unreachable. */
 const linkedStudio = (responses: Array<InsightsEvidenceResult | "unreachable">) => {
   const calls: Array<Record<string, unknown>> = [];
-  const launches: Array<ProjectId> = [];
+  const launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
   const layer = Layer.mergeAll(
     Layer.mock(PeerLinks.PeerLinks)({
       enabled: Effect.succeed(true),
@@ -75,49 +90,68 @@ const linkedStudio = (responses: Array<InsightsEvidenceResult | "unreachable">) 
             );
       },
     }),
-    Layer.mock(ThreadLaunch.ThreadLaunchService)({
-      launch: (input) => {
-        launches.push(input.projectId);
-        return Effect.die("not needed");
-      },
-    }),
+    launcher(launches),
   );
   return { calls, launches, layer };
 };
 
-const layerWith = (
+const unlinked = (launches: Array<ThreadLaunch.ThreadLaunchInput> = []) =>
+  Layer.mergeAll(
+    Layer.mock(PeerLinks.PeerLinks)({
+      enabled: Effect.succeed(false),
+      get: () => Effect.succeedNone,
+    }),
+    Layer.mock(PeerMcpClient.PeerMcpClient)({}),
+    launcher(launches),
+  );
+
+const scheduled = (input: ScheduledTaskUpsertInput) =>
+  ScheduledTask.make({
+    ...input,
+    id: input.id ?? ScheduledTaskId.make("test"),
+    threadId: null,
+    schedule: { type: "fixed_time", timeOfDay: "09:00" },
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    nextRunAt: null,
+    lastRunAt: null,
+    lastRunStatus: "never",
+    lastRunError: null,
+    runCount: 0,
+  });
+
+const storage = Layer.merge(Sqlite.layerMemory, NodeServices.layer);
+
+/** Insights over its collaborators. Storage comes from outside, so a test can seed it first. */
+const servicesWith = (
   peers: Layer.Layer<
     PeerLinks.PeerLinks | PeerMcpClient.PeerMcpClient | ThreadLaunch.ThreadLaunchService
   >,
-) =>
-  Insights.layer.pipe(
+  options: {
+    /** What the scheduler has saved; a save replaces it. */
+    readonly tasks?: Array<ScheduledTask>;
+    /** Each checkout's remote default branch; a checkout has none while `branch` is null. */
+    readonly remote?: { branch: string | null };
+  } = {},
+) => {
+  const tasks = options.tasks ?? [];
+  const remote = options.remote ?? { branch: "main" };
+  return Insights.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ScheduledTasks.ScheduledTaskService)({
-          list: () => Effect.succeed({ tasks: [] }),
+          list: () => Effect.succeed({ tasks }),
           subscribeList: () => Stream.make({ tasks: [] }),
           upsert: (input) => {
             assert.equal(input.schedule.type, "fixed_time");
             assert.deepEqual(input.modelSelection.options, [
               { id: "reasoningEffort", value: "max" },
             ]);
-            return Effect.succeed({
-              task: ScheduledTask.make({
-                ...input,
-                id: input.id ?? ScheduledTaskId.make("test"),
-                threadId: null,
-                schedule: { type: "fixed_time", timeOfDay: "09:00" },
-                createdBy: "user",
-                creationSource: "web",
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                nextRunAt: null,
-                lastRunAt: null,
-                lastRunStatus: "never",
-                lastRunError: null,
-                runCount: 0,
-              }),
-            });
+            const task = scheduled(input);
+            tasks.splice(0, tasks.length, task);
+            return Effect.succeed({ task });
           },
         }),
         peers,
@@ -134,27 +168,28 @@ const layerWith = (
               status: "ready",
               auth: { status: "authenticated" },
               checkedAt: "2026-10-30T10:00:00.000Z",
-              models: [{ slug: "gpt-6-astra", name: "Astra", isCustom: false, capabilities: null }],
+              models: [
+                { slug: "gpt-6-astra", name: "Astra", isCustom: false, capabilities: null },
+                { slug: "gpt-6-luna", name: "Luna", isCustom: false, capabilities: null },
+              ],
               skills: [],
               slashCommands: [],
             }),
           ]),
         }),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({
+          resolvePrimaryRemoteName: () => Effect.succeed("origin"),
+          resolveDefaultBranchName: () => Effect.succeed(remote.branch),
+          resolveCommit: () => Effect.succeed({ commitSha: "0".repeat(40) }),
+        }),
         NodeCrypto.layer,
       ),
     ),
-    Layer.provideMerge(Layer.merge(Sqlite.layerMemory, NodeServices.layer)),
   );
-const layer = layerWith(
-  Layer.mergeAll(
-    Layer.mock(PeerLinks.PeerLinks)({
-      enabled: Effect.succeed(false),
-      get: () => Effect.succeedNone,
-    }),
-    Layer.mock(PeerMcpClient.PeerMcpClient)({}),
-    Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-  ),
-);
+};
+const layerWith = (...args: Parameters<typeof servicesWith>) =>
+  servicesWith(...args).pipe(Layer.provideMerge(storage));
+const layer = layerWith(unlinked());
 const analyst = ThreadId.make("analyst");
 const timestamp = "2026-10-30T10:00:00.000Z";
 const encodeSettings = Schema.encodeSync(Schema.fromJsonString(InsightsSettings));
@@ -210,9 +245,9 @@ const submission = (reportId: string, evidenceId: string): InsightsSubmitInput =
       confidence: "medium",
       observation: "The agent reported missing deployment verification.",
       recommendation: "Add a runtime verification step.",
-      targetFile: "skills/deploy/SKILL.md",
+      edits: [],
       suggestedChange: "Check the deployed version before completion.",
-      expectedImpact: "Expose failed deployments earlier.",
+      targetFile: "skills/deploy/SKILL.md",
       validation: "Check subsequent deployment evidence.",
       evidenceIds: [evidenceId],
     },
@@ -295,7 +330,7 @@ it.effect(
 );
 
 it.effect(
-  "rejects fabricated evidence and foreign submissions atomically, and preserves dismissed decisions across reports",
+  "rejects fabricated evidence and foreign submissions atomically, and records a problem seen again without rewriting or reopening it",
   () =>
     Effect.gen(function* () {
       yield* seed();
@@ -318,14 +353,83 @@ it.effect(
       yield* service.submit(analyst, payload);
       assert.equal((yield* service.recommendation(id)).occurrences, 1);
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version) VALUES ('later', 'thread', 'work', 2, 'run.updated', ${timestamp}, 'server', '{}', '{"runId":"run-1"}', 2)`;
+      const activity = (event: string, version: number, run: string) =>
+        sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version) VALUES (${event}, 'thread', 'work', ${version}, 'run.updated', ${timestamp}, 'server', '{}', ${`{"runId":"${run}"}`}, 2)`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json)
+        VALUES ('run-2', 'work', 2, 'codex', 'completed', ${timestamp}, ${timestamp}, '{"modelSelection":{"instanceId":"codex","model":"gpt-6-astra"}}')`;
+      yield* activity("second", 2, "run-2");
       const next = yield* service.collect(analyst);
-      yield* service.submit(analyst, submission(next.report.id, next.report.evidence[0]!.id));
+      const again = submission(next.report.id, "run:run-2");
+      // The same key submitted in full is taken as the problem coming back, not as a rewrite.
+      const resubmitted = yield* service.submit(analyst, {
+        ...again,
+        recommendations: [
+          {
+            ...again.recommendations[0]!,
+            title: "Reworded",
+            observation: "The second deployment went unverified too.",
+          },
+        ],
+        recurrences: [
+          {
+            recommendationKey: "deployment-verification",
+            text: "Named a second time in the same review.",
+            evidenceIds: ["run:run-2"],
+          },
+        ],
+      });
+      assert.deepEqual(resubmitted.recommendationIds, [id]);
       const saved = yield* service.recommendation(id);
-      assert.equal(saved.status, "dismissed");
-      assert.equal(saved.note, "Covered by another step.");
-      assert.equal(saved.occurrences, 2);
+      assert.deepInclude(saved, {
+        status: "dismissed",
+        note: "Covered by another step.",
+        title: "Verify deployments",
+        observation: "The agent reported missing deployment verification.",
+        occurrences: 2,
+      });
       assert.equal(saved.history.length, 2);
+      assert.deepEqual(
+        saved.incidents?.map((incident) => [
+          incident.reportId,
+          incident.text,
+          incident.evidence.map((evidence) => evidence.id),
+        ]),
+        [[next.report.id, "The second deployment went unverified too.", ["run:run-2"]]],
+      );
+      assert.deepEqual(
+        (yield* service.snapshot()).recommendations[0]?.incidents?.[0]?.evidence,
+        [],
+      );
+      // A later review that samples the same run again has seen nothing new.
+      yield* activity("third", 3, "run-2");
+      const resampled = yield* service.collect(analyst);
+      const recurrence = {
+        recommendationKey: "Deployment verification",
+        text: "The deployment went unverified.",
+        evidenceIds: ["run:run-2"],
+      };
+      const unknown = yield* Effect.flip(
+        service.submit(analyst, {
+          ...submission(resampled.report.id, "run:run-2"),
+          recommendations: [],
+          recurrences: [recurrence, { ...recurrence, recommendationKey: "never-recommended" }],
+        }),
+      );
+      assert.deepInclude(unknown, {
+        reason: "invalid_change",
+        problem: "unknown_recommendation",
+        recommendationKey: "never-recommended",
+      });
+      const repeated = yield* service.submit(analyst, {
+        ...submission(resampled.report.id, "run:run-2"),
+        recommendations: [],
+        recurrences: [recurrence],
+      });
+      assert.deepEqual(repeated.recommendationIds, [id]);
+      assert.deepInclude(yield* service.recommendation(id), {
+        occurrences: 2,
+        status: "dismissed",
+      });
       yield* service.update({ id, status: "open", note: "Reconsider after the workflow changed." });
       assert.equal((yield* service.recommendation(id)).status, "open");
     }).pipe(Effect.provide(layer)),
@@ -392,6 +496,10 @@ it.effect("requires an available Astra and project, enforces max effort, and per
       {
         ...config,
         linkedProjects: [{ environmentId: studio, projectIds: [ProjectId.make("app2")] }],
+      },
+      {
+        ...config,
+        implementationModelSelection: { ...config.modelSelection, model: "not-offered" },
       },
     ])
       assert.equal((yield* Effect.flip(service.configure(invalid))).reason, "invalid_settings");
@@ -575,7 +683,7 @@ it.effect(
       });
       const assessed = yield* service.recommendation(id);
       assert.equal(assessed.assessments.at(-1)?.outcome, "improved");
-      assert.equal(assessed.validation, "Count fewer tool calls.");
+      assert.equal(assessed.validation, "Check subsequent deployment evidence.");
       assert.deepInclude(assessed.trial, { validation: "Check subsequent deployment evidence." });
       yield* TestClock.adjust("1 hour");
       yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
@@ -593,6 +701,143 @@ it.effect(
       );
     }).pipe(Effect.provide(layer)),
 );
+
+it.effect(
+  "gives a recommendation from before exact changes its edit only once the edit applies to the file, then starts it as a pull request",
+  () => {
+    const launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const remote: { branch: string | null } = { branch: "main" };
+    return Effect.gen(function* () {
+      yield* seed();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sql = yield* SqlClient.SqlClient;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-insights-" });
+      const skill = path.join(root, "skills", "deploy", "SKILL.md");
+      const checks = path.join(root, "skills", "deploy", "CHECKS.md");
+      yield* fs.makeDirectory(path.dirname(skill), { recursive: true });
+      yield* fs.writeFileString(skill, "# Deploy\n\nRun the tests.\nRun the tests.\nShip it.\n");
+      yield* sql`UPDATE projection_projects SET workspace_root = ${root}`;
+      const { edits: _edits, ...written } = submission("", "run:old").recommendations[0]!;
+      yield* sql`INSERT INTO insights_recommendations (id, insight_key, status, updated_at, payload_json)
+        VALUES ('insight:earlier', 'deployment-verification', 'deferred', ${timestamp}, ${JSON.stringify(
+          {
+            ...written,
+            expectedImpact: "Expose failed deployments earlier.",
+            id: "insight:earlier",
+            status: "deferred",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            lastSeenAt: timestamp,
+            occurrences: 3,
+            note: "After the release.",
+            deferredUntil: null,
+            implementationThreadId: null,
+            implementationRef: null,
+            evidence: [],
+            assessments: [],
+            history: [{ at: timestamp, status: "deferred", note: "After the release." }],
+          },
+        )})`;
+      const service = yield* Insights.InsightsService;
+      assert.isUndefined((yield* service.snapshot()).recommendations[0]?.edits);
+      const packet = yield* service.collect(analyst);
+      const {
+        suggestedChange: _prose,
+        targetFile: _target,
+        ...proposal
+      } = submission(packet.report.id, "run:run-1").recommendations[0]!;
+      const proposing = (edits: ReadonlyArray<InsightEdit>, suggestedChange?: string) => ({
+        ...submission(packet.report.id, "run:run-1"),
+        recommendations: [
+          {
+            ...proposal,
+            title: "Verify each deployment",
+            edits,
+            ...(suggestedChange === undefined ? {} : { suggestedChange }),
+          },
+        ],
+      });
+      const edit = { file: skill, find: "Ship it.", replace: "Check the deployed version." };
+      for (const [edits, problem, suggestedChange] of [
+        [[], "missing_change"],
+        [[edit], "mixed_change", "Also make the deploy script run the check."],
+        [[{ ...edit, file: "skills/deploy/SKILL.md" }], "path_not_absolute"],
+        [[{ ...edit, file: checks }], "file_missing"],
+        [[{ ...edit, find: "" }], "file_exists"],
+        [[{ ...edit, find: "Ship it now." }], "text_not_found"],
+        [[edit, { ...edit, find: "Run the tests." }], "text_not_unique"],
+      ] as const)
+        assert.deepInclude(
+          yield* Effect.flip(service.submit(analyst, proposing(edits, suggestedChange))),
+          { reason: "invalid_change", problem, recommendationKey: "deployment-verification" },
+        );
+      assert.equal((yield* service.recommendation("insight:earlier")).title, "Verify deployments");
+      const edits = [edit, { file: checks, find: "", replace: "# Checks\n" }];
+      const completed = yield* service.submit(analyst, proposing(edits));
+      assert.deepEqual(completed.recommendationIds, ["insight:earlier"]);
+      const saved = yield* service.recommendation("insight:earlier");
+      assert.deepInclude(saved, {
+        title: "Verify each deployment",
+        edits,
+        targetFile: skill,
+        status: "deferred",
+        note: "After the release.",
+        occurrences: 4,
+      });
+      assert.isUndefined(saved.expectedImpact);
+      assert.deepEqual(
+        saved.history.map((entry) => entry.note),
+        ["After the release.", "Rewritten with an exact change"],
+      );
+      assert.deepEqual((yield* service.snapshot()).recommendations[0]?.edits, []);
+
+      yield* Effect.exit(service.implement("insight:earlier"));
+      assert.deepInclude(launches[0], {
+        projectId: config.projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "origin/main", startFromOrigin: true },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+      });
+      const inWorktree = launches[0]?.initialMessage?.text ?? "";
+      assert.include(inWorktree, `In ${path.join("skills", "deploy", "SKILL.md")}, replace:`);
+      assert.include(inWorktree, `Create ${path.join("skills", "deploy", "CHECKS.md")} with:`);
+      assert.notInclude(inWorktree, skill);
+
+      // Without a remote there is no pull request to open, so the change is made in place.
+      remote.branch = null;
+      const apply = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" };
+      yield* service.configure({ ...config, implementationModelSelection: apply });
+      yield* Effect.exit(service.implement("insight:earlier"));
+      assert.deepInclude(launches[1], {
+        workspaceStrategy: { type: "root" },
+        modelSelection: apply,
+      });
+      assert.include(launches[1]?.initialMessage?.text, `In ${skill}, replace:`);
+    }).pipe(Effect.provide(layerWith(unlinked(launches), { remote })));
+  },
+);
+
+it.effect("replaces a saved schedule's prompt when this build's analysis prompt differs", () => {
+  const tasks = [
+    scheduled({
+      id: ScheduledTaskId.make("insights:daily"),
+      title: "Daily workflow insights",
+      prompt: "The analysis prompt of an earlier build.",
+      enabled: true,
+      schedule: { type: "fixed_time", timeOfDay: "09:00" },
+      projectId: config.projectId,
+      workspaceStrategy: { type: "root" },
+      modelSelection: config.modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    }),
+  ];
+  return Effect.gen(function* () {
+    yield* seed();
+    yield* Layer.build(servicesWith(unlinked(), { tasks }));
+    assert.equal(tasks[0]?.prompt, INSIGHTS_ANALYSIS_PROMPT);
+  }).pipe(Effect.provide(storage));
+});
 
 it.effect(
   "merges a linked environment and its skill usage into one report, keeping its own cursor when it cannot be reached",
@@ -671,7 +916,10 @@ it.effect(
         submission(packet.report.id, linkedEvidence!.id),
       );
       yield* Effect.exit(service.implement(completed.recommendationIds[0]!));
-      assert.deepEqual(peer.launches, [config.projectId]);
+      assert.deepEqual(
+        peer.launches.map((launch) => launch.projectId),
+        [config.projectId],
+      );
 
       const unreached = yield* service.collect(analyst);
       assert.equal(peer.calls[1]?.fromSequence, 7);

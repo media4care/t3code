@@ -42,6 +42,8 @@ export const InsightsSettings = Schema.Struct({
   timeOfDay: Schema.String.check(Schema.isPattern(/^([01]\d|2[0-3]):[0-5]\d$/)),
   lookbackDays: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 90 })),
   maxRuns: Schema.Int.check(Schema.isBetween({ minimum: 10, maximum: 200 })),
+  /** Model for threads that apply a recommendation; the analysis model at its default effort when absent. */
+  implementationModelSelection: Schema.optionalKey(ModelSelection),
   /** Projects in linked environments whose activity joins this environment's report. */
   linkedProjects: Schema.optionalKey(
     Schema.Array(
@@ -69,7 +71,53 @@ export const InsightEvidence = Schema.Struct({
 });
 export type InsightEvidence = typeof InsightEvidence.Type;
 
+/**
+ * Text a model writes. The limit sits on the wire side of the trim, because a tool's JSON schema
+ * is built from that side and would otherwise not show it. What each field is for is said in the
+ * analysis prompt, which only the analyst reads; the schema is in every agent's context.
+ */
+const limited = (maximum: number) =>
+  Schema.String.check(Schema.isMaxLength(maximum)).pipe(Schema.decodeTo(TrimmedNonEmptyString));
+
+/** One exact replacement in a file: `find` occurs once there and becomes `replace`. */
+export const InsightEdit = Schema.Struct({
+  /** An absolute path. */
+  file: limited(300),
+  /** Copied exactly from the file; empty to create the file. */
+  find: Schema.String.check(Schema.isMaxLength(3000)),
+  replace: Schema.String.check(Schema.isMaxLength(6000)),
+});
+export type InsightEdit = typeof InsightEdit.Type;
+
+const InsightEvidenceIds = Schema.Array(ShortText).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(12),
+);
+
+/** A recommendation as an analysis submits it; the stored record keeps this text as first written. */
 export const InsightProposal = Schema.Struct({
+  key: limited(300),
+  /** The change, as an instruction. */
+  title: limited(120),
+  category: InsightCategory,
+  priority: Schema.Literals(["high", "medium", "low"]),
+  confidence: Schema.Literals(["high", "medium", "low"]),
+  /** What happened, for a reader who was not there. */
+  observation: limited(700),
+  /** What the change makes agents do differently. */
+  recommendation: limited(400),
+  /** The exact change; empty only when `suggestedChange` describes it. */
+  edits: Schema.Array(InsightEdit).check(Schema.isMaxLength(4)),
+  /** For a code change too large to write without running it; `targetFile` says where. */
+  suggestedChange: Schema.optionalKey(limited(700)),
+  targetFile: Schema.optionalKey(Schema.NullOr(ShortText)),
+  /** What later tasks would show if the change worked. */
+  validation: limited(400),
+  evidenceIds: InsightEvidenceIds,
+});
+export type InsightProposal = typeof InsightProposal.Type;
+
+export const InsightRecommendation = Schema.Struct({
   key: ShortText,
   title: ShortText,
   category: InsightCategory,
@@ -78,15 +126,14 @@ export const InsightProposal = Schema.Struct({
   observation: Text,
   recommendation: Text,
   targetFile: Schema.NullOr(ShortText),
-  suggestedChange: Text,
-  expectedImpact: Text,
+  /** The exact change; absent from recommendations that predate exact changes. */
+  edits: Schema.optionalKey(Schema.Array(InsightEdit)),
+  /** Prose for a change no exact edit carries; every recommendation before exact changes has one. */
+  suggestedChange: Schema.optionalKey(Text),
+  /** Only recommendations that predate exact changes have one. */
+  expectedImpact: Schema.optionalKey(Text),
   validation: Text,
-  evidenceIds: Schema.Array(ShortText).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
-});
-export type InsightProposal = typeof InsightProposal.Type;
-
-export const InsightRecommendation = Schema.Struct({
-  ...InsightProposal.fields,
+  evidenceIds: InsightEvidenceIds,
   id: Schema.String,
   status: InsightStatus,
   createdAt: IsoDateTime,
@@ -106,6 +153,17 @@ export const InsightRecommendation = Schema.Struct({
     }),
   ),
   evidence: Schema.Array(InsightEvidence),
+  /** Later reviews that saw the same problem again; the text above stays as first written. */
+  incidents: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        reportId: Schema.String,
+        at: IsoDateTime,
+        text: Text,
+        evidence: Schema.Array(InsightEvidence),
+      }),
+    ),
+  ),
   assessments: Schema.Array(
     Schema.Struct({
       reportId: Schema.String,
@@ -295,14 +353,18 @@ export type InsightsSnapshot = typeof InsightsSnapshot.Type;
 
 export const InsightsSubmitInput = Schema.Struct({
   reportId: ShortText,
-  summary: Text,
+  summary: limited(1200),
   brief: Schema.optionalKey(
     Schema.Struct({
-      headline: ShortText,
+      headline: limited(160),
       decisions: Schema.Array(
         Schema.Struct({
-          ...InsightDecisionFields,
-          /** Required for toolkit decisions: a key from this submission or an existing recommendation. */
+          kind: InsightDecisionFields.kind,
+          title: limited(120),
+          action: limited(400),
+          why: limited(500),
+          evidenceIds: InsightDecisionFields.evidenceIds,
+          /** Required for `toolkit`: the new or existing recommendation to act on. */
           recommendationKey: Schema.optionalKey(ShortText),
         }),
       ).check(Schema.isMaxLength(3)),
@@ -310,17 +372,29 @@ export const InsightsSubmitInput = Schema.Struct({
   ),
   wins: Schema.Array(
     Schema.Struct({
-      text: Text,
+      text: limited(400),
       evidenceIds: Schema.Array(ShortText).check(Schema.isMinLength(1)),
     }),
-  ).check(Schema.isMaxLength(8)),
-  limitations: Schema.Array(Text).check(Schema.isMaxLength(12)),
+  ).check(Schema.isMaxLength(5)),
+  limitations: Schema.Array(limited(400)).check(Schema.isMaxLength(5)),
+  /** New problems only. */
   recommendations: Schema.Array(InsightProposal).check(Schema.isMaxLength(8)),
+  /** Tracked recommendations whose problem this review saw again; their text stays as written. */
+  recurrences: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        recommendationKey: ShortText,
+        /** What happened this time. */
+        text: limited(400),
+        evidenceIds: Schema.Array(ShortText).check(Schema.isMinLength(1), Schema.isMaxLength(6)),
+      }),
+    ).check(Schema.isMaxLength(12)),
+  ),
   assessments: Schema.Array(
     Schema.Struct({
       recommendationId: ShortText,
       outcome: Schema.Literals(["improved", "unchanged", "regressed", "insufficient_evidence"]),
-      explanation: Text,
+      explanation: limited(600),
       evidenceIds: Schema.Array(ShortText).check(Schema.isMaxLength(12)),
     }),
   ).check(Schema.isMaxLength(20)),
@@ -346,21 +420,54 @@ export const InsightAttributionInput = Schema.Struct({
 });
 export type InsightAttributionInput = typeof InsightAttributionInput.Type;
 
+/** Why a submitted recommendation or recurrence cannot be saved as written. */
+export const InsightChangeProblem = Schema.Literals([
+  "missing_change",
+  "mixed_change",
+  "unknown_recommendation",
+  "path_not_absolute",
+  "file_missing",
+  "file_exists",
+  "text_not_found",
+  "text_not_unique",
+]);
+export type InsightChangeProblem = typeof InsightChangeProblem.Type;
+
 export class InsightsError extends Schema.TaggedError<InsightsError>()("InsightsError", {
   reason: Schema.Literals([
     "storage",
     "not_configured",
     "not_found",
     "invalid_evidence",
+    "invalid_change",
     "wrong_owner",
     "analysis_running",
     "schedule",
     "launch",
     "invalid_settings",
   ]),
+  /** Set with `invalid_change`: what is wrong, in which recommendation, and in which file. */
+  problem: Schema.optional(InsightChangeProblem),
+  recommendationKey: Schema.optional(Schema.String),
+  file: Schema.optional(Schema.String),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
+    if (this.reason === "invalid_change") {
+      const where = `Recommendation "${this.recommendationKey ?? ""}"`;
+      const file = this.file ?? "";
+      const problems = {
+        missing_change: `${where} needs an exact edit, or a suggestedChange when no edit can express it.`,
+        mixed_change: `${where} has both edits and a suggestedChange. Keep one here and propose the other as a recommendation of its own.`,
+        unknown_recommendation: `${where} does not exist, so nothing recurred. Submit it as a new recommendation.`,
+        path_not_absolute: `${where}: ${file} is not an absolute path.`,
+        file_missing: `${where}: ${file} could not be read. Name the existing file, or leave find empty to create it.`,
+        file_exists: `${where}: ${file} already exists, so find cannot be empty. Copy the text to replace from the file.`,
+        text_not_found: `${where}: the find text is not in ${file}. Read the file again and copy the text exactly.`,
+        text_not_unique: `${where}: the find text occurs more than once in ${file}. Include more of the surrounding text.`,
+      };
+      return problems[this.problem ?? "missing_change"];
+    }
     const messages = {
       storage: "Insights could not read or save its data.",
       not_configured: "Configure Insights before running an analysis.",
@@ -371,7 +478,7 @@ export class InsightsError extends Schema.TaggedError<InsightsError>()("Insights
       schedule: "The Insights schedule could not be updated or started.",
       launch: "The implementation thread could not be started.",
       invalid_settings:
-        "Choose an available project and a Codex Astra model with max effort. Linked projects need Linked environments on and a link to their environment.",
+        "Choose an available project and a Codex Astra model with max effort. Linked projects need Linked environments on and a link to their environment. A model for applying changes must be one an enabled provider offers.",
     };
     return messages[this.reason];
   }

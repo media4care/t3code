@@ -8,6 +8,7 @@ import {
   type InsightsSettings,
 } from "@t3tools/contracts";
 import {
+  insightChange,
   insightsLinkedEnvironments,
   recurringInsightFriction,
   reviewedInsightThreads,
@@ -236,5 +237,44 @@ describe("recurring friction", () => {
       ["across", null],
       ["within", "Quote separators"],
     ]);
+  });
+});
+
+describe("exact changes", () => {
+  it("frames what an edit changes with the lines both texts share, and waits for the full record", () => {
+    const edit = {
+      file: "/repo/skills/deploy/SKILL.md",
+      find: "## Deploy\nRun the tests.\nShip it.\n",
+      replace: "## Deploy\nRun the tests.\nCheck the deployed version.\nShip it.\n",
+    };
+    const created = { file: "/repo/CHECKS.md", find: "", replace: "# Checks\n" };
+    expect(insightChange({ edits: [] }, { edits: [edit, created] })).toEqual([
+      {
+        file: edit.file,
+        created: false,
+        rows: [
+          { kind: "context", text: "## Deploy" },
+          { kind: "context", text: "Run the tests." },
+          { kind: "add", text: "Check the deployed version." },
+          { kind: "context", text: "Ship it." },
+        ],
+      },
+      { file: created.file, created: true, rows: [{ kind: "add", text: "# Checks" }] },
+    ]);
+    expect(
+      insightChange({ edits: [] }, { edits: [{ ...edit, find: "a\nb\na", replace: "a" }] }),
+    ).toMatchObject([
+      {
+        rows: [
+          { kind: "context", text: "a" },
+          { kind: "remove", text: "b" },
+          { kind: "remove", text: "a" },
+        ],
+      },
+    ]);
+    // The list's copy has its edit text stripped; one from before exact changes has none at all.
+    expect(insightChange({ edits: [] }, undefined)).toBe("loading");
+    expect(insightChange({}, undefined)).toBeNull();
+    expect(insightChange({ edits: [] }, { edits: [] })).toBeNull();
   });
 });

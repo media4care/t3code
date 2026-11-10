@@ -52,7 +52,7 @@ export const InsightsToolkit = Toolkit.make(
   Tool.make("t3_insights_submit", {
     ...common,
     description:
-      "Save this thread's collected analysis. Cite evidence IDs from collect, reuse recommendation keys, distinguish facts from hypotheses, and propose concrete source changes with validation. Only assess implemented recommendations using later evidence. Never invent success, costs or measurements.",
+      "Save this thread's collected analysis. Cite evidence IDs from collect. A new problem is a recommendation with its exact edits, absolute paths, find text copied from the file; a tracked problem seen again is a recurrence under its key. Only assess implemented recommendations using later evidence. Never invent success, costs or measurements.",
     parameters: InsightsSubmitInput,
     success: InsightsReport,
   }),
@@ -74,7 +74,7 @@ export const InsightsToolkit = Toolkit.make(
   Tool.make("t3_insights", {
     ...common,
     description:
-      "Read workflow insights with list, report or recommendation (id required). configure needs settings. update needs update. run starts analysis. implement starts work on a recommendation (id required); only when the user asks to implement it. Status changes preserve evidence and history.",
+      "Read workflow insights with list, report or recommendation (id required). configure needs settings. update needs update. run starts analysis. implement starts a thread that applies a recommendation's change and opens a pull request (id required); only when the user asks for it. Status changes preserve evidence and history.",
     parameters: Schema.Struct({
       action: Schema.Literals([
         "list",

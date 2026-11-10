@@ -15,6 +15,8 @@ import {
   ProjectId,
   ScheduledTaskId,
   ThreadId,
+  type InsightChangeProblem,
+  type InsightEdit,
   type InsightEvidence,
   type InsightFrictionCluster,
   type InsightSkillUsage,
@@ -27,8 +29,10 @@ import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -43,6 +47,7 @@ import * as ThreadSkills from "../orchestration-v2/ThreadSkills.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
   addInsightsMetrics,
   emptyInsightsMetrics,
@@ -50,7 +55,7 @@ import {
   insightKey,
   sumInsightSkills,
 } from "./insightsEvidence.ts";
-import { INSIGHTS_ANALYSIS_PROMPT } from "./insightsPrompt.ts";
+import { INSIGHTS_ANALYSIS_PROMPT, insightImplementationPrompt } from "./insightsPrompt.ts";
 import { frictionSignature, mergeFrictionClusters } from "./toolFriction.ts";
 
 const TASK_ID = ScheduledTaskId.make("insights:daily");
@@ -122,6 +127,9 @@ const make = Effect.gen(function* () {
   const digest = yield* Digest.Digest;
   const random = yield* SecureRandom.SecureRandom;
   const threadSkills = yield* ThreadSkills.ThreadSkills;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const git = yield* GitVcsDriver.GitVcsDriver;
   const updates = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -175,7 +183,8 @@ const make = Effect.gen(function* () {
     }>`SELECT json_remove(json_set(payload_json, '$.evidence', json('[]')), '$.tasks', '$.friction') AS payload_json FROM insights_reports ORDER BY created_at DESC LIMIT 30`;
     const recs = yield* sql<{
       payload_json: string;
-    }>`SELECT json_set(payload_json, '$.evidence', json('[]'), '$.history', json('[]'), '$.assessments', json(COALESCE((SELECT json_group_array(json_set(value, '$.evidence', json('[]'))) FROM json_each(json_extract(payload_json, '$.assessments'))), '[]'))) AS payload_json FROM insights_recommendations ORDER BY updated_at DESC LIMIT 251`;
+    }>`SELECT json_replace(json_set(payload_json, '$.evidence', json('[]'), '$.history', json('[]'), '$.assessments', json(COALESCE((SELECT json_group_array(json_set(value, '$.evidence', json('[]'))) FROM json_each(json_extract(payload_json, '$.assessments'))), '[]'))),
+      '$.edits', json('[]'), '$.incidents', json(COALESCE((SELECT json_group_array(json_set(value, '$.evidence', json('[]'))) FROM json_each(json_extract(payload_json, '$.incidents'))), '[]'))) AS payload_json FROM insights_recommendations ORDER BY updated_at DESC LIMIT 251`;
     return {
       settings: config,
       latestAnalysis: latest[0] ?? null,
@@ -185,11 +194,16 @@ const make = Effect.gen(function* () {
       ),
       recommendations: (yield* Effect.forEach(recs.slice(0, 250), (row) =>
         decodeRecommendation(row.payload_json),
-      )).map((entry) => ({
+      )).map(({ edits, incidents, ...entry }) => ({
         ...entry,
         evidence: [],
         history: [],
         assessments: entry.assessments.map((assessment) => ({ ...assessment, evidence: [] })),
+        // An absent `edits` marks a recommendation from before exact changes, so it stays absent.
+        ...(edits ? { edits: [] } : {}),
+        ...(incidents
+          ? { incidents: incidents.map((incident) => ({ ...incident, evidence: [] })) }
+          : {}),
       })),
       truncated: recs.length > 250,
     };
@@ -202,9 +216,9 @@ const make = Effect.gen(function* () {
       project_id: string;
     }>`SELECT project_id FROM projection_projects WHERE deleted_at IS NULL`;
     const ids = new Set(projects.map((p) => p.project_id));
-    const provider = (yield* providers.getProviders).find(
-      (p) => p.instanceId === input.modelSelection.instanceId,
-    );
+    const available = yield* providers.getProviders;
+    const provider = available.find((p) => p.instanceId === input.modelSelection.instanceId);
+    const applyWith = input.implementationModelSelection;
     const linked = input.linkedProjects ?? [];
     const linkedAvailable =
       linked.length === 0 ||
@@ -218,6 +232,13 @@ const make = Effect.gen(function* () {
       !ids.has(input.projectId) ||
       input.projectIds.some((id) => !ids.has(id)) ||
       !linkedAvailable ||
+      (applyWith !== undefined &&
+        !available.some(
+          (p) =>
+            p.instanceId === applyWith.instanceId &&
+            p.enabled &&
+            p.models.some((model) => model.slug === applyWith.model),
+        )) ||
       provider?.driver !== "codex" ||
       !provider.enabled ||
       !input.modelSelection.model.includes("astra") ||
@@ -235,6 +256,23 @@ const make = Effect.gen(function* () {
       return yield* new InsightsError({ reason: "invalid_settings" });
     }
   });
+
+  const saveSchedule = (config: InsightsSettings) =>
+    scheduler
+      .upsert({
+        id: TASK_ID,
+        title: "Daily workflow insights",
+        prompt: INSIGHTS_ANALYSIS_PROMPT,
+        enabled: config.enabled,
+        schedule: { type: "fixed_time", timeOfDay: config.timeOfDay },
+        projectId: config.projectId,
+        threadId: null,
+        workspaceStrategy: { type: "root" },
+        modelSelection: config.modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      })
+      .pipe(Effect.mapError((cause) => new InsightsError({ reason: "schedule", cause })));
 
   const configure = Effect.fn("InsightsService.configure")(
     function* (input: InsightsSettings) {
@@ -261,21 +299,7 @@ const make = Effect.gen(function* () {
           ],
         },
       };
-      yield* scheduler
-        .upsert({
-          id: TASK_ID,
-          title: "Daily workflow insights",
-          prompt: INSIGHTS_ANALYSIS_PROMPT,
-          enabled: config.enabled,
-          schedule: { type: "fixed_time", timeOfDay: config.timeOfDay },
-          projectId: config.projectId,
-          threadId: null,
-          workspaceStrategy: { type: "root" },
-          modelSelection: config.modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-        })
-        .pipe(Effect.mapError((cause) => new InsightsError({ reason: "schedule", cause })));
+      yield* saveSchedule(config);
       yield* sql`INSERT INTO insights_settings (id, payload_json) VALUES (1, ${yield* encodeSettings(config)})
       ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json`;
       yield* notify;
@@ -919,6 +943,23 @@ const make = Effect.gen(function* () {
     Effect.mapError(storageError),
   );
 
+  const checkEdit = Effect.fn("InsightsService.checkEdit")(function* (
+    recommendationKey: string,
+    edit: InsightEdit,
+  ) {
+    const invalid = (problem: InsightChangeProblem) =>
+      new InsightsError({ reason: "invalid_change", problem, recommendationKey, file: edit.file });
+    if (!path.isAbsolute(edit.file)) return yield* invalid("path_not_absolute");
+    const content = yield* fileSystem.readFileString(edit.file).pipe(Effect.option);
+    if (edit.find === "") {
+      if (Option.isSome(content)) return yield* invalid("file_exists");
+      return;
+    }
+    if (Option.isNone(content)) return yield* invalid("file_missing");
+    const matches = content.value.split(edit.find).length - 1;
+    if (matches !== 1) return yield* invalid(matches === 0 ? "text_not_found" : "text_not_unique");
+  });
+
   const submit = Effect.fn("InsightsService.submit")(
     function* (threadId: ThreadId, input: InsightsSubmitInput) {
       const current = yield* report(input.reportId);
@@ -927,11 +968,13 @@ const make = Effect.gen(function* () {
       if (current.status !== "analyzing") return yield* new InsightsError({ reason: "not_found" });
       const evidenceById = new Map(current.evidence.map((e) => [e.id, e]));
       const decisions = input.brief?.decisions ?? [];
+      const recurrences = input.recurrences ?? [];
       const references = [
         ...input.wins,
         ...input.recommendations,
         ...input.assessments,
         ...decisions,
+        ...recurrences,
       ];
       const keys = input.recommendations.map((r) => insightKey(r.key));
       if (
@@ -942,21 +985,86 @@ const make = Effect.gen(function* () {
         new Set(input.assessments.map((a) => a.recommendationId)).size !== input.assessments.length
       )
         return yield* new InsightsError({ reason: "invalid_evidence" });
+      // One recommendation is one change: its exact edits, or a described one, never both or neither.
+      const misshapen = input.recommendations.find(
+        (r) => r.edits.length > 0 === (r.suggestedChange !== undefined),
+      );
+      if (misshapen)
+        return yield* new InsightsError({
+          reason: "invalid_change",
+          problem: misshapen.edits.length ? "mixed_change" : "missing_change",
+          recommendationKey: misshapen.key,
+        });
       const at = yield* now;
       const result = yield* sql.withTransaction(
         Effect.gen(function* () {
           const ids: string[] = [];
-          for (const proposal of input.recommendations) {
-            const key = insightKey(proposal.key);
-            const existingRows = yield* sql<{
+          // A recommendation counts once per report, however often the submission names it.
+          const counted = new Set<string>();
+          // Both helpers run inside this submission's span and transaction.
+          const tracked = Effect.fnUntraced(function* (key: string) {
+            const rows = yield* sql<{
               payload_json: string;
             }>`SELECT payload_json FROM insights_recommendations WHERE insight_key = ${key}`;
-            const existing = existingRows[0]
-              ? yield* decodeRecommendation(existingRows[0].payload_json)
-              : null;
+            return rows[0] ? yield* decodeRecommendation(rows[0].payload_json) : null;
+          });
+          const runOf = (entry: InsightEvidence) =>
+            `${entry.environmentId ?? ""}\n${entry.runId ?? entry.id}`;
+          const recordIncident = Effect.fnUntraced(function* (
+            existing: InsightRecommendation,
+            text: string,
+            evidenceIds: ReadonlyArray<string>,
+          ) {
+            const cited = evidenceIds.map((id) => evidenceById.get(id)!);
+            const seen = new Set(
+              [
+                ...existing.evidence,
+                ...(existing.incidents ?? []).flatMap((incident) => incident.evidence),
+              ].map(runOf),
+            );
+            // A later packet can sample a run again; only a run not cited before is another incident.
+            if (!counted.has(existing.id) && cited.some((entry) => !seen.has(runOf(entry)))) {
+              counted.add(existing.id);
+              yield* saveRecommendation({
+                ...existing,
+                updatedAt: at,
+                lastSeenAt: at,
+                occurrences: existing.occurrences + 1,
+                incidents: [
+                  ...(existing.incidents ?? []),
+                  { reportId: current.id, at, text, evidence: cited },
+                ].slice(-30),
+              });
+            }
+            return existing.id;
+          });
+          for (const proposal of input.recommendations) {
+            const key = insightKey(proposal.key);
+            const existing = yield* tracked(key);
+            // Text with an exact change stays as first written, so resubmitting it is an incident.
+            // One from before exact changes is rewritten once, to gain that change.
+            if (existing?.edits !== undefined) {
+              ids.push(yield* recordIncident(existing, proposal.observation, proposal.evidenceIds));
+              continue;
+            }
+            yield* Effect.forEach(proposal.edits, (edit) => checkEdit(proposal.key, edit), {
+              discard: true,
+            });
             const value: InsightRecommendation = {
-              ...proposal,
               key,
+              title: proposal.title,
+              category: proposal.category,
+              priority: proposal.priority,
+              confidence: proposal.confidence,
+              observation: proposal.observation,
+              recommendation: proposal.recommendation,
+              targetFile: proposal.edits[0]?.file ?? proposal.targetFile ?? null,
+              edits: proposal.edits,
+              ...(proposal.suggestedChange === undefined
+                ? {}
+                : { suggestedChange: proposal.suggestedChange }),
+              validation: proposal.validation,
+              evidenceIds: proposal.evidenceIds,
               id: existing?.id ?? `insight:${yield* random.uuidV4()}`,
               status: existing?.status ?? "open",
               createdAt: existing?.createdAt ?? at,
@@ -970,11 +1078,21 @@ const make = Effect.gen(function* () {
               ...(existing?.trial ? { trial: existing.trial } : {}),
               evidence: proposal.evidenceIds.map((id) => evidenceById.get(id)!),
               assessments: existing?.assessments ?? [],
-              history: existing?.history ?? [
-                { at, status: "open", note: "Recommended by daily analysis" },
-              ],
+              history: existing
+                ? [
+                    ...existing.history,
+                    {
+                      at,
+                      status: existing.status,
+                      note: proposal.edits.length
+                        ? "Rewritten with an exact change"
+                        : "Rewritten by daily analysis",
+                    },
+                  ]
+                : [{ at, status: "open", note: "Recommended by daily analysis" }],
             };
             yield* saveRecommendation(value);
+            counted.add(value.id);
             ids.push(value.id);
           }
           const recommendationIds = new Map(keys.map((key, index) => [key, ids[index]!]));
@@ -996,6 +1114,17 @@ const make = Effect.gen(function* () {
               }),
             ),
           };
+          for (const recurrence of recurrences) {
+            const existing = yield* tracked(insightKey(recurrence.recommendationKey));
+            if (!existing)
+              return yield* new InsightsError({
+                reason: "invalid_change",
+                problem: "unknown_recommendation",
+                recommendationKey: recurrence.recommendationKey,
+              });
+            const id = yield* recordIncident(existing, recurrence.text, recurrence.evidenceIds);
+            if (!ids.includes(id)) ids.push(id);
+          }
           for (const assessment of input.assessments) {
             const existing = yield* recommendation(assessment.recommendationId);
             if (
@@ -1121,6 +1250,19 @@ const make = Effect.gen(function* () {
     Effect.mapError(storageError),
   );
 
+  /** The remote default branch a pull request starts from; null without a remote that has one. */
+  const pullRequestBase = Effect.fn("InsightsService.pullRequestBase")(
+    function* (cwd: string) {
+      const remote = yield* git.resolvePrimaryRemoteName(cwd);
+      const branch = yield* git.resolveDefaultBranchName(cwd, remote);
+      if (branch === null) return null;
+      // Fetch does not update a recorded HEAD, so it can name a branch the remote no longer has.
+      yield* git.resolveCommit({ cwd, revision: `refs/remotes/${remote}/${branch}` });
+      return `${remote}/${branch}`;
+    },
+    Effect.orElseSucceed(() => null),
+  );
+
   const implement = Effect.fn("InsightsService.implement")(
     function* (id: string) {
       const config = yield* settings();
@@ -1128,21 +1270,60 @@ const make = Effect.gen(function* () {
       const rec = yield* recommendation(id);
       if (rec.implementationThreadId) return { threadId: rec.implementationThreadId };
       const threadId = ThreadId.make(`insight-implementation:${id}`);
+      // A relative path would resolve against the server's own directory, so it is in no project.
+      const within = (root: string, file: string) => {
+        const relative = path.relative(root, file);
+        return (
+          path.isAbsolute(file) &&
+          relative !== "" &&
+          !relative.startsWith("..") &&
+          !path.isAbsolute(relative)
+        );
+      };
+      const target = rec.edits?.[0]?.file ?? rec.targetFile;
+      const projects = yield* projectsIn([]);
+      const owner = target
+        ? projects
+            .filter((entry) => within(entry.workspaceRoot, target))
+            .sort((a, b) => b.workspaceRoot.length - a.workspaceRoot.length)[0]
+        : undefined;
+      // Linked evidence names a project in its own environment; the change is made in one here.
+      const fallbackId =
+        rec.evidence.find((entry) => entry.environmentId === undefined)?.projectId ??
+        config.projectId;
+      const project = owner ?? projects.find((entry) => entry.projectId === fallbackId);
+      // A file outside every project is changed where it is: no other checkout's worktree holds it.
+      const elsewhere = target !== null && path.isAbsolute(target) && owner === undefined;
+      const base = project && !elsewhere ? yield* pullRequestBase(project.workspaceRoot) : null;
+      const worktreeOf = project && base !== null ? project.workspaceRoot : null;
+      const { options: _maxEffort, ...analysisModel } = config.modelSelection;
       yield* launcher
         .launch({
           commandId: CommandId.make(`insight-implementation:${id}`),
           threadId,
-          // Linked evidence names a project there; the change is made in a checkout here.
-          projectId:
-            rec.evidence.find((entry) => entry.environmentId === undefined)?.projectId ??
-            config.projectId,
+          projectId: project?.projectId ?? fallbackId,
           title: rec.title,
-          modelSelection: config.modelSelection,
+          // Applying a reviewed edit needs neither the analysis model's max effort nor its price.
+          modelSelection: config.implementationModelSelection ?? analysisModel,
           runtimeMode: "full-access",
           interactionMode: "default",
-          workspaceStrategy: { type: "root" },
+          // A worktree off the remote default branch keeps the pull request to this one change.
+          workspaceStrategy:
+            base === null
+              ? { type: "root" }
+              : { type: "worktree", baseRef: base, startFromOrigin: true },
           initialMessage: {
-            text: `Implement this workflow improvement. Verify its premise against current source first. Follow repository instructions and preserve unrelated work. Do not push or publish unless asked.\n\n${yield* encodeRecommendation(rec)}\nAfter verification, report changed files, tests and commit if any. Do not claim workflow improvement until later runs establish it.`,
+            text: insightImplementationPrompt({
+              ...rec,
+              worktreeOf,
+              edits: rec.edits?.map((edit) => ({
+                ...edit,
+                file:
+                  worktreeOf !== null && within(worktreeOf, edit.file)
+                    ? path.relative(worktreeOf, edit.file)
+                    : edit.file,
+              })),
+            }),
             attachments: [],
           },
           createdBy: "user",
@@ -1177,6 +1358,14 @@ const make = Effect.gen(function* () {
     if (!rows[0]) return yield* new InsightsError({ reason: "not_found" });
     yield* sql`INSERT INTO insights_attributions (thread_id, run_id, created_at, payload_json) VALUES (${threadId}, ${rows[0].run_id}, ${yield* now}, ${yield* encodeAttribution(input)})`;
   }, Effect.mapError(storageError));
+
+  // The schedule stores its prompt, so one saved before a prompt change would keep the old text.
+  yield* Effect.gen(function* () {
+    const config = yield* settings();
+    const { tasks } = yield* scheduler.list();
+    const task = tasks.find((entry) => entry.id === TASK_ID);
+    if (config && task && task.prompt !== INSIGHTS_ANALYSIS_PROMPT) yield* saveSchedule(config);
+  }).pipe(Effect.ignore({ log: true }));
 
   return InsightsService.of({
     snapshot,
