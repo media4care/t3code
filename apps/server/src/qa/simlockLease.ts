@@ -2,6 +2,7 @@ import type { QaDeviceRequirement, QaRunDevice } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import type { PlatformError } from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -75,7 +76,7 @@ export const leaseFromSimlock = Effect.fn("QaService.leaseFromSimlock")(function
   },
 ): Effect.fn.Return<
   { readonly device: QaRunDevice; readonly environment: Record<string, string> },
-  SimlockLeaseError,
+  SimlockLeaseError | PlatformError,
   ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

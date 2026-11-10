@@ -262,15 +262,15 @@ const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(fun
       const executed: Array<readonly [number, string]> = [];
       for (const [id, name, migration] of migrationEntries) {
         if (id < start || id >= FIRST_EXPLORER_MIGRATION_ID) continue;
-        yield* migration.pipe(
-          Effect.mapError(
-            (cause) =>
-              new Migrator.MigrationError({
-                cause,
-                kind: "Failed",
-                message: `Migration "${id}_${name}" failed`,
-              }),
-          ),
+        // Data-first: piped, the error type is not inferred across migrations that fail differently.
+        yield* Effect.mapError(
+          migration,
+          (cause) =>
+            new Migrator.MigrationError({
+              cause,
+              kind: "Failed",
+              message: `Migration "${id}_${name}" failed`,
+            }),
         );
         yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
         executed.push([id, name]);

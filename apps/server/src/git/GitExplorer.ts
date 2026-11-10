@@ -826,7 +826,10 @@ const make = Effect.gen(function* () {
     worktrees: readonly GitExplorerWorktree[],
     selectedPath: string,
     ref: GitExplorerRef,
-  ): Effect.fn.Return<Pick<GitExplorerBranchStatus, "deleteBlockedReason" | "checkedOutAt">> {
+  ): Effect.fn.Return<
+    Pick<GitExplorerBranchStatus, "deleteBlockedReason" | "checkedOutAt">,
+    GitExplorerError
+  > {
     const index = worktrees.findIndex((worktree) => worktree.branch === ref.shortName);
     if (index === -1) return { deleteBlockedReason: null };
     const worktree = worktrees[index]!;

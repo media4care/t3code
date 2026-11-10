@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodePath from "node:path";
+
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -1503,7 +1506,7 @@ ${body}`;
       yield* setup.fs.writeFileString(setup.path.join(bin, "simlock"), script);
       yield* setup.fs.chmod(setup.path.join(bin, "simlock"), 0o755);
     }
-    const PATH = script === null ? bin : `${bin}${setup.path.delimiter}${process.env.PATH ?? ""}`;
+    const PATH = script === null ? bin : `${bin}${NodePath.delimiter}${process.env.PATH ?? ""}`;
     const context = yield* Layer.build(
       Layer.fresh(setup.serviceLayer).pipe(
         Layer.provide(Layer.succeed(HostProcess.Environment, { ...process.env, PATH })),
