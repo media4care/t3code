@@ -1,4 +1,5 @@
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
+import { InsightsChange } from "./InsightsChange";
 import { InsightsDashboard } from "./InsightsDashboard";
 import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -20,9 +21,13 @@ import {
   matchesInsightFilter,
   insightImplementationUrl,
   defaultInsightsSettings,
+  insightChange,
+  insightsApplyModelChoices,
   insightsLinkedEnvironments,
   insightsModelChoices,
+  insightStartChange,
   linkedInsightsProjectIds,
+  setInsightsApplyModel,
   setLinkedInsightsProject,
   INSIGHT_STATUS_LABELS,
   insightTrial,
@@ -367,6 +372,7 @@ function InsightsSettingsForm({
   const linked = useLinkedEnvironments(environmentId);
   const providers = useEnvironmentProviders().get(environmentId) ?? [];
   const choices = insightsModelChoices(providers);
+  const applyChoices = insightsApplyModelChoices(providers);
   const defaults =
     initial ?? (projects[0] ? defaultInsightsSettings(projects[0].id, providers) : null);
   const [draft, setDraft] = useState(defaults);
@@ -399,7 +405,7 @@ function InsightsSettingsForm({
         <h3 className="font-semibold">Daily workflow review</h3>
         <p className="mt-1 text-sm text-muted-foreground">
           The selected provider analyzes excerpts from these projects. Each report links back to its
-          evidence. Recommendations are implemented only when you start work on them.
+          evidence. A recommendation is applied only when you ask for it, as a pull request.
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -419,6 +425,21 @@ function InsightsSettingsForm({
             onChange={(key) => {
               const choice = choices.find((c) => c.key === key);
               if (choice) update({ modelSelection: choice.selection });
+            }}
+          />
+        </Field>
+        <Field label="Model for applying changes">
+          <Picker
+            label="Model for applying changes"
+            value={
+              value.implementationModelSelection
+                ? `${value.implementationModelSelection.instanceId}/${value.implementationModelSelection.model}`
+                : "default"
+            }
+            choices={applyChoices.map((choice) => ({ value: choice.key, label: choice.label }))}
+            onChange={(key) => {
+              const choice = applyChoices.find((c) => c.key === key);
+              if (choice) setDraft(setInsightsApplyModel(value, choice.selection));
             }}
           />
         </Field>
@@ -545,6 +566,15 @@ function InsightsSettingsForm({
         {busy ? "Saving…" : initial ? "Save settings" : "Enable daily insights"}
       </Button>
     </form>
+  );
+}
+
+function Passage({ title, text }: { title: string; text: string }) {
+  return (
+    <section>
+      <h4 className="mb-1 text-sm font-semibold">{title}</h4>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{text}</p>
+    </section>
   );
 }
 
@@ -775,6 +805,9 @@ function RecommendationDetail({
   const implementationUrl = insightImplementationUrl(recommendation.implementationRef);
   const trial = insightTrial(recommendation);
   const closed = recommendation.status === "kept" || recommendation.status === "reverted";
+  const change = insightChange(summary, loaded);
+  const startChange = insightStartChange(change !== null);
+  const incidents = recommendation.incidents ?? [];
   const [busy, setBusy] = useState(false);
   const act = async (status: InsightStatus) => {
     setBusy(true);
@@ -809,6 +842,60 @@ function RecommendationDetail({
   return (
     <div className="space-y-5 border-t border-border p-5">
       {query.error && <p role="alert">{query.error}</p>}
+      <Passage title="What happened" text={recommendation.observation} />
+      <Passage title="What changes" text={recommendation.recommendation} />
+      <section className="space-y-3">
+        <h4 className="text-sm font-semibold">Proposed change</h4>
+        <InsightsChange change={change} recommendation={recommendation} />
+        {recommendation.implementationThreadId ? (
+          <Link
+            to="/$environmentId/$threadId"
+            params={{ environmentId, threadId: recommendation.implementationThreadId }}
+            className="inline-block text-sm text-primary underline underline-offset-4"
+          >
+            Open the thread making this change
+          </Link>
+        ) : (
+          !trial &&
+          recommendation.status !== "kept" &&
+          change !== "loading" && (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                disabled={disabled || busy}
+                onClick={() => {
+                  void start();
+                }}
+              >
+                {startChange.label}
+              </Button>
+              <p className="min-w-48 flex-1 text-xs text-muted-foreground">{startChange.hint}</p>
+            </div>
+          )
+        )}
+      </section>
+      <Passage title="How we'll know it worked" text={recommendation.validation} />
+      {recommendation.expectedImpact && (
+        <Passage title="Expected impact" text={recommendation.expectedImpact} />
+      )}
+      <InsightsEvidence environmentId={environmentId} evidence={recommendation.evidence} />
+      {incidents.length > 0 && (
+        <section className="space-y-3">
+          <h4 className="text-sm font-semibold">
+            Came back {incidents.length === 1 ? "once" : `${incidents.length} times`}
+          </h4>
+          <ul className="space-y-3">
+            {incidents.toReversed().map((incident) => (
+              <li key={incident.reportId} className="space-y-2 rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  {new Date(incident.at).toLocaleDateString()}
+                </p>
+                <p className="whitespace-pre-wrap text-sm">{incident.text}</p>
+                <InsightsEvidence environmentId={environmentId} evidence={incident.evidence} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -831,7 +918,7 @@ function RecommendationDetail({
               <Button
                 key={status}
                 size="sm"
-                variant={status === "implemented" || status === "kept" ? "default" : "outline"}
+                variant={status === "kept" ? "default" : "outline"}
                 disabled={disabled || busy}
                 onClick={() => {
                   void act(status);
@@ -849,7 +936,7 @@ function RecommendationDetail({
               ? "Kept after its trial. Reviews no longer assess it."
               : recommendation.status === "reverted"
                 ? "Reverted after its trial. Reviews no longer assess it."
-                : "Completion has not been recorded. Confirm it after checking the change."}
+                : "Once the change is merged, mark it implemented. Later reviews then check whether it helped."}
         </p>
         {trial && (
           <div>
@@ -875,44 +962,7 @@ function RecommendationDetail({
         ) : (
           <p className="text-xs text-muted-foreground">No change reference recorded.</p>
         )}
-        {recommendation.implementationThreadId ? (
-          <Link
-            to="/$environmentId/$threadId"
-            params={{ environmentId, threadId: recommendation.implementationThreadId }}
-            className="inline-block text-sm text-primary underline underline-offset-4"
-          >
-            Open implementation thread
-          </Link>
-        ) : (
-          !trial &&
-          recommendation.status !== "kept" && (
-            <Button
-              variant="outline"
-              disabled={disabled || busy}
-              onClick={() => {
-                void start();
-              }}
-            >
-              Start implementation
-            </Button>
-          )
-        )}
       </section>
-      {[
-        { title: "Observation", text: recommendation.observation },
-        { title: "Recommendation", text: recommendation.recommendation },
-        { title: "Suggested change", text: recommendation.suggestedChange },
-        { title: "Expected impact", text: recommendation.expectedImpact },
-        { title: "How to validate", text: recommendation.validation },
-      ].map((section) => (
-        <section key={section.title}>
-          <h4 className="mb-1 text-sm font-semibold">{section.title}</h4>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-            {section.text}
-          </p>
-        </section>
-      ))}
-      <InsightsEvidence environmentId={environmentId} evidence={recommendation.evidence} />
       {recommendation.assessments.map((assessment) => (
         <div key={assessment.reportId} className="space-y-2 rounded-lg bg-muted p-4">
           <Badge variant="secondary">{assessment.outcome.replaceAll("_", " ")}</Badge>

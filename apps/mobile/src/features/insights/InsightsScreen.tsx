@@ -1,4 +1,5 @@
 import { InsightImplementationBadge } from "./InsightImplementationBadge";
+import { InsightsChange } from "./InsightsChange";
 import { InsightsDashboard } from "./InsightsDashboard";
 import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinuteMs } from "../../lib/clock";
@@ -18,8 +19,12 @@ import {
   matchesInsightFilter,
   insightImplementationUrl,
   defaultInsightsSettings,
+  insightChange,
+  insightsApplyModelChoices,
   insightsLinkedEnvironments,
+  insightStartChange,
   linkedInsightsProjectIds,
+  setInsightsApplyModel,
   setLinkedInsightsProject,
   insightsModelChoices,
   INSIGHT_STATUS_LABELS,
@@ -470,6 +475,7 @@ function SettingsForm({
   const providers =
     useAtomValue(environmentPresentations.providersByEnvironmentAtom).get(environmentId) ?? [];
   const choices = insightsModelChoices(providers);
+  const applyChoices = insightsApplyModelChoices(providers);
   const defaults =
     initial ?? (projects[0] ? defaultInsightsSettings(projects[0].id, providers) : null);
   const [draft, setDraft] = useState(defaults);
@@ -495,8 +501,8 @@ function SettingsForm({
     <View className="gap-4 rounded-2xl border border-border-subtle p-4">
       <Text className="font-t3-semibold text-foreground">Daily workflow review</Text>
       <Text className="text-sm text-foreground-muted">
-        The selected provider analyzes excerpts from these projects. Recommendations are implemented
-        only when you start work on them.
+        The selected provider analyzes excerpts from these projects. A recommendation is applied
+        only when you ask for it, as a pull request.
       </Text>
       <Picker
         label="Analysis project"
@@ -511,6 +517,20 @@ function SettingsForm({
         onChange={(key) => {
           const choice = choices.find((c) => c.key === key);
           if (choice) update({ modelSelection: choice.selection });
+        }}
+      />
+      <Text className="text-sm text-foreground">Model for applying changes</Text>
+      <Picker
+        label="Model for applying changes"
+        value={
+          value.implementationModelSelection
+            ? `${value.implementationModelSelection.instanceId}/${value.implementationModelSelection.model}`
+            : "default"
+        }
+        choices={applyChoices.map((choice) => ({ value: choice.key, label: choice.label }))}
+        onChange={(key) => {
+          const choice = applyChoices.find((c) => c.key === key);
+          if (choice) setDraft(setInsightsApplyModel(value, choice.selection));
         }}
       />
       <Text className="text-sm text-foreground">Daily time · server local time</Text>
@@ -689,6 +709,17 @@ function DailyReview({
 
 const weekFromNow = () => new Date(Date.now() + 7 * 86400000).toISOString();
 
+function Passage({ title, text }: { title: string; text: string }) {
+  return (
+    <View className="gap-1">
+      <Text className="font-t3-semibold text-sm text-foreground">{title}</Text>
+      <Text selectable className="text-sm text-foreground-muted">
+        {text}
+      </Text>
+    </View>
+  );
+}
+
 function RecommendationDetail({
   environmentId,
   summary,
@@ -708,6 +739,9 @@ function RecommendationDetail({
   const implementationUrl = insightImplementationUrl(rec.implementationRef);
   const trial = insightTrial(rec);
   const closed = rec.status === "kept" || rec.status === "reverted";
+  const change = insightChange(summary, loaded);
+  const startChange = insightStartChange(change !== null);
+  const incidents = rec.incidents ?? [];
   const [busy, setBusy] = useState(false);
   const update = useAtomCommand(serverEnvironment.updateInsight);
   const implement = useAtomCommand(serverEnvironment.implementInsight);
@@ -741,6 +775,61 @@ function RecommendationDetail({
   };
   return (
     <View className="gap-4 border-t border-border-subtle p-4">
+      <Passage title="What happened" text={rec.observation} />
+      <Passage title="What changes" text={rec.recommendation} />
+      <View className="gap-3">
+        <Text className="font-t3-semibold text-sm text-foreground">Proposed change</Text>
+        <InsightsChange change={change} recommendation={rec} />
+        {rec.implementationThreadId ? (
+          <Button
+            label="Open the thread making this change"
+            tone="text"
+            onPress={() => {
+              if (rec.implementationThreadId)
+                selectDetail({
+                  name: "Thread",
+                  params: { environmentId, threadId: rec.implementationThreadId },
+                });
+            }}
+          />
+        ) : !trial && rec.status !== "kept" && change !== "loading" ? (
+          <>
+            <Button
+              label={startChange.label}
+              tone="primary"
+              disabled={disabled || busy}
+              onPress={() => {
+                void start();
+              }}
+            />
+            <Text className="text-xs text-foreground-muted">{startChange.hint}</Text>
+          </>
+        ) : null}
+      </View>
+      <Passage title="How we'll know it worked" text={rec.validation} />
+      {rec.expectedImpact ? <Passage title="Expected impact" text={rec.expectedImpact} /> : null}
+      <InsightsEvidence environmentId={environmentId} evidence={rec.evidence} />
+      {incidents.length > 0 ? (
+        <View className="gap-3">
+          <Text className="font-t3-semibold text-sm text-foreground">
+            Came back {incidents.length === 1 ? "once" : `${incidents.length} times`}
+          </Text>
+          {[...incidents].reverse().map((incident) => (
+            <View
+              key={incident.reportId}
+              className="gap-2 rounded-xl border border-border-subtle p-3"
+            >
+              <Text className="text-xs text-foreground-muted">
+                {new Date(incident.at).toLocaleDateString()}
+              </Text>
+              <Text selectable className="text-sm text-foreground">
+                {incident.text}
+              </Text>
+              <InsightsEvidence environmentId={environmentId} evidence={incident.evidence} />
+            </View>
+          ))}
+        </View>
+      ) : null}
       <View className="gap-3 rounded-xl border border-border-subtle bg-surface p-4">
         <Text className="font-t3-semibold text-sm text-foreground">
           {trial ? "Trial" : "Implementation"}
@@ -753,7 +842,7 @@ function RecommendationDetail({
               ? "Kept after its trial. Reviews no longer assess it."
               : rec.status === "reverted"
                 ? "Reverted after its trial. Reviews no longer assess it."
-                : "Completion has not been recorded. Confirm it after checking the change."}
+                : "Once the change is merged, mark it implemented. Later reviews then check whether it helped."}
         </Text>
         {trial ? (
           <View className="gap-1">
@@ -777,30 +866,6 @@ function RecommendationDetail({
             }}
           />
         )}
-        {rec.implementationThreadId ? (
-          <Button
-            label="Open implementation thread"
-            tone="text"
-            onPress={() => {
-              if (rec.implementationThreadId)
-                selectDetail({
-                  name: "Thread",
-                  params: { environmentId, threadId: rec.implementationThreadId },
-                });
-            }}
-          />
-        ) : (
-          !trial &&
-          rec.status !== "kept" && (
-            <Button
-              label="Start implementation"
-              disabled={disabled || busy}
-              onPress={() => {
-                void start();
-              }}
-            />
-          )
-        )}
         {(trial
           ? ([
               ["kept", "Keep"],
@@ -816,7 +881,7 @@ function RecommendationDetail({
           <Button
             key={status}
             label={label}
-            tone={status === "implemented" || status === "kept" ? "primary" : "secondary"}
+            tone={status === "kept" ? "primary" : "secondary"}
             disabled={disabled || busy}
             onPress={() => {
               void act(status);
@@ -824,26 +889,6 @@ function RecommendationDetail({
           />
         ))}
       </View>
-      {rec.targetFile && (
-        <Text selectable className="text-xs text-primary-text">
-          {rec.targetFile}
-        </Text>
-      )}
-      {[
-        { title: "Observation", text: rec.observation },
-        { title: "Recommendation", text: rec.recommendation },
-        { title: "Suggested change", text: rec.suggestedChange },
-        { title: "Expected impact", text: rec.expectedImpact },
-        { title: "How to validate", text: rec.validation },
-      ].map((section) => (
-        <View key={section.title} className="gap-1">
-          <Text className="font-t3-semibold text-sm text-foreground">{section.title}</Text>
-          <Text selectable className="text-sm text-foreground-muted">
-            {section.text}
-          </Text>
-        </View>
-      ))}
-      <InsightsEvidence environmentId={environmentId} evidence={rec.evidence} />
       {rec.assessments.map((assessment) => (
         <View key={assessment.reportId} className="gap-2">
           <Text className="font-t3-semibold text-sm text-foreground">
