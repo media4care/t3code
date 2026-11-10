@@ -6204,6 +6204,21 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           status: "skipped_up_to_date",
           branch: "feature/push",
         });
+
+        yield* git(cwd, ["commit", "--amend", "-m", "Add feature, reworded"]);
+        const rewritten = yield* git(cwd, ["rev-parse", "HEAD"]);
+        const rejected = yield* (yield* GitVcsDriver.GitVcsDriver)
+          .pushCurrentBranch(cwd, null)
+          .pipe(Effect.flip);
+        assert.equal(rejected._tag, "GitCommandError");
+        assert.deepInclude(
+          yield* (yield* GitVcsDriver.GitVcsDriver).pushCurrentBranch(cwd, null, { force: true }),
+          { status: "pushed", branch: "feature/push" },
+        );
+        assert.equal(
+          yield* git(cwd, ["ls-remote", "origin", "refs/heads/feature/push"]),
+          `${rewritten}\trefs/heads/feature/push`,
+        );
       }),
     );
 

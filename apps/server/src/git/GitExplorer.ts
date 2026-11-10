@@ -1592,9 +1592,14 @@ const make = Effect.gen(function* () {
           return { message: `Renamed ${shortName} to ${input.newName}.` };
         }
         if (input.action === "push") {
-          const result = yield* git.pushCurrentBranch(cwd, null);
+          const result = yield* git.pushCurrentBranch(cwd, null, { force: input.force === true });
           return {
-            message: result.status === "pushed" ? "Pushed successfully." : "Already up to date.",
+            message:
+              result.status !== "pushed"
+                ? "Already up to date."
+                : input.force
+                  ? "Force pushed successfully."
+                  : "Pushed successfully.",
           };
         }
         if (input.action === "pull") {
