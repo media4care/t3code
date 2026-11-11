@@ -1,4 +1,8 @@
-import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
+import {
+  enabledNavigationTabs,
+  selectedNavigationTab,
+  visibleNavigationTabs,
+} from "./navigation-tab-order";
 import { requireNativeView } from "expo";
 import { CommonActions, useNavigation } from "@react-navigation/native";
 import {
@@ -27,6 +31,11 @@ import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { FLOATING_TABS, floatingTabsMetrics } from "./floating-workspace-tabs";
+import {
+  badgedTabs,
+  releasesBadgeTab,
+  useReleasesRejected,
+} from "../../releases/releaseRejections";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -35,6 +44,8 @@ interface NativeNavigationProps extends ViewProps {
   readonly rail: boolean;
   readonly floating: boolean;
   readonly tabs: readonly string[];
+  /** Tabs drawn with a review-rejected badge. */
+  readonly badgedTabs: readonly string[];
   readonly selectedTab: AndroidWorkspaceNavigationTab;
   readonly dark: boolean;
   readonly textScale: number;
@@ -88,6 +99,10 @@ export function AndroidWorkspaceNavigation(props: {
   const rail = Boolean(props.rail);
   const floating = !rail && Boolean(props.floating);
   const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings"];
+  // Settings lists the overflow tabs except beside a split view.
+  const badgedTab = useReleasesRejected()
+    ? releasesBadgeTab(tabs, layout.usesSplitView ? tabs : enabledNavigationTabs(order, hidden))
+    : null;
   const { containerColor, indicatorColor, selectedColor, unselectedColor } =
     androidWorkspaceNavigationColors(colors, rail, floating);
   const selectedTab = selectedNavigationTab(
@@ -121,6 +136,7 @@ export function AndroidWorkspaceNavigation(props: {
         rail={rail}
         floating={floating}
         tabs={tabs}
+        badgedTabs={badgedTabs(badgedTab)}
         selectedTab={selectedTab}
         dark={themeAppearance === "dark"}
         textScale={scale}

@@ -28,6 +28,12 @@ import { useDeviceType } from "../../../native/native-layout-metrics";
 import { WorkspaceSidebarTabs } from "./WorkspaceSidebarTabs";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
 import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
+import {
+  RELEASES_REJECTED_BADGE,
+  rejectedTabLabel,
+  releasesBadgeTab,
+  useReleasesRejected,
+} from "../../releases/releaseRejections";
 
 const PULL_REQUEST_ICON = require("../../../../assets/icons/pull-request.png");
 
@@ -80,6 +86,7 @@ export function WorkspaceNativeTabs(props: {
   const order = useEnabledNavigationTabs();
   const primaryTabs = order.slice(0, 4);
   const overflow = order[4];
+  const badgedTab = useReleasesRejected() ? releasesBadgeTab(primaryTabs, order) : null;
   const selectTab = useSelectWorkspaceTab();
   const [provenance, setProvenance] = useState(0);
   const systemTabBar = useSystemWorkspaceTabBar();
@@ -127,13 +134,16 @@ export function WorkspaceNativeTabs(props: {
           const settings = slot === "settings";
           const tab = settings ? (overflow ?? selectedTab) : primaryTabs[index];
           if (!tab) return null;
+          const label = settings ? "Settings" : WORKSPACE_TAB_LABELS[tab];
+          const badged = badgedTab === (settings ? "settings" : tab);
           return (
             <Tabs.Screen
               // Stable slot controllers keep UIKit's stacks attached when a section moves into Settings.
               key={slot}
               screenKey={slot}
               title=""
-              tabBarItemAccessibilityLabel={settings ? "Settings" : WORKSPACE_TAB_LABELS[tab]}
+              tabBarItemAccessibilityLabel={badged ? rejectedTabLabel(label) : label}
+              badgeValue={badged ? RELEASES_REJECTED_BADGE : undefined}
               ios={{
                 icon: settings
                   ? { type: "sfSymbol", name: "gearshape" }

@@ -38,6 +38,7 @@ type NativeStackHeaderAxisBehavior = Extract<
   NativeStackHeaderItem,
   { type: "button" }
 >["axisBehavior"];
+type NativeStackHeaderBadge = Extract<NativeStackHeaderItem, { type: "button" }>["badge"];
 type NativeStackHeaderVisibilityPriority = Extract<
   NativeStackHeaderItem,
   { type: "button" }
@@ -159,6 +160,7 @@ function convertToolbarChild(
           ? child.props.accessibilityLabel
           : undefined,
       axisBehavior: child.props.axisBehavior as NativeStackHeaderAxisBehavior,
+      badge: child.props.badge as NativeStackHeaderBadge,
       disabled: Boolean(child.props.disabled),
       icon: iconFromProp(child.props.icon),
       onPress: register(child.props.onPress),
@@ -290,6 +292,8 @@ function NativeHeaderToolbarRoot(props: {
 function NativeHeaderToolbarButton(_props: {
   readonly accessibilityLabel?: string;
   readonly axisBehavior?: NativeStackHeaderAxisBehavior;
+  /** Drawn from iOS 26. */
+  readonly badge?: NativeStackHeaderBadge;
   readonly disabled?: boolean;
   readonly icon?: string | Extract<NativeStackHeaderIcon, { type: "image" }>;
   readonly label?: string;

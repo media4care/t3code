@@ -12,6 +12,7 @@ import { currentWorkspaceSelections } from "../layout/workspace/workspace-select
 import { rememberedSettingsPage } from "../layout/workspace/workspace-tab-navigation";
 import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { useReleasesRejected } from "../releases/releaseRejections";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { useAuth, useUser } from "@clerk/expo";
@@ -289,10 +290,12 @@ function useOverflowRows(): SettingsListRow[] {
   const tabs =
     Platform.OS === "android" && layout.usesSplitView ? [] : overflowNavigationTabs(order, hidden);
   const selectTab = useSelectWorkspaceTab();
+  const releasesRejected = useReleasesRejected();
   return tabs.map((tab) => ({
     id: tab,
     icon: NAVIGATION_TAB_ICONS[tab],
     label: WORKSPACE_TAB_LABELS[tab],
+    value: tab === "releases" && releasesRejected ? "Review rejected" : undefined,
     onPress: () => selectTab(tab),
   }));
 }

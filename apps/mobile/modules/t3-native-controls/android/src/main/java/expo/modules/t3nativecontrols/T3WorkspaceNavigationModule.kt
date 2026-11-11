@@ -21,6 +21,8 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,6 +71,9 @@ class T3WorkspaceNavigationModule : Module() {
     Name("T3WorkspaceNavigation")
     View(T3WorkspaceNavigationView::class) {
       Prop("tabs") { view: T3WorkspaceNavigationView, value: List<String> -> view.tabs = value }
+      Prop("badgedTabs") { view: T3WorkspaceNavigationView, value: List<String> ->
+        view.badgedTabs = value
+      }
       Prop("selectedTab") { view: T3WorkspaceNavigationView, value: String ->
         view.selectedTab = value
       }
@@ -127,6 +132,7 @@ class T3WorkspaceNavigationView(
   private val onNewThread by EventDispatcher()
   private val onOverlayChange by EventDispatcher()
   var tabs by mutableStateOf(listOf("threads", "pullRequests", "gitExplorer", "insights", "usage", "qa", "releases", "settings"))
+  var badgedTabs by mutableStateOf(listOf<String>())
   var selectedTab by mutableStateOf("threads")
   var rail by mutableStateOf(false)
   var floating by mutableStateOf(false)
@@ -189,8 +195,14 @@ class T3WorkspaceNavigationView(
                   NavigationBarItem(
                     selected = selectedTab == tab,
                     onClick = { onTabSelected(mapOf("tab" to tab)) },
-                    icon = { Icon(tabIconPainter(tab), contentDescription = null) },
+                    icon = { badged(tab) { Icon(tabIconPainter(tab), contentDescription = null) } },
                     label = { Text(tabTitle(tab), fontSize = (12 * textScale).sp) },
+                    // The label names the other items.
+                    modifier = if (tab in badgedTabs) {
+                      Modifier.semantics { contentDescription = tabDescription(tab) }
+                    } else {
+                      Modifier
+                    },
                     colors = NavigationBarItemDefaults.colors(
                       selectedIconColor = Color(selectedColor),
                       selectedTextColor = Color(selectedColor),
@@ -234,17 +246,19 @@ class T3WorkspaceNavigationView(
                 role = Role.Tab,
                 onClick = { onTabSelected(mapOf("tab" to tab)) },
               )
-              .semantics { contentDescription = expandedTabTitle(tab) }
+              .semantics { contentDescription = tabDescription(tab) }
               .padding(4.dp)
               .background(if (selected) Color(indicatorColor) else Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
           ) {
-            Icon(
-              tabIconPainter(tab),
-              contentDescription = null,
-              modifier = Modifier.size((24 * textScale).dp),
-              tint = tint,
-            )
+            badged(tab) {
+              Icon(
+                tabIconPainter(tab),
+                contentDescription = null,
+                modifier = Modifier.size((24 * textScale).dp),
+                tint = tint,
+              )
+            }
           }
         }
       }
@@ -392,13 +406,13 @@ class T3WorkspaceNavigationView(
         .clip(CircleShape)
         .background(if (selected) Color(indicatorColor) else Color.Transparent)
         .selectable(selected = selected, role = Role.Tab, onClick = onClick)
-        .semantics { contentDescription = title },
+        .semantics { contentDescription = tabDescription(tab) },
     ) {
       Row(
         Modifier.fillMaxHeight().padding(start = (ITEM_HEIGHT - ICON_SIZE) / 2).clipToBounds(),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(tabIconPainter(tab), contentDescription = null, tint = tint)
+        badged(tab) { Icon(tabIconPainter(tab), contentDescription = null, tint = tint) }
         Text(
           title,
           Modifier.padding(start = 12.dp).alpha(labelAlpha(fraction)).clearAndSetSemantics {},
@@ -425,6 +439,14 @@ class T3WorkspaceNavigationView(
 
   private fun expandedTabTitle(tab: String) =
     if (tab == "pullRequests") "Pull Requests" else tabTitle(tab)
+
+  private fun tabDescription(tab: String) =
+    if (tab in badgedTabs) "${expandedTabTitle(tab)}, review rejected" else expandedTabTitle(tab)
+
+  @Composable
+  private fun badged(tab: String, icon: @Composable () -> Unit) {
+    BadgedBox(badge = { if (tab in badgedTabs) Badge() }) { icon() }
+  }
 
   @Composable
   private fun tabIconPainter(tab: String) = painterResource(

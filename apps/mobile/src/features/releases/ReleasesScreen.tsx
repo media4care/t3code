@@ -7,6 +7,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ReleaseBinary,
+  ReleaseReview,
   ReleaseStatusDocument,
   ReleaseStore,
 } from "@t3tools/contracts";
@@ -21,6 +22,7 @@ import {
   releasePresence,
   releasePresenceLabel,
   RELEASE_REACH,
+  RELEASE_REVIEW,
   RELEASES_CONFIGURATION_EXAMPLE,
   releaseProjectChoices,
   releaseProjectStatesAtom,
@@ -52,6 +54,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { rejectedReleaseProjectsAtom } from "./releaseRejections";
 
 // An open screen asks this often; the server skips the command until the document is stale.
 const STALE_CHECK_MS = 60_000;
@@ -72,6 +75,7 @@ const TONE_TEXT: Record<ReleaseTone, string> = {
 export function ReleasesScreen() {
   const choices = releaseProjectChoices(useProjects(), useAtomValue(projectStatesAtom));
   const projects = choices.projects;
+  const rejections = useAtomValue(rejectedReleaseProjectsAtom);
   const { environments } = useEnvironments();
   const [selection, setSelection] = useState<string | null>(null);
   const projectKey = (project: (typeof projects)[number]) =>
@@ -87,7 +91,13 @@ export function ReleasesScreen() {
   const projectItems = projects.map((item) => ({
     id: projectKey(item),
     title: item.title,
-    subtitle: environments.find((e) => e.environmentId === item.environmentId)?.label,
+    subtitle: projectSubtitle(
+      environments.find((e) => e.environmentId === item.environmentId)?.label,
+      rejections.some(
+        (rejection) =>
+          rejection.environmentId === item.environmentId && rejection.projectId === item.id,
+      ),
+    ),
     selected: projectKey(item) === (project ? projectKey(project) : null),
     onPress: () => setSelection(projectKey(item)),
   }));
@@ -268,6 +278,11 @@ function ProjectReleases(props: {
   );
 }
 
+function projectSubtitle(environmentLabel: string | undefined, rejected: boolean) {
+  if (!rejected) return environmentLabel;
+  return environmentLabel ? `${environmentLabel} · Review rejected` : "Review rejected";
+}
+
 function open(url: string | undefined) {
   if (url) void Linking.openURL(url);
 }
@@ -312,7 +327,7 @@ function StoreIcon(props: { binary: ReleaseBinary | undefined }) {
   return <StoreGlyph size={14} color={store.color ?? muted} strokeWidth={2} />;
 }
 
-function binaryDetail(binary: ReleaseBinary, now: number) {
+function binaryDetail(binary: ReleaseBinary) {
   const rollout = binary.rollout;
   const percent =
     binary.audience !== "public"
@@ -322,8 +337,12 @@ function binaryDetail(binary: ReleaseBinary, now: number) {
         : rollout.state === "active"
           ? `staged ${rollout.percent}%`
           : `${rollout.state} ${rollout.percent}%`;
-  const age = releaseAge(binary.updatedAt, now);
-  return [binary.label, percent, age].filter(Boolean).join(" · ");
+  return [binary.label, percent].filter(Boolean).join(" · ");
+}
+
+function ReviewLabel(props: { review: ReleaseReview }) {
+  const status = RELEASE_REVIEW[props.review.state];
+  return <Text className={`text-xs ${TONE_TEXT[status.tone]}`}>{status.label}</Text>;
 }
 
 function versionClass(version: string, selected: string) {
@@ -339,6 +358,7 @@ function BinaryLine(props: {
   now: number;
 }) {
   const binary = props.binary;
+  const age = releaseAge(binary?.updatedAt, props.now);
   return (
     <Pressable
       disabled={!binary?.url}
@@ -351,12 +371,51 @@ function BinaryLine(props: {
           <StoreIcon binary={binary} />
           <Text className={versionClass(binary.version, props.version)}>{binary.version}</Text>
           <Text numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
-            {binaryDetail(binary, props.now)}
+            {binaryDetail(binary)}
+            {binary.review ? (
+              <>
+                {" · "}
+                <ReviewLabel review={binary.review} />
+              </>
+            ) : null}
+            {age ? ` · ${age}` : ""}
           </Text>
         </>
       ) : (
         <Text className="text-xs text-foreground-muted">–</Text>
       )}
+    </Pressable>
+  );
+}
+
+/** A store submission under review, which the live store build doesn't show yet. */
+function ReviewLine(props: {
+  title: string;
+  binary: ReleaseBinary;
+  review: ReleaseReview;
+  version: string;
+  now: number;
+}) {
+  const { binary, review } = props;
+  const url = review.url ?? binary.url;
+  const age = releaseAge(review.since ?? binary.updatedAt, props.now);
+  return (
+    <Pressable disabled={!url} onPress={() => open(url)} className="gap-0.5">
+      <View className="flex-row items-center gap-2">
+        <Text className="w-16 text-xs text-foreground-muted">{props.title}</Text>
+        <StoreIcon binary={binary} />
+        <Text className={versionClass(binary.version, props.version)}>{binary.version}</Text>
+        <Text numberOfLines={1} className="flex-1 text-xs text-foreground-muted">
+          {binary.build && binary.build !== binary.version ? `(${binary.build}) ` : ""}
+          <ReviewLabel review={review} />
+          {age ? ` · ${age}` : ""}
+        </Text>
+      </View>
+      {review.state === "rejected" && review.message ? (
+        <Text selectable className="pl-[72px] text-xs text-foreground-muted">
+          {review.message}
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -425,7 +484,18 @@ function AppRowCard(props: { row: ReleaseAppRow; version: string; now: number })
           ) : null}
         </Text>
       </View>
-      <BinaryLine title="Store" binary={row.store} version={version} now={now} />
+      {row.store || !row.review?.review ? (
+        <BinaryLine title="Store" binary={row.store} version={version} now={now} />
+      ) : null}
+      {row.review?.review ? (
+        <ReviewLine
+          title={row.store ? "" : "Store"}
+          binary={row.review}
+          review={row.review.review}
+          version={version}
+          now={now}
+        />
+      ) : null}
       <OtaLines row={row} version={version} />
       <BinaryLine title="Testers" binary={row.testers} version={version} now={now} />
     </View>
