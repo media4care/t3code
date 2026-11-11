@@ -25,12 +25,15 @@ import { QaRunBadge } from "./QaDashboard";
 export function QaAutomation({
   environmentId,
   projectId,
+  gitRef,
   snapshot,
   connected,
   onView,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  /** The ref QA tests in its own checkout; each ref has its own schedule. */
+  gitRef: string | null;
   snapshot: QaSnapshot;
   connected: boolean;
   onView: (id: string) => void;
@@ -47,9 +50,10 @@ export function QaAutomation({
   const scheduleTarget = schedule?.configuration.target;
   const configure = async (configuration: QaScheduleConfiguration | null) => {
     setBusy(true);
-    const result = await save({ environmentId, input: { projectId, configuration } }).finally(() =>
-      setBusy(false),
-    );
+    const result = await save({
+      environmentId,
+      input: { projectId, ...(gitRef ? { ref: gitRef } : {}), configuration },
+    }).finally(() => setBusy(false));
     if (result._tag === "Success") setEditing(false);
   };
   const submitReport = async () => {
@@ -85,8 +89,9 @@ export function QaAutomation({
           <h3 className="font-semibold">Recurring runs</h3>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Runs on this environment while its server is online. Uses the selected branch and current
-          working files.
+          {gitRef
+            ? `Runs on this environment while its server is online. Fetches ${gitRef} first and tests it in QA's own checkout.`
+            : "Runs on this environment while its server is online. Uses the selected branch and current working files."}
         </p>
         {schedule ? (
           <div className="mt-3 space-y-2 text-sm">
@@ -122,6 +127,7 @@ export function QaAutomation({
             key={schedule?.revision ?? "new"}
             initial={schedule?.configuration ?? qaDefaultSchedule(snapshot.branch ?? "")}
             suites={snapshot.suites}
+            fixedBranch={gitRef !== null}
             disabled={busy || !connected || !canSchedule}
             onSave={configure}
             onCancel={() => setEditing(false)}
@@ -194,7 +200,7 @@ export function QaAutomation({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{run.suite.name}</p>
                   <p className="break-words text-xs text-muted-foreground">
-                    {qaRunSource(run)} · {run.branch} · {run.commit?.slice(0, 8)}
+                    {qaRunSource(run)} · {run.ref ?? run.branch} · {run.commit?.slice(0, 8)}
                     <br />
                     {new Date(run.finishedAt ?? run.startedAt).toLocaleString()}
                   </p>
@@ -279,12 +285,15 @@ export function QaAutomation({
 function ScheduleEditor({
   initial,
   suites,
+  fixedBranch,
   disabled,
   onSave,
   onCancel,
 }: {
   initial: QaScheduleConfiguration;
   suites: QaSnapshot["suites"];
+  /** The schedule belongs to the shown ref, so its branch cannot change. */
+  fixedBranch: boolean;
   disabled: boolean;
   onSave: (value: QaScheduleConfiguration) => Promise<void>;
   onCancel: () => void;
@@ -426,19 +435,21 @@ function ScheduleEditor({
             onChange={(event) => setValue({ ...value, timeZone: event.target.value })}
           />
         </label>
-        <label className="space-y-1 text-xs">
-          Branch
-          <Input
-            required
-            value={value.branch}
-            placeholder="main"
-            onChange={(event) => setValue({ ...value, branch: event.target.value })}
-          />
-        </label>
+        {fixedBranch ? null : (
+          <label className="space-y-1 text-xs">
+            Branch
+            <Input
+              required
+              value={value.branch}
+              placeholder="main"
+              onChange={(event) => setValue({ ...value, branch: event.target.value })}
+            />
+          </label>
+        )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Other branches are skipped. Missed fixed times are skipped after 10 minutes; interval runs
-        resume once. Pausing stops future runs.
+        {fixedBranch ? "" : "Other branches are skipped. "}Missed fixed times are skipped after 10
+        minutes; interval runs resume once. Pausing stops future runs.
       </p>
       <div className="flex gap-2">
         <Button size="sm" type="submit" disabled={disabled}>

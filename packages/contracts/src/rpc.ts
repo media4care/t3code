@@ -618,6 +618,7 @@ export const WS_METHODS = {
   qaTests: "qa.tests",
   qaSetSchedule: "qa.setSchedule",
   qaSetDevice: "qa.setDevice",
+  qaDeleteCheckout: "qa.deleteCheckout",
   qaImport: "qa.import",
   releasesSubscribe: "releases.subscribe",
   releasesRefresh: "releases.refresh",
@@ -2157,6 +2158,11 @@ const WsQaSetDeviceRpc = Rpc.make(WS_METHODS.qaSetDevice, {
   success: Schema.Void,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
+const WsQaDeleteCheckoutRpc = Rpc.make(WS_METHODS.qaDeleteCheckout, {
+  payload: QaProjectInput,
+  success: Schema.Void,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+});
 const WsQaImportRpc = Rpc.make(WS_METHODS.qaImport, {
   payload: QaImportInput,
   success: QaRun,
@@ -2406,6 +2412,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReleasesRejectionsRpc,
   WsQaSetScheduleRpc,
   WsQaSetDeviceRpc,
+  WsQaDeleteCheckoutRpc,
   WsQaImportRpc,
   WsInsightsSubscribeRpc,
   WsInsightsConfigureRpc,

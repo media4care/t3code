@@ -15,6 +15,7 @@ import {
   type QaStartInput,
   type QaRunInput,
   type QaRunDetails,
+  type QaRefSummary,
   type QaSnapshot,
   type QaTestsInput,
   type QaTestResults,
@@ -51,6 +52,7 @@ import * as NodeUtil from "node:util";
 
 import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { parseJunitReport } from "./junit.ts";
@@ -61,6 +63,7 @@ import {
   changedInputs,
   SHARED_RESULTS_DIRECTORY,
 } from "./inputs.ts";
+import { makeQaCheckouts, type QaCheckoutTarget } from "./checkouts.ts";
 import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import { leaseFromSimlock } from "./simlockLease.ts";
@@ -77,6 +80,21 @@ const MAX_REPORT = 2 * 1024 * 1024;
 const DEVICE_WAIT = Duration.minutes(30);
 // A run that ends wakes the waiting ones; this also notices a device that came back on its own.
 const DEVICE_RECHECK = Duration.seconds(30);
+// Opening QA fetches the shown ref at most this often.
+const BACKGROUND_SYNC_INTERVAL_MS = 60_000;
+
+/**
+ * What QA history belongs to: a repository with a remote, tested at `ref` in QA's own checkout,
+ * or a project without one, tested in its own checkout (`ref` null).
+ */
+interface QaScope {
+  readonly key: string;
+  readonly projectId: ProjectId;
+  readonly projectRoot: string;
+  readonly ref: string | null;
+  readonly defaultRef: string | null;
+  readonly remoteUrl: string | null;
+}
 const decodeConfig = Schema.decodeEffect(
   fromLenientJson(Schema.Struct({ qa: Schema.optionalKey(QaConfiguration) })),
 );
@@ -134,6 +152,7 @@ export class QaService extends Context.Service<
     readonly tests: (input: QaTestsInput) => Effect.Effect<QaTestResults, QaError>;
     readonly setSchedule: (input: QaSetScheduleInput) => Effect.Effect<void, QaError>;
     readonly setDevice: (input: QaSetDeviceInput) => Effect.Effect<void, QaError>;
+    readonly deleteCheckout: (input: QaProjectInput) => Effect.Effect<void, QaError>;
     readonly importReport: (input: QaImportInput) => Effect.Effect<QaRun, QaError>;
   }
 >()("t3/qa/QaService") {}
@@ -144,18 +163,22 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const projects = yield* ProjectStore.ProjectStoreV2;
+  const identities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const processes = yield* ProcessRunner.ProcessRunner;
   const digest = yield* Digest.Digest;
   const random = yield* SecureRandom.SecureRandom;
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
-  const scope = yield* Effect.scope;
+  const serviceScope = yield* Effect.scope;
   const updates = yield* PubSub.sliding<string>(128);
   const lock = yield* Semaphore.make(1);
   const captureInputs = yield* makeInputCapture;
   const sharedResults = yield* makeSharedResults;
   const deviceSelections = yield* makeDeviceSelections;
+  const checkouts = yield* makeQaCheckouts((key) =>
+    PubSub.publish(updates, key).pipe(Effect.asVoid),
+  );
   const devicePool = yield* DevicePool.DevicePool;
   const settings = yield* ServerSettings.ServerSettingsService;
   const qaSettings = settings.getSettings.pipe(
@@ -167,9 +190,11 @@ const make = Effect.gen(function* () {
       qaEnabled ? Effect.void : Effect.fail(new QaError({ reason: "disabled" })),
     ),
   );
+  // Batches and runs are keyed by scope key: one suite runs at a time per repository.
   const batches = new Map<
     string,
     {
+      ref: string | null;
       pending: string[];
       runIds: string[];
       error?: string;
@@ -182,6 +207,9 @@ const make = Effect.gen(function* () {
   interface ActiveRun {
     details: QaRunDetails;
     cancelled: boolean;
+    scope: QaScope;
+    /** False until a run in QA's checkout has synced it to the remote ref. */
+    synced: boolean;
     root: string;
     evidence: InputEvidence;
     shareResult: boolean;
@@ -199,21 +227,107 @@ const make = Effect.gen(function* () {
     Effect.mapError(storageError),
   );
 
-  const readSchedule = Effect.fn("QaService.readSchedule")(function* (input: QaProjectInput) {
+  const readSchedule = Effect.fn("QaService.readSchedule")(function* (scope: QaScope) {
     const rows = yield* sql<{
       schedule_json: string;
-    }>`SELECT schedule_json FROM qa_schedules WHERE project_id = ${input.projectId}`;
+    }>`SELECT schedule_json FROM qa_ref_schedules WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""}`;
     return rows[0] ? yield* decodeSchedule(rows[0].schedule_json) : null;
   }, Effect.mapError(storageError));
 
-  const workspace = Effect.fn("QaService.workspace")(function* (input: QaProjectInput) {
-    const project = yield* projects.get(input.projectId);
+  /** The project's repository: clones and worktrees of one remote share their QA. */
+  const repositoryOf = Effect.fn("QaService.repository")(function* (projectId: ProjectId) {
+    const project = yield* projects.get(projectId);
     if (Option.isNone(project) || project.value.deletedAt !== null)
       return yield* new QaError({ reason: "project-not-found" });
-    return yield* fs
+    const projectRoot = yield* fs
       .realPath(project.value.workspaceRoot)
       .pipe(Effect.mapError((cause) => new QaError({ reason: "workspace", cause })));
+    const identity = yield* identities.resolve(projectRoot);
+    return { projectRoot, identity, key: identity?.canonicalKey ?? `project:${projectId}` };
   }, Effect.mapError(storageError));
+
+  const scopeOf = Effect.fn("QaService.scope")(function* (input: {
+    readonly projectId: ProjectId;
+    readonly ref?: string | undefined;
+  }) {
+    const { projectRoot, identity, key } = yield* repositoryOf(input.projectId);
+    if (!identity)
+      return {
+        key,
+        projectId: input.projectId,
+        projectRoot,
+        ref: null,
+        defaultRef: null,
+        remoteUrl: null,
+      } satisfies QaScope;
+    const defaultRef = yield* checkouts
+      .defaultBranch(key, projectRoot, identity.locator.remoteName)
+      .pipe(Effect.mapError(storageError));
+    return {
+      key,
+      projectId: input.projectId,
+      projectRoot,
+      ref: input.ref ?? defaultRef,
+      defaultRef,
+      remoteUrl: identity.locator.remoteUrl,
+    } satisfies QaScope;
+  });
+
+  const rootOf = (scope: QaScope) =>
+    scope.ref === null
+      ? Effect.succeed(scope.projectRoot)
+      : checkouts.checkoutPath(scope.key, scope.ref).pipe(Effect.mapError(storageError));
+  const targetOf = (scope: QaScope & { ref: string }): QaCheckoutTarget => ({
+    key: scope.key,
+    remoteUrl: scope.remoteUrl!,
+    ref: scope.ref,
+    projectRoot: scope.projectRoot,
+  });
+  const runningIn = (key: string, ref?: string | null) =>
+    [...active.values()].some(
+      (entry) => entry.scope.key === key && (ref === undefined || entry.scope.ref === ref),
+    );
+  const batchIn = (key: string, ref?: string | null) => {
+    const batch = batches.get(key);
+    return !!batch && (ref === undefined || batch.ref === ref);
+  };
+
+  // History from before QA belonged to repositories: a project's runs and schedule move to its
+  // repository, under the branch they ran on. Projects that no longer resolve keep theirs hidden.
+  yield* Effect.gen(function* () {
+    const legacy = yield* sql<{ project_id: string }>`SELECT DISTINCT project_id FROM qa_runs
+      WHERE qa_key IS NULL UNION SELECT project_id FROM qa_schedules`;
+    for (const { project_id } of legacy) {
+      const projectId = ProjectId.make(project_id);
+      const repository = yield* repositoryOf(projectId).pipe(Effect.option);
+      if (Option.isNone(repository)) continue;
+      const { key, identity } = repository.value;
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          if (identity)
+            yield* sql`UPDATE qa_runs SET qa_key = ${key},
+              ref = COALESCE(json_extract(run_json, '$.branch'), '')
+              WHERE project_id = ${projectId} AND qa_key IS NULL`;
+          else
+            yield* sql`UPDATE qa_runs SET qa_key = ${key}
+              WHERE project_id = ${projectId} AND qa_key IS NULL`;
+          const schedules = yield* sql<{ schedule_json: string }>`SELECT schedule_json
+            FROM qa_schedules WHERE project_id = ${projectId}`;
+          for (const row of schedules) {
+            const schedule = yield* decodeSchedule(row.schedule_json);
+            const ref = identity ? schedule.configuration.branch : "";
+            yield* sql`INSERT OR IGNORE INTO qa_ref_schedules
+              VALUES (${key}, ${ref}, ${projectId}, ${row.schedule_json})`;
+          }
+          yield* sql`DELETE FROM qa_schedules WHERE project_id = ${projectId}`;
+        }),
+      );
+    }
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("QA could not move older history to repositories", { cause }),
+    ),
+  );
 
   const catalog = Effect.fn("QaService.catalog")(
     function* (root: string) {
@@ -228,8 +342,87 @@ const make = Effect.gen(function* () {
     Effect.mapError((cause) => new QaError({ reason: "configuration", cause })),
   );
 
-  const snapshot = Effect.fn("QaService.snapshot")(function* (input: QaProjectInput) {
-    const root = yield* workspace(input);
+  /** The latest result of each suite on each ref QA knows for the repository. */
+  const refSummaries = Effect.fn("QaService.refSummaries")(function* (
+    scope: QaScope & { ref: string },
+  ) {
+    const rows = yield* sql<{
+      ref: string;
+      suite_id: string;
+      suite_name: string;
+      id: string;
+      status: QaRun["status"];
+      commit_sha: string | null;
+      started_at: string;
+    }>`SELECT ref, suite_id, json_extract(run_json, '$.suite.name') AS suite_name, id, status,
+        json_extract(run_json, '$.commit') AS commit_sha, json_extract(run_json, '$.startedAt') AS started_at FROM (
+      SELECT ref, suite_id, id, status, run_json,
+        ROW_NUMBER() OVER (PARTITION BY ref, suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
+      FROM qa_runs WHERE qa_key = ${scope.key} AND ref <> ''
+        AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
+    ) WHERE ordinal = 1 ORDER BY started_at DESC LIMIT 1000`;
+    const scheduled = new Set(
+      (yield* sql<{
+        ref: string;
+      }>`SELECT ref FROM qa_ref_schedules WHERE qa_key = ${scope.key}`).map((row) => row.ref),
+    );
+    const checkedOut = new Set(yield* checkouts.refs(scope.key));
+    const defaultRef = scope.defaultRef;
+    const refs = [
+      ...new Set([
+        ...(defaultRef ? [defaultRef] : []),
+        scope.ref,
+        ...rows.map((row) => row.ref),
+        ...scheduled,
+        ...checkedOut,
+      ]),
+    ].slice(0, 20);
+    return refs.map((ref): QaRefSummary => ({
+      ref,
+      isDefault: ref === defaultRef,
+      scheduled: scheduled.has(ref),
+      checkout: checkedOut.has(ref),
+      results: rows
+        .filter((row) => row.ref === ref)
+        .map((row) => ({
+          suiteId: row.suite_id,
+          suiteName: row.suite_name,
+          runId: row.id,
+          status: row.status,
+          commit: row.commit_sha,
+          startedAt: row.started_at,
+        })),
+    }));
+  }, Effect.mapError(storageError));
+
+  const snapshot = (input: QaProjectInput) => scopeOf(input).pipe(Effect.flatMap(snapshotOf));
+
+  const snapshotOf = Effect.fn("QaService.snapshot")(function* (scope: QaScope) {
+    const root = yield* rootOf(scope);
+    const checkout = scope.ref === null ? null : yield* checkouts.status(scope.key, scope.ref);
+    const refs = scope.ref === null ? [] : yield* refSummaries({ ...scope, ref: scope.ref });
+    const schedule = yield* readSchedule(scope);
+    if (checkout?.commit === null)
+      return {
+        workspaceRoot: root,
+        configurationError: null,
+        suites: [],
+        latestRuns: [],
+        recentRuns: [],
+        freshness: [],
+        checkedAt: yield* now,
+        queuedSuiteIds: [],
+        batchError: null,
+        batchRunning: false,
+        schedule,
+        latestCiRuns: [],
+        branch: scope.ref,
+        testResultsAvailable: true,
+        deviceSelections: deviceSelections.forScope(scope.key),
+        ref: scope.ref,
+        checkout,
+        refs,
+      } satisfies QaSnapshot;
     const config = yield* catalog(root).pipe(Effect.result);
     const latest = yield* sql<{
       run_json: string;
@@ -237,26 +430,26 @@ const make = Effect.gen(function* () {
       evidence_json: string | null;
     }>`SELECT latest.run_json, CASE WHEN saved.status IN ('failed', 'incomplete') THEN substr(saved.output, ${-QA_OUTPUT_TAIL_LIMIT}) ELSE '' END AS output_tail, evidence_json FROM (
       SELECT id, run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
-      FROM qa_runs WHERE project_id = ${input.projectId} AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
+      FROM qa_runs WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
     ) latest LEFT JOIN qa_run_inputs ON run_id = latest.id
     JOIN qa_runs saved ON saved.id = latest.id
     WHERE ordinal = 1 ORDER BY json_extract(latest.run_json, '$.startedAt') DESC LIMIT 200`;
     const recent = yield* sql<{ run_json: string; output_tail: string }>`SELECT run_json,
       CASE WHEN status IN ('failed', 'incomplete') THEN substr(output, ${-QA_OUTPUT_TAIL_LIMIT}) ELSE '' END AS output_tail FROM qa_runs
-      WHERE project_id = ${input.projectId} ORDER BY started_at DESC, rowid DESC LIMIT 50`;
+      WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} ORDER BY started_at DESC, rowid DESC LIMIT 50`;
     const passed = yield* sql<{ suite_id: string; finished_at: string }>`SELECT suite_id,
       MAX(json_extract(run_json, '$.finishedAt')) AS finished_at FROM qa_runs
-      WHERE project_id = ${input.projectId} AND status = 'passed'
+      WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND status = 'passed'
         AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci' GROUP BY suite_id`;
     const ci = yield* sql<{ run_json: string }>`SELECT run_json FROM (
       SELECT run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
-      FROM qa_runs WHERE project_id = ${input.projectId} AND json_extract(run_json, '$.source.type') = 'ci'
+      FROM qa_runs WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND json_extract(run_json, '$.source.type') = 'ci'
     ) WHERE ordinal = 1 LIMIT 100`;
     const lastPassed = new Map(passed.map((row) => [row.suite_id, row.finished_at]));
     const suites = config._tag === "Success" ? config.success.suites : [];
     const sharing = config._tag === "Success" && config.success.sharedResults === true;
     const shared = sharing
-      ? yield* sharedResults.read(root, suites, input.projectId)
+      ? yield* sharedResults.read(root, suites, scope.projectId)
       : { records: new Map<string, { run: QaRun; fingerprint: string | null }>(), warning: null };
     const current = yield* captureInputs(root, suites);
     const latestRuns = yield* Effect.forEach(latest, (row) =>
@@ -322,33 +515,39 @@ const make = Effect.gen(function* () {
           );
         }),
       ),
-      queuedSuiteIds: [...(batches.get(input.projectId)?.pending ?? [])],
-      batchError: batchErrors.get(input.projectId) ?? null,
-      batchRunning: batches.has(input.projectId),
-      schedule: yield* readSchedule(input),
+      queuedSuiteIds: batchIn(scope.key, scope.ref)
+        ? [...(batches.get(scope.key)?.pending ?? [])]
+        : [],
+      batchError: batchErrors.get(scope.key) ?? null,
+      batchRunning: batchIn(scope.key, scope.ref),
+      schedule,
       latestCiRuns: yield* Effect.forEach(ci, (row) => decodeRun(row.run_json)),
-      branch: yield* git(root, ["branch", "--show-current"]),
+      branch: scope.ref ?? (yield* git(root, ["branch", "--show-current"])),
       testResultsAvailable: true,
-      deviceSelections: deviceSelections.forProject(input.projectId),
+      deviceSelections: deviceSelections.forScope(scope.key),
+      ref: scope.ref,
+      checkout,
+      refs,
     };
   }, Effect.mapError(storageError));
 
   const details = Effect.fn("QaService.details")(function* (input: QaRunInput) {
-    const live = active.get(input.runId)?.details;
-    if (live?.run.projectId === input.projectId) return { ...live };
+    const { key } = yield* repositoryOf(input.projectId).pipe(
+      Effect.mapError((error) =>
+        error.reason === "project-not-found" ? new QaError({ reason: "run-not-found" }) : error,
+      ),
+    );
+    const entry = active.get(input.runId);
+    if (entry?.scope.key === key) return { ...entry.details };
     const rows = yield* sql<{
       run_json: string;
       output: string;
       output_truncated: number;
       report_xml: string | null;
     }>`
-      SELECT run_json, output, output_truncated, report_xml FROM qa_runs WHERE id = ${input.runId} AND project_id = ${input.projectId}`;
+      SELECT run_json, output, output_truncated, report_xml FROM qa_runs WHERE id = ${input.runId} AND qa_key = ${key}`;
     if (!rows[0]) {
-      const root = yield* workspace(input).pipe(
-        Effect.mapError((error) =>
-          error.reason === "project-not-found" ? new QaError({ reason: "run-not-found" }) : error,
-        ),
-      );
+      const root = yield* rootOf(yield* scopeOf(input));
       const config = yield* catalog(root);
       if (config.sharedResults) {
         const shared = yield* sharedResults.read(root, config.suites, input.projectId);
@@ -422,6 +621,15 @@ const make = Effect.gen(function* () {
       output = ${value.output}, output_truncated = ${Number(value.outputTruncated)}, report_xml = ${value.reportXml}
       WHERE id = ${value.run.id}`;
   }, Effect.mapError(storageError));
+
+  const isInside = (root: string, target: string) => {
+    const relative = path.relative(root, target);
+    return !(
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    );
+  };
 
   const git = Effect.fn("QaService.git")(
     function* (cwd: string, args: readonly string[]) {
@@ -505,7 +713,7 @@ const make = Effect.gen(function* () {
       assignments = qaDeviceAssignments(
         suite,
         pool.entries,
-        deviceSelections.forProject(projectId),
+        deviceSelections.forScope(entry.scope.key),
         projectId,
       );
       const blocked = assignments.find((assignment) => !assignment.device && !assignment.busy);
@@ -557,8 +765,73 @@ const make = Effect.gen(function* () {
     return deviceEnvironment(suite, devices);
   });
 
+  /** Moves QA's checkout to the remote ref and takes the suite, inputs and revision from there. */
+  const syncCheckout = Effect.fn("QaService.syncCheckout")(function* (
+    entry: ActiveRun,
+    scope: QaScope & { ref: string },
+  ) {
+    const notRun = (note: string) => {
+      appendOutput(entry, `[T3 QA] ${note}\n`);
+      entry.details = {
+        ...entry.details,
+        run: { ...entry.details.run, status: "incomplete", note },
+      };
+      return false;
+    };
+    const synced = yield* checkouts
+      .sync(
+        targetOf(scope),
+        () => true,
+        (line) => Effect.sync(() => appendOutput(entry, `[T3 QA] ${line}\n`)),
+      )
+      .pipe(Effect.result);
+    if (synced._tag === "Failure") {
+      const status = yield* checkouts.status(scope.key, scope.ref).pipe(Effect.option);
+      const detail = Option.getOrUndefined(status)?.error;
+      if (detail) appendOutput(entry, `${detail}\n`);
+      return notRun(`Not run. ${synced.failure.message}`);
+    }
+    const { commit, isTag } = synced.success;
+    const root = yield* fs.realPath(synced.success.root).pipe(Effect.mapError(storageError));
+    const config = yield* catalog(root).pipe(Effect.option);
+    const suite = Option.getOrUndefined(config)?.suites.find(
+      (candidate) => candidate.id === entry.details.run.suite.id,
+    );
+    if (!suite) return notRun(`Not run. ${scope.ref} does not configure this suite in t3.json.`);
+    const cwd = yield* fs.realPath(path.resolve(root, suite.cwd ?? ".")).pipe(Effect.option);
+    if (Option.isNone(cwd) || !isInside(root, cwd.value))
+      return notRun(`Not run. The suite's working directory does not exist on ${scope.ref}.`);
+    const changes = yield* git(root, [
+      "status",
+      "--porcelain",
+      "--",
+      ".",
+      `:(exclude)${SHARED_RESULTS_DIRECTORY}`,
+    ]);
+    entry.root = root;
+    entry.evidence = (yield* captureInputs(root, [suite])).get(suite.id)!;
+    entry.details = {
+      ...entry.details,
+      run: {
+        ...entry.details.run,
+        suite,
+        cwd: cwd.value,
+        commit,
+        branch: isTag ? null : scope.ref,
+        dirty: changes === null ? null : changes.length > 0,
+      },
+    };
+    return true;
+  });
+
   const execute = Effect.fn("QaService.execute")(
     function* (entry: ActiveRun) {
+      const { scope } = entry;
+      if (scope.ref !== null && !entry.synced) {
+        if (!(yield* syncCheckout(entry, { ...scope, ref: scope.ref }))) return;
+        yield* sql`UPDATE qa_run_inputs SET evidence_json = ${yield* encodeEvidence(entry.evidence)}
+          WHERE run_id = ${entry.details.run.id}`.pipe(Effect.mapError(storageError));
+      }
       const devices = yield* prepareDevices(entry);
       if (!devices) return;
       const run = entry.details.run;
@@ -700,7 +973,7 @@ const make = Effect.gen(function* () {
               )
               .pipe(
                 Effect.ensuring(Effect.sync(() => active.delete(entry.details.run.id))),
-                Effect.ensuring(PubSub.publish(updates, entry.details.run.projectId)),
+                Effect.ensuring(PubSub.publish(updates, entry.scope.key)),
               );
           }),
         ),
@@ -709,32 +982,39 @@ const make = Effect.gen(function* () {
   );
 
   const startRun = Effect.fn("QaService.startRun")(function* (
-    input: QaStartInput & { expectedBranch?: string },
+    scope: QaScope,
+    suiteId: string,
+    options: {
+      readonly scheduled?: boolean;
+      readonly synced?: boolean;
+      readonly expectedBranch?: string;
+    } = {},
   ) {
     yield* ensureEnabled;
-    const root = yield* workspace(input);
+    // Compared with the suite's resolved working directory, so resolved the same way.
+    const root = yield* rootOf(scope).pipe(
+      Effect.flatMap((root) => fs.realPath(root)),
+      Effect.orElseSucceed(() => ""),
+    );
     const config = yield* catalog(root);
-    const suite = config.suites.find((candidate) => candidate.id === input.suiteId);
+    const suite = config.suites.find((candidate) => candidate.id === suiteId);
     if (!suite) return yield* new QaError({ reason: "suite-not-found" });
-    if ([...active.values()].some((entry) => entry.details.run.projectId === input.projectId))
-      return yield* new QaError({ reason: "busy" });
+    if (runningIn(scope.key)) return yield* new QaError({ reason: "busy" });
     const cwd = yield* fs
       .realPath(path.resolve(root, suite.cwd ?? "."))
       .pipe(Effect.mapError((cause) => new QaError({ reason: "workspace", cause })));
-    const relative = path.relative(root, cwd);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-      return yield* new QaError({ reason: "workspace" });
+    if (!isInside(root, cwd)) return yield* new QaError({ reason: "workspace" });
     const [commit, branch, changes] = yield* Effect.all(
       [
         git(root, ["rev-parse", "HEAD"]),
-        git(root, ["branch", "--show-current"]),
+        scope.ref === null ? git(root, ["branch", "--show-current"]) : Effect.succeed(scope.ref),
         git(root, ["status", "--porcelain", "--", ".", `:(exclude)${SHARED_RESULTS_DIRECTORY}`]),
       ],
       { concurrency: "unbounded" },
     );
     const run: QaRun = {
       id: yield* random.uuidV4(),
-      projectId: input.projectId,
+      projectId: scope.projectId,
       suite,
       cwd,
       startedAt: yield* now,
@@ -743,60 +1023,72 @@ const make = Effect.gen(function* () {
       exitCode: null,
       commit,
       branch: branch || null,
+      ...(scope.ref === null ? {} : { ref: scope.ref }),
       dirty: changes === null ? null : changes.length > 0,
       summary: null,
       note: null,
-      ...(input.expectedBranch ? { source: { type: "schedule" as const } } : {}),
+      ...(options.scheduled ? { source: { type: "schedule" as const } } : {}),
     };
-    if (input.expectedBranch && branch !== input.expectedBranch)
+    if (options.expectedBranch && branch !== options.expectedBranch)
       return yield* new QaError({ reason: "branch" });
     const evidence = (yield* captureInputs(root, [suite])).get(suite.id)!;
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json)
-          VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, 'running', ${yield* encodeRun(run)})`;
+        yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, qa_key, ref)
+          VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, 'running', ${yield* encodeRun(run)}, ${scope.key}, ${scope.ref ?? ""})`;
         yield* sql`INSERT INTO qa_run_inputs VALUES (${run.id}, ${yield* encodeEvidence(evidence)})`;
       }),
     );
     const entry: ActiveRun = {
       details: { run, output: "", outputTruncated: false, reportXml: null },
       cancelled: false,
+      scope,
+      synced: options.synced === true,
       root,
       evidence,
-      shareResult: config.sharedResults === true,
+      // Summaries belong in a checkout people commit from, not in QA's own.
+      shareResult: config.sharedResults === true && scope.ref === null,
     };
     active.set(run.id, entry);
     entry.fiber = yield* execute(entry).pipe(
       Effect.interruptible,
-      Effect.forkIn(scope, { startImmediately: true }),
+      Effect.forkIn(serviceScope, { startImmediately: true }),
     );
-    yield* PubSub.publish(updates, input.projectId);
+    yield* PubSub.publish(updates, scope.key);
     return entry;
   }, Effect.mapError(storageError));
 
-  const start = Effect.fn("QaService.start")(
-    function* (input: QaStartInput) {
-      if (batches.has(input.projectId)) return yield* new QaError({ reason: "busy" });
-      batchErrors.delete(input.projectId);
-      return (yield* startRun(input)).details.run;
-    },
-    lock.withPermit,
-    Effect.uninterruptible,
-  );
+  const start = Effect.fn("QaService.start")(function* (input: QaStartInput) {
+    const scope = yield* scopeOf(input);
+    return yield* Effect.gen(function* () {
+      if (batches.has(scope.key)) return yield* new QaError({ reason: "busy" });
+      batchErrors.delete(scope.key);
+      return (yield* startRun(scope, input.suiteId)).details.run;
+    }).pipe(lock.withPermit, Effect.uninterruptible);
+  });
 
-  const startBatch = Effect.fn("QaService.startBatch")(
-    function* (input: QaProjectInput, scheduled?: QaSchedule) {
-      yield* ensureEnabled;
-      if (
-        batches.has(input.projectId) ||
-        [...active.values()].some((entry) => entry.details.run.projectId === input.projectId)
-      )
+  const startBatch = Effect.fn("QaService.startBatch")(function* (
+    input: QaProjectInput,
+    scheduled?: QaSchedule,
+  ) {
+    const scope = yield* scopeOf(input);
+    yield* ensureEnabled;
+    if (batches.has(scope.key) || runningIn(scope.key))
+      return yield* new QaError({ reason: "busy" });
+    if (scheduled && (yield* readSchedule(scope))?.revision !== scheduled.revision)
+      return yield* new QaError({ reason: "schedule" });
+    // Affected suites are those whose inputs changed on the remote ref, so sync before choosing.
+    if (scope.ref !== null)
+      yield* checkouts.sync(
+        targetOf({ ...scope, ref: scope.ref }),
+        () => !batches.has(scope.key) && !runningIn(scope.key),
+      );
+    return yield* Effect.gen(function* () {
+      if (batches.has(scope.key) || runningIn(scope.key))
         return yield* new QaError({ reason: "busy" });
-      if (scheduled && (yield* readSchedule(input))?.revision !== scheduled.revision)
-        return yield* new QaError({ reason: "schedule" });
-      const current = yield* snapshot(input);
+      const current = yield* snapshotOf(scope);
       if (current.configurationError) return yield* new QaError({ reason: "configuration" });
-      if (scheduled && current.branch !== scheduled.configuration.branch)
+      if (scheduled && scope.ref === null && current.branch !== scheduled.configuration.branch)
         return yield* new QaError({ reason: "branch" });
       const target = scheduled?.configuration.target ?? { type: "affected" };
       const ids =
@@ -805,23 +1097,29 @@ const make = Effect.gen(function* () {
           : target.type === "all"
             ? current.suites.map((suite) => suite.id)
             : current.freshness.filter((item) => item.needsRun).map((item) => item.suiteId);
-      const batch: NonNullable<ReturnType<typeof batches.get>> = { pending: [...ids], runIds: [] };
+      const batch: NonNullable<ReturnType<typeof batches.get>> = {
+        ref: scope.ref,
+        pending: [...ids],
+        runIds: [],
+      };
       if (!ids.length) return { ids, batch };
-      batchErrors.delete(input.projectId);
-      batches.set(input.projectId, batch);
+      batchErrors.delete(scope.key);
+      batches.set(scope.key, batch);
       batch.fiber = yield* Effect.gen(function* () {
         for (const suiteId of ids) {
           const entry = yield* lock.withPermit(
             Effect.gen(function* () {
-              const entry = yield* startRun({
-                ...input,
-                suiteId,
-                ...(scheduled ? { expectedBranch: scheduled.configuration.branch } : {}),
+              const entry = yield* startRun(scope, suiteId, {
+                scheduled: scheduled !== undefined,
+                synced: true,
+                ...(scheduled && scope.ref === null
+                  ? { expectedBranch: scheduled.configuration.branch }
+                  : {}),
               });
               batch.pending.shift();
               batch.runId = entry.details.run.id;
               batch.runIds.push(entry.details.run.id);
-              yield* PubSub.publish(updates, input.projectId);
+              yield* PubSub.publish(updates, scope.key);
               return entry;
             }).pipe(Effect.uninterruptible),
           );
@@ -831,25 +1129,23 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.catch((error) =>
           Effect.sync(() => {
-            batchErrors.set(input.projectId, error.message);
+            batchErrors.set(scope.key, error.message);
             batch.error = error.message;
           }),
         ),
         Effect.ensuring(
           Effect.gen(function* () {
-            batches.delete(input.projectId);
-            yield* PubSub.publish(updates, input.projectId);
+            batches.delete(scope.key);
+            yield* PubSub.publish(updates, scope.key);
           }),
         ),
         Effect.interruptible,
-        Effect.forkIn(scope, { startImmediately: true }),
+        Effect.forkIn(serviceScope, { startImmediately: true }),
       );
-      yield* PubSub.publish(updates, input.projectId);
+      yield* PubSub.publish(updates, scope.key);
       return { ids, batch };
-    },
-    lock.withPermit,
-    Effect.uninterruptible,
-  );
+    }).pipe(lock.withPermit, Effect.uninterruptible);
+  });
 
   const startAffected = Effect.fn("QaService.startAffected")((input: QaProjectInput) =>
     startBatch(input).pipe(Effect.map(({ ids }) => ids)),
@@ -858,17 +1154,45 @@ const make = Effect.gen(function* () {
   const cancel = Effect.fn("QaService.cancel")(function* (input: QaRunInput) {
     yield* details(input);
     const entry = active.get(input.runId);
-    if (!entry?.fiber || entry.details.run.projectId !== input.projectId) return;
+    if (!entry?.fiber) return;
     entry.cancelled = true;
     yield* Fiber.interrupt(entry.fiber);
   });
 
   const cancelAffected = Effect.fn("QaService.cancelAffected")(function* (input: QaProjectInput) {
-    yield* workspace(input);
-    const batch = batches.get(input.projectId);
+    const { key } = yield* repositoryOf(input.projectId);
+    const batch = batches.get(key);
     if (!batch?.fiber) return;
     yield* Fiber.interrupt(batch.fiber);
-    if (batch.runId) yield* cancel({ ...input, runId: batch.runId });
+    if (batch.runId) yield* cancel({ projectId: input.projectId, runId: batch.runId });
+  });
+
+  /** Fetches the shown ref in the background, so a ref never opened gets its checkout. */
+  const syncInBackground = Effect.fn("QaService.syncInBackground")(
+    function* (scope: QaScope) {
+      if (scope.ref === null || !(yield* qaSettings).qaEnabled) return;
+      const ref = scope.ref;
+      const status = yield* checkouts.status(scope.key, ref);
+      if (status.state === "syncing" || status.state === "setup") return;
+      const syncedAt = status.syncedAt ? Date.parse(status.syncedAt) : 0;
+      if ((yield* Clock.currentTimeMillis) - syncedAt < BACKGROUND_SYNC_INTERVAL_MS) return;
+      yield* checkouts.sync(
+        targetOf({ ...scope, ref }),
+        () => !runningIn(scope.key, ref) && !batchIn(scope.key, ref),
+      );
+    },
+    (effect) => effect.pipe(Effect.ignore, Effect.forkIn(serviceScope), Effect.asVoid),
+  );
+
+  const deleteCheckout = Effect.fn("QaService.deleteCheckout")(function* (input: QaProjectInput) {
+    const scope = yield* scopeOf(input);
+    if (scope.ref === null) return yield* new QaError({ reason: "ref" });
+    const ref = scope.ref;
+    yield* checkouts.remove(
+      scope.key,
+      ref,
+      () => !runningIn(scope.key, ref) && !batchIn(scope.key, ref),
+    );
   });
 
   const nextDue = (configuration: QaSchedule["configuration"], from: DateTime.DateTime) => {
@@ -878,13 +1202,16 @@ const make = Effect.gen(function* () {
     return next ? DateTime.formatIso(next) : null;
   };
 
-  const setSchedule = Effect.fn("QaService.setSchedule")(
-    function* (input: QaSetScheduleInput) {
-      const root = yield* workspace(input);
+  const setSchedule = Effect.fn("QaService.setSchedule")(function* (input: QaSetScheduleInput) {
+    const scope = yield* scopeOf(input);
+    const root = yield* rootOf(scope);
+    yield* Effect.gen(function* () {
       if (!input.configuration) {
-        yield* sql`DELETE FROM qa_schedules WHERE project_id = ${input.projectId}`;
+        yield* sql`DELETE FROM qa_ref_schedules WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""}`;
       } else {
-        const configuration = input.configuration;
+        // In QA's checkout the schedule runs its ref; elsewhere it needs the project on that branch.
+        const configuration =
+          scope.ref === null ? input.configuration : { ...input.configuration, branch: scope.ref };
         if (configuration.enabled) yield* ensureEnabled;
         const suites = configuration.enabled ? (yield* catalog(root)).suites : [];
         const next = nextDue(configuration, yield* DateTime.now);
@@ -896,7 +1223,7 @@ const make = Effect.gen(function* () {
             !suites.some((suite) => suite.id === target.suiteId))
         )
           return yield* new QaError({ reason: "schedule" });
-        const previous = yield* readSchedule(input);
+        const previous = yield* readSchedule(scope);
         const preserveDue =
           previous?.configuration.enabled &&
           configuration.enabled &&
@@ -911,18 +1238,16 @@ const make = Effect.gen(function* () {
           note: previous?.note ?? null,
           runIds: previous?.runIds ?? [],
         };
-        yield* sql`INSERT INTO qa_schedules VALUES (${input.projectId}, ${yield* encodeSchedule(value)})
-        ON CONFLICT(project_id) DO UPDATE SET schedule_json = excluded.schedule_json`;
+        yield* sql`INSERT INTO qa_ref_schedules VALUES (${scope.key}, ${scope.ref ?? ""}, ${scope.projectId}, ${yield* encodeSchedule(value)})
+        ON CONFLICT(qa_key, ref) DO UPDATE SET schedule_json = excluded.schedule_json, project_id = excluded.project_id`;
       }
-      yield* PubSub.publish(updates, input.projectId);
-    },
-    lock.withPermit,
-    Effect.uninterruptible,
-    Effect.mapError(storageError),
-  );
+      yield* PubSub.publish(updates, scope.key);
+    }).pipe(lock.withPermit, Effect.uninterruptible);
+  }, Effect.mapError(storageError));
 
   const setDevice = Effect.fn("QaService.setDevice")(function* (input: QaSetDeviceInput) {
-    const root = yield* workspace(input);
+    const scope = yield* scopeOf(input);
+    const root = yield* rootOf(scope);
     const suite = (yield* catalog(root)).suites.find((candidate) => candidate.id === input.suiteId);
     if (
       !suite?.devices?.some(
@@ -930,22 +1255,22 @@ const make = Effect.gen(function* () {
       )
     )
       return yield* new QaError({ reason: "suite-not-found" });
-    yield* deviceSelections.set(input);
-    yield* PubSub.publish(updates, input.projectId);
+    yield* deviceSelections.set(scope.key, input);
+    yield* PubSub.publish(updates, scope.key);
   }, Effect.mapError(storageError));
 
   const updateScheduleRun = Effect.fn("QaService.updateScheduleRun")(
-    function* (input: QaProjectInput, value: QaSchedule, completed = false) {
+    function* (scope: Pick<QaScope, "key" | "ref">, value: QaSchedule, completed = false) {
       if (completed) {
         // Completion must not undo schedule edits or a pause made during the run.
-        yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json,
+        yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json,
         '$.lastStatus', ${value.lastStatus}, '$.note', ${value.note}, '$.runIds', json(${encodeJson(value.runIds)}))
-        WHERE project_id = ${input.projectId} AND json_extract(schedule_json, '$.lastRunAt') = ${value.lastRunAt}
+        WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND json_extract(schedule_json, '$.lastRunAt') = ${value.lastRunAt}
           AND json_extract(schedule_json, '$.lastStatus') = 'running'`;
       } else
-        yield* sql`UPDATE qa_schedules SET schedule_json = ${yield* encodeSchedule(value)}
-      WHERE project_id = ${input.projectId} AND json_extract(schedule_json, '$.revision') = ${value.revision}`;
-      yield* PubSub.publish(updates, input.projectId);
+        yield* sql`UPDATE qa_ref_schedules SET schedule_json = ${yield* encodeSchedule(value)}
+      WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND json_extract(schedule_json, '$.revision') = ${value.revision}`;
+      yield* PubSub.publish(updates, scope.key);
     },
     lock.withPermit,
     Effect.uninterruptible,
@@ -954,6 +1279,7 @@ const make = Effect.gen(function* () {
 
   const dispatchScheduled = Effect.fn("QaService.dispatchScheduled")(function* (
     input: QaProjectInput,
+    at: Pick<QaScope, "key" | "ref">,
     schedule: QaSchedule,
   ) {
     const timestamp = yield* DateTime.now;
@@ -966,7 +1292,7 @@ const make = Effect.gen(function* () {
         timestamp,
       )
     ) {
-      yield* updateScheduleRun(input, {
+      yield* updateScheduleRun(at, {
         ...schedule,
         nextRunAt,
         lastRunAt: schedule.nextRunAt,
@@ -979,7 +1305,7 @@ const make = Effect.gen(function* () {
     const attempt = yield* startBatch(input, schedule).pipe(Effect.result);
     if (attempt._tag === "Failure") {
       if (attempt.failure.reason === "busy") return;
-      yield* updateScheduleRun(input, {
+      yield* updateScheduleRun(at, {
         ...schedule,
         nextRunAt,
         lastRunAt: DateTime.formatIso(timestamp),
@@ -998,13 +1324,13 @@ const make = Effect.gen(function* () {
       runIds: [],
       note: ids.length ? null : "No suites need to run.",
     };
-    yield* updateScheduleRun(input, running);
+    yield* updateScheduleRun(at, running);
     if (!batch.fiber) return;
     yield* Effect.gen(function* () {
       const outcome = yield* Fiber.await(batch.fiber!);
       const runs = yield* Effect.forEach(batch.runIds, (runId) => details({ ...input, runId }));
       yield* updateScheduleRun(
-        input,
+        at,
         {
           ...running,
           runIds: [...batch.runIds],
@@ -1023,7 +1349,7 @@ const make = Effect.gen(function* () {
       Effect.catch((error) =>
         Effect.logWarning("QA schedule completion could not be saved", { reason: error.reason }),
       ),
-      Effect.forkIn(scope),
+      Effect.forkIn(serviceScope),
     );
   });
 
@@ -1032,9 +1358,11 @@ const make = Effect.gen(function* () {
     if (!(yield* qaSettings.pipe(Effect.orElseSucceed(() => ({ qaEnabled: false })))).qaEnabled)
       return;
     const due = yield* sql<{
+      qa_key: string;
+      ref: string;
       project_id: string;
       schedule_json: string;
-    }>`SELECT project_id, schedule_json FROM qa_schedules
+    }>`SELECT qa_key, ref, project_id, schedule_json FROM qa_ref_schedules
       WHERE json_extract(schedule_json, '$.configuration.enabled') = 1
         AND json_extract(schedule_json, '$.lastStatus') <> 'running'
         AND json_extract(schedule_json, '$.nextRunAt') <= ${yield* now}`;
@@ -1043,7 +1371,14 @@ const make = Effect.gen(function* () {
       (row) =>
         decodeSchedule(row.schedule_json).pipe(
           Effect.flatMap((schedule) =>
-            dispatchScheduled({ projectId: ProjectId.make(row.project_id) }, schedule),
+            dispatchScheduled(
+              {
+                projectId: ProjectId.make(row.project_id),
+                ...(row.ref ? { ref: row.ref } : {}),
+              },
+              { key: row.qa_key, ref: row.ref || null },
+              schedule,
+            ),
           ),
           Effect.catch((cause) => Effect.logWarning("QA schedule dispatch failed", { cause })),
         ),
@@ -1054,9 +1389,15 @@ const make = Effect.gen(function* () {
 
   const importReport = Effect.fn("QaService.importReport")(
     function* (input: QaImportInput) {
-      const root = yield* workspace(input);
       const report = input.report;
-      const suite = (yield* catalog(root)).suites.find((item) => item.id === report.suiteId);
+      const scope = yield* scopeOf({ projectId: input.projectId, ref: report.branch });
+      const root = yield* rootOf(scope);
+      // A CI branch QA never checked out still has the project's own suites.
+      const suite =
+        (yield* catalog(root)).suites.find((item) => item.id === report.suiteId) ??
+        (scope.ref === null
+          ? undefined
+          : (yield* catalog(scope.projectRoot)).suites.find((item) => item.id === report.suiteId));
       if (!suite) return yield* new QaError({ reason: "suite-not-found" });
       const timestamp = yield* now;
       const started = Date.parse(report.startedAt);
@@ -1125,12 +1466,12 @@ const make = Effect.gen(function* () {
       };
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, report_xml)
-        VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, ${status}, ${yield* encodeRun(run)}, ${report.reportXml})`;
+          yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, report_xml, qa_key, ref)
+        VALUES (${run.id}, ${run.projectId}, ${suite.id}, ${run.startedAt}, ${status}, ${yield* encodeRun(run)}, ${report.reportXml}, ${scope.key}, ${scope.ref ?? ""})`;
           yield* sql`INSERT INTO qa_ci_imports VALUES (${run.projectId}, ${suite.id}, ${report.source.provider}, ${report.source.runId}, ${run.id}, ${hash})`;
         }),
       );
-      yield* PubSub.publish(updates, input.projectId);
+      yield* PubSub.publish(updates, scope.key);
       return run;
     },
     lock.withPermit,
@@ -1148,16 +1489,18 @@ const make = Effect.gen(function* () {
     tests,
     setSchedule,
     setDevice,
+    deleteCheckout,
     importReport,
     subscribe: (input) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const queue = yield* PubSub.subscribe(updates);
+          const scope = yield* scopeOf(input);
           return Stream.concat(
-            Stream.fromEffect(snapshot(input)),
+            Stream.fromEffect(snapshotOf(scope).pipe(Effect.tap(() => syncInBackground(scope)))),
             Stream.fromSubscription(queue).pipe(
-              Stream.filter((projectId) => projectId === input.projectId),
-              Stream.mapEffect(() => snapshot(input)),
+              Stream.filter((key) => key === scope.key),
+              Stream.mapEffect(() => snapshotOf(scope)),
             ),
           );
         }),

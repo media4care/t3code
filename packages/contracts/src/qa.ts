@@ -10,6 +10,13 @@ const InputPath = TrimmedNonEmptyString.check(
   Schema.isPattern(/^(?!\/|[A-Za-z]:)(?!.*(?:^|\/)\.\.(?:\/|$))[^\\*?[\]{}\x00]+$/),
 );
 
+/** A branch or tag name on the repository's remote, as `git` accepts it. */
+export const QaRef = ShortText.check(
+  Schema.isPattern(
+    /^(?![-/])(?!.*\.\.)(?!.*\/\/)(?!.*@\{)(?!.*\.lock$)[^\s~^:?*[\\\x00-\x1f\x7f]+(?<![./])$/,
+  ),
+);
+
 export const QaTestKind = Schema.Literals([
   "unit",
   "integration",
@@ -136,6 +143,8 @@ export const QaRun = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Int),
   commit: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
+  /** The branch or tag QA checked out for this run; absent for a run in a project's own checkout. */
+  ref: Schema.optionalKey(Schema.String),
   dirty: Schema.NullOr(Schema.Boolean),
   summary: Schema.NullOr(QaReportSummary),
   note: Schema.NullOr(Schema.String),
@@ -156,11 +165,24 @@ export const QaRunDetails = Schema.Struct({
 });
 export type QaRunDetails = typeof QaRunDetails.Type;
 
-export const QaProjectInput = Schema.Struct({ projectId: ProjectId });
+/** Without `ref`, a repository with a remote uses its default branch. */
+export const QaProjectInput = Schema.Struct({
+  projectId: ProjectId,
+  ref: Schema.optionalKey(QaRef),
+});
 export type QaProjectInput = typeof QaProjectInput.Type;
-export const QaStartInput = Schema.Struct({ projectId: ProjectId, suiteId: ShortText });
+export const QaStartInput = Schema.Struct({
+  projectId: ProjectId,
+  suiteId: ShortText,
+  ref: Schema.optionalKey(QaRef),
+});
 export type QaStartInput = typeof QaStartInput.Type;
-export const QaRunInput = Schema.Struct({ projectId: ProjectId, runId: ShortText });
+/** `ref` is the snapshot a client shows the run in, so its details refresh with that snapshot. */
+export const QaRunInput = Schema.Struct({
+  projectId: ProjectId,
+  runId: ShortText,
+  ref: Schema.optionalKey(QaRef),
+});
 export type QaRunInput = typeof QaRunInput.Type;
 
 /** A device someone chose for a suite's requirement, by device pool key. */
@@ -173,6 +195,8 @@ export type QaDeviceSelection = typeof QaDeviceSelection.Type;
 /** A null `deviceKey` goes back to the device QA picks. */
 export const QaSetDeviceInput = Schema.Struct({
   projectId: ProjectId,
+  /** The ref whose suites the choice is checked against; choices apply to every ref. */
+  ref: Schema.optionalKey(QaRef),
   suiteId: ShortText,
   requirement: ShortText,
   deviceKey: Schema.NullOr(DevicePoolKey),
@@ -196,6 +220,7 @@ export const QA_TEST_PAGE_SIZE = 50;
 export const QaTestsInput = Schema.Struct({
   projectId: ProjectId,
   runId: ShortText,
+  ref: Schema.optionalKey(QaRef),
   search: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
   status: Schema.optionalKey(QaTestStatus),
   offset: Schema.optionalKey(NonNegativeInt),
@@ -243,8 +268,10 @@ export const QaSchedule = Schema.Struct({
 });
 export type QaSchedule = typeof QaSchedule.Type;
 
+/** A repository has one schedule per ref; `ref` picks it, and its branch is that ref. */
 export const QaSetScheduleInput = Schema.Struct({
   projectId: ProjectId,
+  ref: Schema.optionalKey(QaRef),
   configuration: Schema.NullOr(QaScheduleConfiguration),
 });
 export type QaSetScheduleInput = typeof QaSetScheduleInput.Type;
@@ -272,6 +299,35 @@ export const QaFreshness = Schema.Struct({
   lastPassedAt: Schema.NullOr(IsoDateTime),
 });
 export type QaFreshness = typeof QaFreshness.Type;
+/** QA's own checkout of a ref, synced to the remote before each run. */
+export const QaCheckout = Schema.Struct({
+  state: Schema.Literals(["missing", "syncing", "setup", "ready", "failed"]),
+  path: Schema.String,
+  commit: Schema.NullOr(Schema.String),
+  syncedAt: Schema.NullOr(IsoDateTime),
+  error: Schema.NullOr(Schema.String.check(Schema.isMaxLength(QA_OUTPUT_TAIL_LIMIT))),
+});
+export type QaCheckout = typeof QaCheckout.Type;
+
+/** The latest result of each suite on one ref, for comparing refs. */
+export const QaRefSummary = Schema.Struct({
+  ref: Schema.String,
+  isDefault: Schema.Boolean,
+  scheduled: Schema.Boolean,
+  checkout: Schema.Boolean,
+  results: Schema.Array(
+    Schema.Struct({
+      suiteId: Schema.String,
+      suiteName: Schema.String,
+      runId: Schema.String,
+      status: QaRunStatus,
+      commit: Schema.NullOr(Schema.String),
+      startedAt: IsoDateTime,
+    }),
+  ),
+});
+export type QaRefSummary = typeof QaRefSummary.Type;
+
 export const QaSnapshot = Schema.Struct({
   workspaceRoot: Schema.String,
   configurationError: Schema.NullOr(Schema.String),
@@ -291,6 +347,10 @@ export const QaSnapshot = Schema.Struct({
     Schema.Struct({ enabled: Schema.Boolean, warning: Schema.NullOr(Schema.String) }),
   ),
   deviceSelections: Schema.optionalKey(Schema.Array(QaDeviceSelection)),
+  /** The ref this snapshot shows; null for a project tested in its own checkout. */
+  ref: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  checkout: Schema.optionalKey(Schema.NullOr(QaCheckout)),
+  refs: Schema.optionalKey(Schema.Array(QaRefSummary)),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 
@@ -308,6 +368,8 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
     "report",
     "duplicate",
     "disabled",
+    "ref",
+    "checkout",
   ]),
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -320,7 +382,7 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
       case "run-not-found":
         return "This QA run could not be found in the selected project.";
       case "busy":
-        return "A QA suite is already running in this project. Wait for it or cancel it first.";
+        return "A QA suite is already running in this repository. Wait for it or cancel it first.";
       case "configuration":
         return "The qa configuration in t3.json is invalid. Check suite IDs, commands, and working directories.";
       case "workspace":
@@ -337,6 +399,10 @@ export class QaError extends Schema.TaggedError<QaError>()("QaError", {
         return "This CI run ID already has a different report. Use a separate ID for each attempt.";
       case "disabled":
         return "QA is turned off on this environment. Turn on Run QA here in Settings → Devices.";
+      case "ref":
+        return "That branch or tag was not found on the repository's remote.";
+      case "checkout":
+        return "QA could not prepare its checkout of this ref. See the checkout status in QA.";
     }
   }
 }

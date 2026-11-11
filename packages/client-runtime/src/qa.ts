@@ -1,6 +1,8 @@
 import {
   QaCiReport,
   type EnvironmentId,
+  type QaCheckout,
+  type RepositoryIdentity,
   type QaFreshness,
   type QaRun,
   type QaRunStatus,
@@ -59,6 +61,48 @@ export function qaProjects<Project extends { readonly environmentId: Environment
       .map((environment) => environment.environmentId),
   );
   return projects.filter((project) => !off.has(project.environmentId));
+}
+
+/**
+ * QA belongs to a repository, so clones and worktrees of one remote are one entry per
+ * environment, opened through its first project. Projects without a remote stay on their own.
+ */
+export function qaRepositories<
+  Project extends {
+    readonly environmentId: EnvironmentId;
+    readonly id: string;
+    readonly title: string;
+    readonly repositoryIdentity?: RepositoryIdentity | null | undefined;
+  },
+>(projects: ReadonlyArray<Project>) {
+  const entries = new Map<string, { key: string; title: string; project: Project }>();
+  for (const project of projects) {
+    const identity = project.repositoryIdentity;
+    const key = `${project.environmentId}:${identity ? `repository:${identity.canonicalKey}` : project.id}`;
+    if (!entries.has(key))
+      entries.set(key, {
+        key,
+        title: identity?.displayName ?? identity?.name ?? project.title,
+        project,
+      });
+  }
+  return [...entries.values()];
+}
+
+/** What QA's own checkout of a ref is doing, for a status line. */
+export function qaCheckoutLabel(ref: string, checkout: QaCheckout) {
+  switch (checkout.state) {
+    case "missing":
+      return `Preparing QA's checkout of ${ref}…`;
+    case "syncing":
+      return `Fetching ${ref}…`;
+    case "setup":
+      return `Running the setup script for ${ref}…`;
+    case "failed":
+      return `QA could not prepare ${ref}.`;
+    case "ready":
+      return `${ref} at ${checkout.commit?.slice(0, 8) ?? "unknown"}`;
+  }
 }
 
 export const QA_OFF_EVERYWHERE =
@@ -215,7 +259,7 @@ export function qaFreshnessLabel(freshness: QaFreshness) {
   }
 }
 
-const STATUS_LABELS: Record<QaRunStatus, string> = {
+export const QA_RUN_STATUS_LABELS: Record<QaRunStatus, string> = {
   running: "Running",
   passed: "Passed",
   failed: "Failed",
@@ -227,7 +271,7 @@ const STATUS_LABELS: Record<QaRunStatus, string> = {
 export function qaStatusLabel(run: QaRun | undefined) {
   if (!run) return "Never run";
   if (run.status === "passed" && !run.summary) return "Command passed";
-  return STATUS_LABELS[run.status];
+  return QA_RUN_STATUS_LABELS[run.status];
 }
 
 export function qaRunDuration(run: QaRun) {

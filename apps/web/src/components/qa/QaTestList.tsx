@@ -18,10 +18,13 @@ const RESULTS = {
 export function QaTestList({
   environmentId,
   projectId,
+  gitRef,
   runId,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  /** The ref whose snapshot shows the run. */
+  gitRef: string | null;
   runId: string;
 }) {
   const [selection, setSelection] = useState({
@@ -35,6 +38,7 @@ export function QaTestList({
       input: {
         projectId,
         runId,
+        ...(gitRef ? { ref: gitRef } : {}),
         search: selection.search,
         offset: selection.offset,
         ...(selection.status === "all" ? {} : { status: selection.status }),

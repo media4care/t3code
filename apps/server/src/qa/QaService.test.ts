@@ -14,6 +14,7 @@ import {
   type QaSuite,
   type QaCiReport,
   type QaScheduleConfiguration,
+  type QaSnapshot,
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -31,6 +32,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
 import * as DevicePool from "../device/DevicePool.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -95,12 +97,14 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     readonly prepare?: DevicePool.DevicePool["Service"]["prepare"];
   } = {},
   settings: Partial<Pick<ServerSettings, "qaEnabled" | "qaDeviceSource">> = {},
+  /** Gives the project a remote, which makes QA test its refs in QA's own checkout. */
+  withRemote = false,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM qa_runs`;
-  yield* sql`DELETE FROM qa_schedules`;
+  yield* sql`DELETE FROM qa_ref_schedules`;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-test-" });
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-state-" });
   const processes = yield* ProcessRunner.ProcessRunner;
@@ -108,6 +112,30 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
   yield* git(["init", "-q"]);
   yield* fs.writeFileString(path.join(root, "t3.json"), encodeJson({ qa: { suites, ...options } }));
   yield* fs.writeFileString(path.join(root, "run.cjs"), script);
+  const remote = withRemote
+    ? yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-remote-" })
+    : undefined;
+  /** Commits the project's files and pushes them to `ref` on the remote. */
+  const push = (ref: string, options: { tag?: boolean } = {}) =>
+    Effect.gen(function* () {
+      yield* git(["add", "-A"]);
+      yield* git(["-c", "user.name=QA", "-c", "user.email=qa@example.test", "commit", "-qm", ref]);
+      if (options.tag) yield* git(["tag", "-f", ref]);
+      yield* git([
+        "push",
+        "-qf",
+        remote!,
+        options.tag ? `refs/tags/${ref}` : `HEAD:refs/heads/${ref}`,
+      ]);
+      return (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+    });
+  if (remote) {
+    yield* processes.run({
+      command: "git",
+      args: ["init", "-q", "--bare", "--initial-branch=main", remote],
+    });
+    yield* push("main");
+  }
   const projectLayer = Layer.mock(ProjectStore.ProjectStoreV2)({
     get: (id) =>
       Effect.succeed(
@@ -177,8 +205,20 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
       );
     },
   });
+  const identityLayer = Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+    resolve: () =>
+      Effect.succeed(
+        remote
+          ? {
+              canonicalKey: "example.test/qa",
+              locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: remote },
+            }
+          : null,
+      ),
+  });
   const serviceLayer = Qa.layer.pipe(
     Layer.provide(projectLayer),
+    Layer.provide(identityLayer),
     Layer.provide(schedulerLayer),
     Layer.provide(devicePoolLayer),
     Layer.provide(ServerConfig.layerTest(root, stateDir)),
@@ -196,6 +236,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     pool,
     holding,
     listed,
+    push,
     tick: yield* Deferred.await(registered),
   };
 });
@@ -215,7 +256,146 @@ const completed = Effect.fn("Qa.test.completed")(function* (
   return yield* service.details({ projectId, runId: id });
 });
 
+/** The first snapshot of `ref` that `done` accepts. */
+const snapshotWhere = Effect.fn("Qa.test.snapshotWhere")(function* (
+  service: Qa.QaService["Service"],
+  ref: string,
+  done: (snapshot: QaSnapshot) => boolean,
+) {
+  const value = yield* service
+    .subscribe({ projectId, ref })
+    .pipe(Stream.filter(done), Stream.runHead);
+  assert.isTrue(Option.isSome(value));
+  return Option.getOrThrow(value);
+});
+
 describe("QA runs", () => {
+  it.live("tests a repository's branches and tags in QA's own checkout, with results per ref", () =>
+    Effect.gen(function* () {
+      const passing = `require('node:fs').writeFileSync(process.env.T3_QA_REPORT_PATH,
+        '<testsuite><testcase name="works"/></testsuite>');`;
+      const { service, serviceLayer, sql, root, fs, path, push } = yield* fixture(
+        passing,
+        [suite],
+        {},
+        {},
+        {},
+        true,
+      );
+      // The setup script from t3.json runs in QA's checkout, pointed at the project.
+      yield* fs.writeFileString(
+        path.join(root, "t3.json"),
+        encodeJson({
+          scripts: [
+            {
+              name: "Setup",
+              command: `node -e "require('fs').writeFileSync('setup.txt', process.env.T3CODE_PROJECT_ROOT)"`,
+              runOnWorktreeCreate: true,
+            },
+          ],
+          qa: { suites: [suite] },
+        }),
+      );
+      yield* fs.writeFileString(path.join(root, ".gitignore"), "setup.txt\n");
+      const main = yield* push("main");
+      yield* fs.writeFileString(path.join(root, "run.cjs"), "process.exit(1)");
+      const tag = yield* push("v26.10", { tag: true });
+      // Uncommitted edits in the project never reach QA's checkout.
+      yield* fs.writeFileString(path.join(root, "run.cjs"), "process.exit(2)");
+
+      const ready = yield* snapshotWhere(
+        service,
+        "main",
+        (snapshot) => snapshot.checkout?.state === "ready",
+      );
+      assert.equal(ready.ref, "main");
+      assert.equal(ready.checkout?.state, "ready");
+      assert.equal(ready.checkout?.commit, main);
+      assert.notEqual(ready.workspaceRoot, root);
+      assert.equal(
+        yield* fs.readFileString(path.join(ready.workspaceRoot, "setup.txt")),
+        yield* fs.realPath(root),
+      );
+
+      const onMain = yield* service.start({ projectId, suiteId: "unit", ref: "main" });
+      const mainRun = (yield* completed(service, onMain.id)).run;
+      assert.include(mainRun, { status: "passed", ref: "main", branch: "main", commit: main });
+      assert.isFalse(mainRun.dirty);
+
+      yield* snapshotWhere(service, "v26.10", (snapshot) => snapshot.checkout?.state === "ready");
+      const onTag = yield* service.start({ projectId, suiteId: "unit", ref: "v26.10" });
+      const tagRun = (yield* snapshotWhere(service, "v26.10", (snapshot) =>
+        snapshot.recentRuns.some((run) => run.id === onTag.id && run.status !== "running"),
+      )).recentRuns.find((run) => run.id === onTag.id)!;
+      assert.include(tagRun, { status: "failed", ref: "v26.10", branch: null, commit: tag });
+
+      const compared = yield* service.snapshot({ projectId, ref: "main" });
+      assert.deepEqual(
+        compared.recentRuns.map((run) => run.id),
+        [onMain.id],
+      );
+      assert.deepEqual(
+        compared.refs?.map(({ ref, isDefault, results }) => ({
+          ref,
+          isDefault,
+          statuses: results.map((result) => result.status),
+        })),
+        [
+          { ref: "main", isDefault: true, statuses: ["passed"] },
+          { ref: "v26.10", isDefault: false, statuses: ["failed"] },
+        ],
+      );
+
+      const missing = yield* snapshotWhere(
+        service,
+        "nope",
+        (snapshot) => snapshot.checkout?.state === "failed",
+      );
+      assert.include(missing.checkout?.error ?? "", "nope was not found");
+      assert.isEmpty(missing.suites);
+
+      yield* service.deleteCheckout({ projectId, ref: "v26.10" });
+      const removed = yield* service.snapshot({ projectId, ref: "v26.10" });
+      assert.equal(removed.checkout?.state, "missing");
+      assert.isFalse(yield* fs.exists(removed.workspaceRoot));
+      assert.deepEqual(
+        removed.refs?.find((summary) => summary.ref === "v26.10")?.results.map((r) => r.status),
+        ["failed"],
+      );
+
+      // A run and schedule saved per project before QA belonged to repositories move to the
+      // repository, under the branch they ran on.
+      const legacy = { ...mainRun, id: "legacy", startedAt: "2020-01-01T00:00:00.000Z" };
+      delete (legacy as { ref?: string }).ref;
+      yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json)
+        VALUES ('legacy', ${projectId}, 'unit', ${legacy.startedAt}, 'passed', ${encodeJson(legacy)})`;
+      const schedule = {
+        configuration: {
+          enabled: false,
+          timing: { type: "fixed_time", timeOfDay: "09:00" },
+          timeZone: "UTC",
+          branch: "main",
+          target: { type: "all" },
+        } satisfies QaScheduleConfiguration,
+        revision: "legacy",
+        nextRunAt: null,
+        lastRunAt: null,
+        lastStatus: "never",
+        note: null,
+        runIds: [],
+      };
+      yield* sql`INSERT INTO qa_schedules VALUES (${projectId}, ${encodeJson(schedule)})`;
+      const upgraded = Context.get(yield* Layer.build(Layer.fresh(serviceLayer)), Qa.QaService);
+      const adopted = yield* upgraded.snapshot({ projectId, ref: "main" });
+      assert.deepEqual(
+        adopted.recentRuns.map((run) => run.id),
+        [onMain.id, "legacy"],
+      );
+      assert.equal(adopted.schedule?.revision, "legacy");
+      assert.isEmpty(yield* sql`SELECT * FROM qa_schedules`);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("reuses a repository result in another checkout without local run history", () =>
     Effect.gen(function* () {
       const tracked = { ...suite, inputs: ["."] };
@@ -436,7 +616,7 @@ describe("QA runs", () => {
         yield* service.setSchedule({ projectId, configuration });
         yield* tick;
         assert.isEmpty((yield* service.snapshot({ projectId })).recentRuns);
-        yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+        yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
         yield* tick;
         yield* tick;
         const finished = yield* service.subscribe({ projectId }).pipe(
@@ -481,14 +661,14 @@ describe("QA runs", () => {
         "schedule",
       );
       yield* service.setSchedule({ projectId, configuration });
-      yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+      yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
       yield* tick;
       assert.equal((yield* service.snapshot({ projectId })).schedule?.lastStatus, "missed");
       yield* service.setSchedule({
         projectId,
         configuration: { ...configuration, timing: { type: "interval", everyMs: 60_000 } },
       });
-      yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+      yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
       yield* tick;
       const state = yield* service.snapshot({ projectId });
       assert.equal(state.schedule?.lastStatus, "failed");
@@ -521,7 +701,7 @@ describe("QA runs", () => {
           target: { type: "all" },
         };
         yield* service.setSchedule({ projectId, configuration });
-        yield* sql`UPDATE qa_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+        yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
         const manual = yield* service.start({ projectId, suiteId: "unit" });
         yield* tick;
         assert.equal((yield* service.snapshot({ projectId })).schedule?.lastStatus, "never");
