@@ -141,6 +141,7 @@ export const GitExplorerRunActionInput = Schema.Struct({
     "commit",
     "reset",
     "merge",
+    "release",
     "create-tag",
     "push-tag",
     "delete-tag",
@@ -174,6 +175,9 @@ export const GitExplorerRunActionInput = Schema.Struct({
   // Merge this local or remote-tracking branch (full ref), which must still point at `revision`.
   mergeRef: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   remote: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
+  // Release `mergeRef` at `revision` as the reviewed plan's `tagName`, built on `releaseBase`.
+  releaseChannel: Schema.optional(Schema.Literals(["beta", "production"])),
+  releaseBase: Schema.optional(GitExplorerHash),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
 export const GitExplorerRunActionResult = Schema.Struct({
@@ -182,6 +186,63 @@ export const GitExplorerRunActionResult = Schema.Struct({
   conflictedPaths: Schema.optional(Schema.Array(Schema.String)),
 });
 export type GitExplorerRunActionResult = typeof GitExplorerRunActionResult.Type;
+
+// Releases follow one convention: `master` (or `main`) merges into the newest `vX.Y` branch,
+// and a `vX.Y` tip is tagged `X.Y.N` for production or `X.Y.N-betaM` for beta.
+export const GIT_EXPLORER_RELEASE_REMOTE = "origin";
+const RELEASE_MAIN_BRANCHES = new Set(["master", "main"]);
+const RELEASE_BRANCH = /^v(\d{1,4})\.(\d{1,4})$/;
+
+/** The version of a `vX.Y` release branch, or null for any other name. */
+export function gitExplorerReleaseBranchVersion(name: string) {
+  const match = RELEASE_BRANCH.exec(name);
+  return match ? ([Number(match[1]), Number(match[2])] as const) : null;
+}
+
+/** The branch name a release can start from, given a branch's name without `origin/`. */
+export function gitExplorerReleaseSourceKind(name: string) {
+  return RELEASE_MAIN_BRANCHES.has(name)
+    ? "main"
+    : gitExplorerReleaseBranchVersion(name)
+      ? "release-branch"
+      : null;
+}
+
+export const GitExplorerReleaseChannel = Schema.Literals(["beta", "production"]);
+export type GitExplorerReleaseChannel = typeof GitExplorerReleaseChannel.Type;
+export const GitExplorerReleasePlanInput = Schema.Struct({
+  ...GitExplorerScope,
+  channel: GitExplorerReleaseChannel,
+  // A local or `origin/` branch (full ref) that must still point at `revision`.
+  sourceRef: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024)),
+  revision: GitExplorerHash,
+});
+export type GitExplorerReleasePlanInput = typeof GitExplorerReleasePlanInput.Type;
+export const GitExplorerReleasePlanResult = Schema.Struct({
+  channel: GitExplorerReleaseChannel,
+  source: Schema.String,
+  releaseBranch: Schema.String,
+  // The release branch commit the plan builds on; the release refuses to run if it moved.
+  base: GitExplorerHash,
+  tag: Schema.String,
+  previousRelease: Schema.NullOr(Schema.Struct({ tag: Schema.String, createdAt: Schema.String })),
+  // Set when the source is merged into the release branch first.
+  merge: Schema.NullOr(
+    Schema.Struct({
+      commits: Schema.Array(Schema.Struct({ hash: GitExplorerHash, subject: Schema.String })),
+      total: NonNegativeInt,
+      // The release branch is checked out here, so conflicts stop in this worktree.
+      inWorktree: Schema.Boolean,
+    }),
+  ),
+  // The commit tagged when nothing is merged.
+  tagCommit: Schema.NullOr(GitExplorerHash),
+  // Commits the push publishes to the release branch besides a merge it creates.
+  unpublished: NonNegativeInt,
+  // Why this release cannot run now.
+  blocked: Schema.NullOr(Schema.String),
+});
+export type GitExplorerReleasePlanResult = typeof GitExplorerReleasePlanResult.Type;
 export const GitExplorerHistoryInput = Schema.Struct({
   ...GitExplorerScope,
   snapshotId: Schema.String,
@@ -289,6 +350,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "commit-message-required",
     "invalid-reset",
     "merge-in-progress",
+    "release-changed",
+    "release-conflicts",
     "invalid-tag",
     "tag-changed",
     "invalid-remote",
@@ -346,6 +409,10 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "Choose a reset mode and a commit for the checked-out branch.";
       case "merge-in-progress":
         return "A merge is already in progress. Conclude or abort it before merging again.";
+      case "release-changed":
+        return "The release changed since you reviewed it. Review it again.";
+      case "release-conflicts":
+        return "The merge into the release branch has conflicts. Check out the release branch and release again to resolve them with an agent.";
       case "invalid-tag":
         return "Enter a valid Git tag name and select a commit.";
       case "tag-changed":

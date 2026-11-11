@@ -1310,6 +1310,127 @@ it.layer(layer)("GitExplorer", (it) => {
     }),
   );
 
+  it.effect("releases main into the newest release branch and tags it on origin", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root, fs, path } = yield* fixture;
+      const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-release-" });
+      const origin = (args: readonly string[]) => git(["--git-dir", remote, ...args]);
+      yield* git(["init", "--bare", remote]);
+      yield* git(["remote", "add", "origin", remote]);
+      yield* git(["branch", "v26.8"]);
+      yield* git(["branch", "v26.10"]);
+      yield* git(["push", "origin", "main", "v26.8", "v26.10", `${root}:refs/tags/26.10.4`]);
+      yield* git(["branch", "-D", "v26.10"]);
+      yield* write("feature.txt", "feature\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "feature"]);
+      const main = yield* git(["rev-parse", "HEAD"]);
+      const fromMain = { ...scope, sourceRef: "refs/heads/main", revision: main };
+
+      const plan = yield* explorer.releasePlan({ ...fromMain, channel: "production" });
+      assert.deepInclude(plan, {
+        releaseBranch: "v26.10",
+        base: root,
+        tag: "26.10.5",
+        tagCommit: null,
+        unpublished: 0,
+        blocked: null,
+      });
+      assert.equal(plan.previousRelease?.tag, "26.10.4");
+      assert.deepEqual(plan.merge, {
+        commits: [{ hash: main, subject: "feature" }],
+        total: 1,
+        inWorktree: false,
+      });
+      const release = {
+        ...scope,
+        action: "release" as const,
+        expectedHead: main,
+        expectedBranch: "main",
+        mergeRef: "refs/heads/main",
+        revision: main,
+        releaseChannel: "production" as const,
+        releaseBase: root,
+      };
+      assert.equal(
+        (yield* explorer.runAction({ ...release, tagName: "26.10.4" }).pipe(Effect.flip)).reason,
+        "release-changed",
+      );
+      yield* explorer.runAction({ ...release, tagName: "26.10.5" });
+      const merge = yield* origin(["rev-parse", "refs/heads/v26.10"]);
+      assert.equal(yield* origin(["rev-parse", "refs/tags/26.10.5"]), merge);
+      assert.equal(yield* git(["rev-parse", `${merge}^1`, `${merge}^2`]), `${root}\n${main}`);
+      assert.equal(
+        yield* git(["log", "-1", "--format=%s", merge]),
+        "Merge branch 'main' into v26.10",
+      );
+      const again = yield* explorer.releasePlan({ ...fromMain, channel: "beta" });
+      assert.equal(again.tag, "26.10.6-beta");
+      assert.match(again.blocked ?? "", /^v26\.10 already contains main\./);
+
+      // Checked out here, a conflicting merge stays in progress and nothing is tagged.
+      yield* git(["switch", "v26.10"]);
+      yield* write("hello.txt", "release fix\n");
+      yield* git(["commit", "-am", "release fix"]);
+      const fix = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "main"]);
+      yield* write("hello.txt", "main change\n");
+      yield* git(["commit", "-am", "main change"]);
+      const change = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "v26.10"]);
+      const conflicting = yield* explorer.releasePlan({
+        ...fromMain,
+        revision: change,
+        channel: "beta",
+      });
+      assert.deepInclude(conflicting, { base: fix, tag: "26.10.6-beta", unpublished: 1 });
+      assert.isTrue(conflicting.merge?.inWorktree);
+      const stopped = yield* explorer.runAction({
+        ...release,
+        expectedHead: fix,
+        expectedBranch: "v26.10",
+        revision: change,
+        releaseChannel: "beta",
+        releaseBase: fix,
+        tagName: "26.10.6-beta",
+      });
+      assert.deepEqual(stopped.conflictedPaths, ["hello.txt"]);
+      assert.equal(yield* git(["tag", "-l", "26.10.6*"]), "");
+      yield* git(["merge", "--abort"]);
+
+      // A rejected push removes the tag, so releasing again picks the same version.
+      const fromBranch = {
+        ...release,
+        expectedHead: fix,
+        expectedBranch: "v26.10",
+        mergeRef: "refs/heads/v26.10",
+        revision: fix,
+        releaseChannel: "beta" as const,
+        releaseBase: fix,
+        tagName: "26.10.6-beta",
+      };
+      const hook = path.join(remote, "hooks", "pre-receive");
+      yield* fs.writeFileString(hook, "#!/bin/sh\nexit 1\n");
+      yield* fs.chmod(hook, 0o755);
+      assert.isTrue(yield* explorer.runAction(fromBranch).pipe(Effect.isFailure));
+      assert.equal(yield* git(["tag", "-l", "26.10.6*"]), "");
+      yield* fs.remove(hook);
+      yield* explorer.runAction(fromBranch);
+      assert.equal(
+        yield* origin(["rev-parse", "refs/heads/v26.10", "refs/tags/26.10.6-beta"]),
+        `${fix}\n${fix}`,
+      );
+      const published = yield* explorer.releasePlan({
+        ...scope,
+        sourceRef: "refs/heads/v26.10",
+        revision: fix,
+        channel: "production",
+      });
+      assert.deepInclude(published, { tag: "26.10.6", tagCommit: fix });
+      assert.match(published.blocked ?? "", /^v26\.10 is already on origin at this commit\./);
+    }),
+  );
+
   it.effect("keeps conflicted paths unique and renders the working file against ours", () =>
     Effect.gen(function* () {
       const { explorer, git, write, cwd } = yield* fixture;

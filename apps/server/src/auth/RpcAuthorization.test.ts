@@ -102,6 +102,9 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.gitExplorerDeleteBranch)).toBe(
       AuthSourceControlWriteScope,
     );
+    expect(requiredScopeForRpcMethod(WS_METHODS.gitExplorerReleasePlan)).toBe(
+      AuthSourceControlWriteScope,
+    );
   });
 
   it("lets thread readers observe and refresh checkout branches", () => {

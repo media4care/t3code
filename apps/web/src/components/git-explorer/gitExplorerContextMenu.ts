@@ -1,4 +1,5 @@
-import type { ContextMenuItem } from "@t3tools/contracts";
+import { gitExplorerReleaseChannels } from "@t3tools/client-runtime/git-explorer";
+import type { ContextMenuItem, GitExplorerReleaseChannel } from "@t3tools/contracts";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
 import { toastManager } from "../ui/toast";
@@ -28,4 +29,23 @@ export function gitExplorerMenuPosition(event: {
 }) {
   const bounds = event.currentTarget.getBoundingClientRect();
   return { x: event.clientX || bounds.left, y: event.clientY || bounds.bottom };
+}
+
+type ReleaseMenuAction = "release" | `release:${GitExplorerReleaseChannel}`;
+
+export function gitExplorerReleaseMenu(disabled: boolean): ContextMenuItem<ReleaseMenuAction> {
+  return {
+    id: "release",
+    label: "Release",
+    separatorBefore: true,
+    disabled,
+    children: gitExplorerReleaseChannels.map((channel) => ({
+      id: `release:${channel.value}` as const,
+      label: `${channel.label}…`,
+    })),
+  };
+}
+
+export function gitExplorerReleaseMenuChannel(action: string) {
+  return gitExplorerReleaseChannels.find((channel) => action === `release:${channel.value}`)?.value;
 }

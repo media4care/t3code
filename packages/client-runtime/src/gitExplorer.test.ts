@@ -6,6 +6,7 @@ import {
   formatGitExplorerSync,
   gitExplorerBranchRows,
   gitExplorerFolderExpanded,
+  gitExplorerReleaseSource,
   layoutGitGraph,
   gitExplorerEmphasizedRefs,
   gitExplorerUpstreamMergeSummary,
@@ -102,6 +103,32 @@ describe("Git Explorer graph", () => {
     expect(rows[0]?.lines.filter((line) => line.emphasized)).toHaveLength(1);
     expect(rows[1]?.lines.find((line) => line.kind === "through")?.emphasized).toBe(true);
     expect(rows[1]?.lines.find((line) => line.kind === "parent")?.emphasized).toBeUndefined();
+  });
+
+  it("starts a release from a release branch before master, and from master only when a release branch exists", () => {
+    const ref = (name: string, kind: GitExplorerRef["kind"]): GitExplorerRef => ({
+      name,
+      shortName: name.replace(/^refs\/(?:heads|remotes|tags)\//, ""),
+      kind,
+      hash: "a".repeat(40),
+      upstream: null,
+      ahead: null,
+      behind: null,
+      upstreamMissing: false,
+    });
+    const master = ref("refs/heads/master", "local");
+    const originMaster = ref("refs/remotes/origin/master", "remote");
+    const release = ref("refs/remotes/origin/v26.10", "remote");
+    const all = [master, originMaster, release];
+    expect(gitExplorerReleaseSource([originMaster, master], all)).toBe(master);
+    expect(gitExplorerReleaseSource([master, release], all)).toBe(release);
+    expect(gitExplorerReleaseSource([master], [master])).toBeNull();
+    expect(
+      gitExplorerReleaseSource(
+        [ref("refs/remotes/upstream/v26.10", "remote"), ref("refs/tags/v26.10", "tag")],
+        all,
+      ),
+    ).toBeNull();
   });
 
   it("selects main and the highest numeric release branch including remote counterparts, excluding tags", () => {

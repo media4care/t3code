@@ -68,13 +68,12 @@ const GraphCommit = memo(function GraphCommit(props: {
       : commit.upstreamStatus === "upstream-only"
         ? "↓"
         : "";
-  const tags = props.refs.filter((ref) => ref.kind === "tag");
   return (
     <Menu
       shouldOpenOnLongPress
       title={`${commit.hash.slice(0, 7)} · ${commit.subject || "(No commit message)"}`}
-      actions={menu.getActions(commit.hash, tags)}
-      onPressAction={({ nativeEvent }) => menu.onAction(commit.hash, nativeEvent.event)}
+      actions={menu.getActions(commit.hash, props.refs)}
+      onPressAction={({ nativeEvent }) => menu.onAction(commit.hash, nativeEvent.event, props.refs)}
     >
       <Pressable
         accessibilityRole="button"

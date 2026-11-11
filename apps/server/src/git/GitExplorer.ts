@@ -1,5 +1,7 @@
 import {
+  GIT_EXPLORER_RELEASE_REMOTE,
   GitExplorerError,
+  gitExplorerReleaseSourceKind,
   type GitCommandError,
   type GitExplorerRunActionInput,
   type GitExplorerRunActionResult,
@@ -19,6 +21,8 @@ import {
   type GitExplorerPatchInput,
   type GitExplorerPatchResult,
   type GitExplorerRef,
+  type GitExplorerReleasePlanInput,
+  type GitExplorerReleasePlanResult,
   type GitExplorerStash,
   type GitExplorerSubmodule,
   type GitExplorerWorktree,
@@ -36,6 +40,7 @@ import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { latestReleaseBranch, nextReleaseTag } from "./gitExplorerRelease.ts";
 
 export class GitExplorer extends Context.Service<
   GitExplorer,
@@ -52,6 +57,9 @@ export class GitExplorer extends Context.Service<
     readonly runAction: (
       input: GitExplorerRunActionInput,
     ) => Effect.Effect<GitExplorerRunActionResult, GitExplorerError | GitCommandError>;
+    readonly releasePlan: (
+      input: GitExplorerReleasePlanInput,
+    ) => Effect.Effect<GitExplorerReleasePlanResult, GitExplorerError | GitCommandError>;
     readonly history: (
       input: GitExplorerHistoryInput,
     ) => Effect.Effect<GitExplorerHistoryResult, GitExplorerError>;
@@ -1443,9 +1451,8 @@ const make = Effect.gen(function* () {
       ),
     );
   });
-  const runAction: GitExplorer["Service"]["runAction"] = Effect.fn("GitExplorer.runAction")(
-    function* (input) {
-      const { cwd, commonDirectory } = yield* resolve(input);
+  const withMutationLock = <A, E, R>(commonDirectory: string, effect: Effect.Effect<A, E, R>) =>
+    Effect.suspend(() => {
       let lock = mutationLocks.get(commonDirectory);
       if (!lock) {
         lock = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
@@ -1453,539 +1460,7 @@ const make = Effect.gen(function* () {
       }
       lock.users++;
       const activeLock = lock;
-      return yield* Effect.gen(function* () {
-        if (input.action !== "fetch") {
-          const head =
-            (yield* run(cwd, ["rev-parse", "--verify", "HEAD"], {
-              allowNonZero: true,
-            })).stdout.trim() || null;
-          const branch =
-            (yield* run(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-              allowNonZero: true,
-            })).stdout.trim() || null;
-          if (head !== input.expectedHead || branch !== input.expectedBranch)
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "worktree-changed",
-            });
-        }
-        if (input.action === "reset") {
-          if (!input.expectedBranch || !["soft", "mixed", "hard"].includes(input.resetMode ?? ""))
-            return yield* new GitExplorerError({ operation: "reset", reason: "invalid-reset" });
-          if (
-            !input.revision ||
-            !HASH.test(input.revision) ||
-            (yield* run(cwd, ["cat-file", "-t", input.revision], {
-              allowNonZero: true,
-            })).stdout.trim() !== "commit"
-          )
-            return yield* new GitExplorerError({ operation: "reset", reason: "invalid-revision" });
-          yield* git.execute({
-            operation: "GitExplorer.reset",
-            cwd,
-            args: [
-              "-c",
-              "submodule.recurse=false",
-              "reset",
-              `--${input.resetMode}`,
-              input.revision,
-              "--",
-            ],
-            env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
-          });
-          yield* git.invalidateRefs(cwd);
-          return {
-            message: `Reset ${input.expectedBranch} to ${input.revision.slice(0, 12)} (${input.resetMode}).`,
-          };
-        }
-        if (input.action === "merge") {
-          const { expectedBranch, mergeRef, revision } = input;
-          if (!expectedBranch || !revision || !HASH.test(revision))
-            return yield* new GitExplorerError({ operation: "merge", reason: "invalid-revision" });
-          if (mergeRef !== undefined) {
-            if (
-              !/^refs\/(?:heads|remotes)\//.test(mergeRef) ||
-              (yield* run(cwd, ["check-ref-format", mergeRef], { allowNonZero: true })).exitCode !==
-                0
-            )
-              return yield* new GitExplorerError({ operation: "merge", reason: "invalid-branch" });
-            const hash = (yield* run(
-              cwd,
-              ["rev-parse", "--verify", "--quiet", `${mergeRef}^{commit}`],
-              { allowNonZero: true },
-            )).stdout.trim();
-            if (hash !== revision)
-              return yield* new GitExplorerError({ operation: "merge", reason: "branch-changed" });
-          } else if (
-            (yield* run(cwd, ["cat-file", "-t", revision], {
-              allowNonZero: true,
-            })).stdout.trim() !== "commit"
-          )
-            return yield* new GitExplorerError({ operation: "merge", reason: "invalid-revision" });
-          const merging = run(cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], {
-            allowNonZero: true,
-          }).pipe(Effect.map((result) => result.exitCode === 0));
-          if (yield* merging)
-            return yield* new GitExplorerError({ operation: "merge", reason: "merge-in-progress" });
-          const source =
-            mergeRef?.replace(/^refs\/(?:heads|remotes)\//, "") ?? revision.slice(0, 12);
-          const conflictedPaths = yield* git
-            .execute({
-              operation: "GitExplorer.merge",
-              cwd,
-              args: [
-                "-c",
-                "submodule.recurse=false",
-                "merge",
-                "--no-ff",
-                "--no-edit",
-                // Merge the verified tip, worded as Git words a merge by branch name.
-                ...(mergeRef === undefined
-                  ? []
-                  : [
-                      "-m",
-                      `Merge ${mergeRef.startsWith("refs/heads/") ? "branch" : "remote-tracking branch"} '${source}' into ${expectedBranch}`,
-                    ]),
-                revision,
-              ],
-              env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
-              timeoutMs: null,
-            })
-            .pipe(
-              Effect.as(null),
-              Effect.catch((error) =>
-                Effect.gen(function* () {
-                  const paths = (yield* merging)
-                    ? (yield* run(cwd, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout
-                        .split("\0")
-                        .filter(Boolean)
-                    : [];
-                  // A stopped merge without conflicts (a rejecting hook, say) is reported as its Git error.
-                  return paths.length > 0 ? paths : yield* error;
-                }),
-              ),
-              Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
-            );
-          if (conflictedPaths)
-            return {
-              message: `Merging ${source} into ${expectedBranch} stopped with conflicts in ${conflictedPaths.length} ${conflictedPaths.length === 1 ? "file" : "files"}.`,
-              conflictedPaths,
-            };
-          const head = (yield* run(cwd, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
-          return {
-            message:
-              head === input.expectedHead
-                ? `${expectedBranch} already contains ${source}.`
-                : `Merged ${source} into ${expectedBranch}.`,
-          };
-        }
-        if (
-          input.action === "create-tag" ||
-          input.action === "push-tag" ||
-          input.action === "delete-tag"
-        ) {
-          const name = input.tagName;
-          const revision = input.revision;
-          if (
-            !name ||
-            name.startsWith("-") ||
-            !revision ||
-            !HASH.test(revision) ||
-            (yield* run(cwd, ["check-ref-format", `refs/tags/${name}`], { allowNonZero: true }))
-              .exitCode !== 0
-          )
-            return yield* new GitExplorerError({ operation: input.action, reason: "invalid-tag" });
-          const ref = `refs/tags/${name}`;
-          if (input.action === "create-tag") {
-            if (
-              (yield* run(cwd, ["cat-file", "-t", revision], {
-                allowNonZero: true,
-              })).stdout.trim() !== "commit"
-            )
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "invalid-revision",
-              });
-            yield* git.execute({
-              operation: "GitExplorer.create-tag",
-              cwd,
-              args: [
-                "tag",
-                "--no-sign",
-                ...(input.message?.trim() ? ["-a", "-m", input.message.trim()] : []),
-                "--",
-                name,
-                revision,
-              ],
-              env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
-            });
-            yield* git.invalidateRefs(cwd);
-            return { message: `Created tag ${name}.` };
-          }
-          const object = (yield* run(cwd, ["rev-parse", "--verify", ref], {
-            allowNonZero: true,
-          })).stdout.trim();
-          const commit = (yield* run(cwd, ["rev-parse", "--verify", `${ref}^{commit}`], {
-            allowNonZero: true,
-          })).stdout.trim();
-          if (!HASH.test(object) || commit !== revision)
-            return yield* new GitExplorerError({ operation: input.action, reason: "tag-changed" });
-          if (input.action === "delete-tag") {
-            yield* git.execute({
-              operation: "GitExplorer.delete-tag",
-              cwd,
-              args: ["update-ref", "-d", ref, object],
-            });
-            yield* git.invalidateRefs(cwd);
-            return { message: `Deleted local tag ${name}.` };
-          }
-          if (!input.remote || !(yield* readMergeConfig(cwd)).remotes.includes(input.remote))
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "invalid-remote",
-            });
-          yield* git.execute({
-            operation: "GitExplorer.push-tag",
-            cwd,
-            // Publishing a ref to an existing commit has nothing for pre-push checks to verify.
-            args: [
-              "push",
-              "--no-verify",
-              "--no-follow-tags",
-              "--",
-              input.remote,
-              `${object}:${ref}`,
-            ],
-            env: { GIT_TERMINAL_PROMPT: "0" },
-            timeoutMs: null,
-          });
-          return { message: `Pushed tag ${name} to ${input.remote}.` };
-        }
-        if (input.action === "switch" || input.action === "rename") {
-          const name = input.branchName;
-          if (
-            !name?.startsWith("refs/heads/") ||
-            !input.branchHash ||
-            (yield* run(cwd, ["check-ref-format", name], { allowNonZero: true })).exitCode !== 0
-          )
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "invalid-branch",
-            });
-          const hash = (yield* run(cwd, ["show-ref", "--verify", "--hash", name], {
-            allowNonZero: true,
-          })).stdout.trim();
-          if (hash !== input.branchHash)
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "branch-changed",
-            });
-          const shortName = name.slice("refs/heads/".length);
-          const { worktrees } = yield* resolve(input);
-          if (worktrees.some((tree) => tree.branch === shortName && tree.path !== cwd))
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "branch-in-use",
-            });
-          if (input.action === "switch") {
-            yield* git.switchRef({
-              cwd,
-              refName: shortName,
-              ...(input.filePaths ? { discardPaths: input.filePaths } : {}),
-            });
-            return { message: `Switched to ${shortName}.` };
-          }
-          if (
-            !input.newName ||
-            input.newName.startsWith("-") ||
-            (yield* run(cwd, ["check-ref-format", `refs/heads/${input.newName}`], {
-              allowNonZero: true,
-            })).exitCode !== 0
-          )
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "invalid-branch-name",
-            });
-          yield* git.renameBranch({
-            cwd,
-            oldBranch: shortName,
-            newBranch: input.newName,
-            exactName: true,
-          });
-          return { message: `Renamed ${shortName} to ${input.newName}.` };
-        }
-        if (input.action === "push") {
-          const result = yield* git.pushCurrentBranch(cwd, null, { force: input.force === true });
-          return {
-            message:
-              result.status !== "pushed"
-                ? "Already up to date."
-                : input.force
-                  ? "Force pushed successfully."
-                  : "Pushed successfully.",
-          };
-        }
-        if (input.action === "pull") {
-          const result = yield* git.pullCurrentBranch(cwd);
-          return {
-            message: result.status === "pulled" ? "Pulled successfully." : "Already up to date.",
-          };
-        }
-        if (
-          input.action === "apply-stash" ||
-          input.action === "pop-stash" ||
-          input.action === "drop-stash"
-        ) {
-          const stashHash = input.stashHash;
-          if (
-            !stashHash ||
-            !(yield* readStashes(cwd)).stashes.some((stash) => stash.hash === stashHash)
-          )
-            return yield* new GitExplorerError({
-              operation: input.action,
-              reason: "stash-unavailable",
-            });
-          if (input.action !== "drop-stash") {
-            yield* git
-              .execute({
-                operation: `GitExplorer.${input.action}`,
-                cwd,
-                args: [
-                  "stash",
-                  "apply",
-                  ...(input.restoreIndex === false ? [] : ["--index"]),
-                  stashHash,
-                ],
-                timeoutMs: null,
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new GitExplorerError({
-                      operation: input.action,
-                      reason: "stash-apply-failed",
-                      cause,
-                    }),
-                ),
-              );
-          }
-          if (input.action !== "apply-stash") {
-            // Applying can take time. Resolve the current reflog position again before removing it.
-            const current = (yield* readStashes(cwd).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new GitExplorerError({
-                    operation: input.action,
-                    reason:
-                      input.action === "pop-stash" ? "stash-pop-drop-failed" : "stash-drop-failed",
-                    cause,
-                  }),
-              ),
-            )).stashes.find((stash) => stash.hash === stashHash);
-            if (current) {
-              yield* git
-                .execute({
-                  operation: `GitExplorer.${input.action}`,
-                  cwd,
-                  args: ["stash", "drop", current.name],
-                  timeoutMs: null,
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new GitExplorerError({
-                        operation: input.action,
-                        reason:
-                          input.action === "pop-stash"
-                            ? "stash-pop-drop-failed"
-                            : "stash-drop-failed",
-                        cause,
-                      }),
-                  ),
-                );
-            }
-          }
-          yield* git.invalidateRefs(cwd);
-          return {
-            message:
-              input.action === "apply-stash"
-                ? "Stash applied. The saved stash was kept."
-                : input.action === "pop-stash"
-                  ? "Stash applied and removed from the stash list."
-                  : "Stash deleted. Working files were kept.",
-          };
-        }
-        let args: string[];
-        let stdin: string | undefined;
-        switch (input.action) {
-          case "stage":
-          case "unstage": {
-            const review = yield* details({ ...input, revision: null });
-            const selected = input.filePaths?.map((name) =>
-              review.files.find(
-                (file) =>
-                  file.path === name &&
-                  (input.action === "unstage"
-                    ? file.stage === "staged"
-                    : file.stage === "unstaged" || file.stage === "untracked"),
-              ),
-            );
-            if (!selected?.length || selected.some((file) => !file))
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "invalid-path",
-              });
-            const paths = [
-              ...new Set(
-                selected.flatMap((file) =>
-                  file ? [file.path, ...(file.oldPath ? [file.oldPath] : [])] : [],
-                ),
-              ),
-            ];
-            args =
-              input.action === "stage"
-                ? ["add", "-A", "--", ...paths]
-                : input.expectedHead
-                  ? ["reset", "-q", "HEAD", "--", ...paths]
-                  : ["update-index", "--force-remove", "--", ...paths];
-            break;
-          }
-          case "discard": {
-            const filePaths = input.filePaths ?? [];
-            const stages = input.fileStages ?? (input.fileStage ? [input.fileStage] : []);
-            const tokens = input.changeTokens ?? (input.changeToken ? [input.changeToken] : []);
-            if (
-              filePaths.length === 0 ||
-              new Set(filePaths).size !== filePaths.length ||
-              stages.length !== filePaths.length ||
-              tokens.length !== filePaths.length
-            )
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "invalid-path",
-              });
-            const current = yield* Effect.forEach(
-              filePaths,
-              (filePath, index) =>
-                patch({ ...input, revision: null, path: filePath, stage: stages[index]! }),
-              { concurrency: 4 },
-            );
-            if (current.some((file, index) => file.truncated || file.changeToken !== tokens[index]))
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "changes-changed",
-              });
-            const review = yield* details({ ...input, revision: null });
-            if (
-              review.files.some(
-                (file) => file.status === "unmerged" && filePaths.includes(file.path),
-              )
-            )
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "invalid-path",
-              });
-            const untracked = filePaths.filter((_, index) => stages[index] === "untracked");
-            const tracked = filePaths.filter((_, index) => stages[index] === "unstaged");
-            const gitlinks = tracked.length
-              ? (yield* run(cwd, ["ls-files", "--stage", "-z", "--", ...tracked])).stdout
-                  .split("\0")
-                  .filter((record) => record.startsWith("160000 "))
-                  .map((record) => record.slice(record.indexOf("\t") + 1))
-              : [];
-            // Restoring a gitlink checks out the recorded commit inside the submodule, overwriting its edits.
-            for (const gitlink of gitlinks) {
-              const status = yield* run(path.join(cwd, gitlink), ["status", "--porcelain"], {
-                allowNonZero: true,
-              });
-              if (status.exitCode !== 0 || status.stdout.trim())
-                return yield* new GitExplorerError({
-                  operation: input.action,
-                  reason: "submodule-has-changes",
-                });
-            }
-            if (untracked.length && tracked.length)
-              yield* git.execute({
-                operation: "GitExplorer.discard",
-                cwd,
-                args: ["--literal-pathspecs", "clean", "-f", "--", ...untracked],
-                env: { GIT_TERMINAL_PROMPT: "0" },
-                timeoutMs: null,
-              });
-            args = tracked.length
-              ? [
-                  "restore",
-                  ...(gitlinks.length ? ["--recurse-submodules"] : []),
-                  "--worktree",
-                  "--",
-                  ...tracked,
-                ]
-              : ["clean", "-f", "--", ...untracked];
-            break;
-          }
-          case "commit": {
-            if (!input.message?.trim())
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "commit-message-required",
-              });
-            const indexVersion = yield* contentToken(
-              (yield* run(cwd, ["ls-files", "--stage", "-z"])).stdout,
-            );
-            if (indexVersion !== input.indexVersion)
-              return yield* new GitExplorerError({
-                operation: input.action,
-                reason: "changes-changed",
-              });
-            args = ["commit", ...(input.amend ? ["--amend"] : []), "--file", "-"];
-            stdin = input.message.trim();
-            break;
-          }
-          case "fetch":
-            args = ["fetch", "--all"];
-            break;
-          case "stash":
-            args = [
-              "stash",
-              "push",
-              "--include-untracked",
-              "--message",
-              input.message?.trim() || "Git Explorer stash",
-            ];
-            break;
-        }
-        const result = yield* git.execute({
-          operation: `GitExplorer.${input.action}`,
-          cwd,
-          args: [
-            ...(["stage", "unstage", "discard"].includes(input.action)
-              ? ["--literal-pathspecs"]
-              : []),
-            ...args,
-          ],
-          ...(stdin === undefined ? {} : { stdin }),
-          env: { GIT_TERMINAL_PROMPT: "0" },
-          timeoutMs: null,
-          appendTruncationMarker: true,
-        });
-        yield* git.invalidateRefs(cwd);
-        return {
-          message:
-            input.action === "stage"
-              ? "Selected files staged."
-              : input.action === "unstage"
-                ? "Selected files unstaged."
-                : input.action === "discard"
-                  ? "Selected changes discarded."
-                  : input.action === "commit"
-                    ? input.amend
-                      ? "Amended the latest commit."
-                      : "Committed staged changes."
-                    : input.action === "fetch"
-                      ? "Fetched all remotes."
-                      : result.stdout.trim() || "Changes stashed.",
-        };
-      }).pipe(
+      return effect.pipe(
         activeLock.semaphore.withPermits(1),
         Effect.ensuring(
           Effect.sync(() => {
@@ -1994,6 +1469,855 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+    });
+  const mergeInProgress = (cwd: string) =>
+    run(cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], { allowNonZero: true }).pipe(
+      Effect.map((result) => result.exitCode === 0),
+    );
+  // Worded as Git words a merge by branch name, though the verified tip is what gets merged.
+  const mergeMessage = (mergeRef: string, branch: string) =>
+    `Merge ${mergeRef.startsWith("refs/heads/") ? "branch" : "remote-tracking branch"} '${mergeRef.replace(/^refs\/(?:heads|remotes)\//, "")}' into ${branch}`;
+  /** Merges into HEAD with --no-ff; a merge stopped by conflicts stays in progress and returns their paths. */
+  const mergeIntoHead = Effect.fn("GitExplorer.mergeIntoHead")(function* (
+    cwd: string,
+    revision: string,
+    message: string | undefined,
+  ) {
+    return yield* git
+      .execute({
+        operation: "GitExplorer.merge",
+        cwd,
+        args: [
+          "-c",
+          "submodule.recurse=false",
+          "merge",
+          "--no-ff",
+          "--no-edit",
+          ...(message === undefined ? [] : ["-m", message]),
+          revision,
+        ],
+        env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+        timeoutMs: null,
+      })
+      .pipe(
+        Effect.as(null),
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            const paths = (yield* mergeInProgress(cwd))
+              ? (yield* run(cwd, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout
+                  .split("\0")
+                  .filter(Boolean)
+              : [];
+            // A stopped merge without conflicts (a rejecting hook, say) is reported as its Git error.
+            return paths.length > 0 ? paths : yield* error;
+          }),
+        ),
+        Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
+      );
+  });
+  /** Fetches the release refs from origin, then works out what releasing `sourceRef` would do. */
+  const planRelease = Effect.fn("GitExplorer.planRelease")(function* (
+    cwd: string,
+    worktrees: readonly GitExplorerWorktree[],
+    input: Pick<GitExplorerReleasePlanInput, "channel" | "sourceRef" | "revision">,
+  ) {
+    const remote = GIT_EXPLORER_RELEASE_REMOTE;
+    const sourceName = /^refs\/(?:heads|remotes\/origin)\/(.+)$/.exec(input.sourceRef)?.[1];
+    const kind = sourceName ? gitExplorerReleaseSourceKind(sourceName) : null;
+    if (!sourceName || !kind || !HASH.test(input.revision))
+      return yield* new GitExplorerError({ operation: "release", reason: "invalid-branch" });
+    if (!(yield* readMergeConfig(cwd)).remotes.includes(remote))
+      return yield* new GitExplorerError({ operation: "release", reason: "invalid-remote" });
+    const fetch = (refspecs: readonly string[]) =>
+      git.execute({
+        operation: "GitExplorer.releaseFetch",
+        cwd,
+        args: ["fetch", "--no-tags", "--recurse-submodules=no", "--", remote, ...refspecs],
+        env: { GIT_TERMINAL_PROMPT: "0" },
+        timeoutMs: null,
+      });
+    const commitOf = (ref: string) =>
+      run(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+        allowNonZero: true,
+      }).pipe(Effect.map((result) => result.stdout.trim() || null));
+    const isAncestor = (ancestor: string, descendant: string) =>
+      run(cwd, ["merge-base", "--is-ancestor", ancestor, descendant], { allowNonZero: true }).pipe(
+        Effect.map((result) => result.exitCode === 0),
+      );
+    const count = (range: string, ...flags: string[]) =>
+      run(cwd, ["rev-list", "--count", ...flags, range, "--"]).pipe(
+        Effect.map((result) => Number(result.stdout.trim())),
+      );
+
+    // The source is not fetched: the release is of the commit that was reviewed.
+    yield* fetch(["+refs/heads/v*:refs/remotes/origin/v*"]).pipe(
+      Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
+    );
+    if ((yield* commitOf(input.sourceRef)) !== input.revision)
+      return yield* new GitExplorerError({ operation: "release", reason: "branch-changed" });
+    const branchNames = (yield* run(cwd, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/heads/v*",
+      "refs/remotes/origin/v*",
+    ])).stdout
+      .split("\n")
+      .map((ref) => ref.replace(/^refs\/(?:heads|remotes\/origin)\//, ""));
+    const releaseBranch = kind === "release-branch" ? sourceName : latestReleaseBranch(branchNames);
+    if (!releaseBranch)
+      return yield* new GitExplorerError({ operation: "release", reason: "invalid-branch" });
+    const tagPattern = `refs/tags/${releaseBranch.slice(1)}.*`;
+    yield* fetch([`+${tagPattern}:${tagPattern}`]).pipe(
+      Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
+    );
+
+    const local = yield* commitOf(`refs/heads/${releaseBranch}`);
+    const tracked = yield* commitOf(`refs/remotes/${remote}/${releaseBranch}`);
+    const head = (yield* run(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+      allowNonZero: true,
+    })).stdout.trim();
+    const inWorktree = head === releaseBranch;
+    const elsewhere = !inWorktree && worktrees.some((tree) => tree.branch === releaseBranch);
+    const source = input.sourceRef.replace(/^refs\/(?:heads|remotes)\//, "");
+    const onOrigin = `${releaseBranch} is already on origin at this commit. Pushing only a tag doesn't start CI.`;
+    let blocked: string | null = null;
+    let base: string;
+    let merge: GitExplorerReleasePlanResult["merge"] = null;
+    let tagCommit: string | null = null;
+    if (kind === "release-branch") {
+      base = input.revision;
+      tagCommit = input.revision;
+      if (tracked === input.revision)
+        blocked = `${onOrigin} Release from master to merge new work, or push a new commit to ${releaseBranch}.`;
+      else if (tracked && (yield* isAncestor(input.revision, tracked)))
+        blocked = `origin/${releaseBranch} has newer commits. Pull ${releaseBranch} first.`;
+      else if (tracked && !(yield* isAncestor(tracked, input.revision)))
+        blocked = `${releaseBranch} and origin/${releaseBranch} have diverged.`;
+    } else {
+      if (!local && !tracked)
+        return yield* new GitExplorerError({ operation: "release", reason: "invalid-branch" });
+      base = (local ?? tracked)!;
+      if (local && tracked && local !== tracked && !(yield* isAncestor(tracked, local))) {
+        if (!(yield* isAncestor(local, tracked)))
+          blocked = `${releaseBranch} and origin/${releaseBranch} have diverged.`;
+        // A branch nobody has checked out is fast-forwarded as part of the release.
+        else if (inWorktree || elsewhere)
+          blocked = `${releaseBranch} is behind origin/${releaseBranch}. Pull it first.`;
+        else base = tracked;
+      }
+      if ((yield* count(`${base}..${input.revision}`)) === 0) {
+        tagCommit = base;
+        if (!blocked && tracked && (yield* isAncestor(base, tracked)))
+          blocked = `${releaseBranch} already contains ${source}. ${onOrigin}`;
+      } else {
+        const range = `${base}..${input.revision}`;
+        const commits = (yield* run(cwd, [
+          "log",
+          "--no-merges",
+          "-n",
+          "5",
+          "--format=%H%x1f%s",
+          range,
+          "--",
+        ])).stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [hash, subject = ""] = line.split("\x1f");
+            return { hash: hash!, subject };
+          });
+        merge = { commits, total: yield* count(range, "--no-merges"), inWorktree };
+        if (!blocked && elsewhere)
+          blocked = `${releaseBranch} is checked out in another worktree. Release from that worktree.`;
+        else if (!blocked && inWorktree && (yield* mergeInProgress(cwd)))
+          blocked = "A merge is already in progress in this worktree.";
+      }
+    }
+    const tags = (yield* run(cwd, [
+      "for-each-ref",
+      "--format=%(refname:strip=2)%00%(creatordate:iso-strict)",
+      tagPattern,
+    ])).stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\0") as [string, string]);
+    const next = nextReleaseTag(
+      releaseBranch,
+      tags.map(([name]) => name),
+      input.channel,
+    )!;
+    const previousDate = tags.find(([name]) => name === next.previous)?.[1];
+    const plan: GitExplorerReleasePlanResult = {
+      channel: input.channel,
+      source,
+      releaseBranch,
+      base,
+      tag: next.tag,
+      previousRelease:
+        next.previous && previousDate ? { tag: next.previous, createdAt: previousDate } : null,
+      merge,
+      tagCommit,
+      unpublished: tracked ? yield* count(`${tracked}..${tagCommit ?? base}`) : 0,
+      blocked,
+    };
+    return { plan, local };
+  });
+  const runAction: GitExplorer["Service"]["runAction"] = Effect.fn("GitExplorer.runAction")(
+    function* (input) {
+      const { cwd, commonDirectory, worktrees } = yield* resolve(input);
+      return yield* withMutationLock(
+        commonDirectory,
+        Effect.gen(function* () {
+          if (input.action !== "fetch") {
+            const head =
+              (yield* run(cwd, ["rev-parse", "--verify", "HEAD"], {
+                allowNonZero: true,
+              })).stdout.trim() || null;
+            const branch =
+              (yield* run(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+                allowNonZero: true,
+              })).stdout.trim() || null;
+            if (head !== input.expectedHead || branch !== input.expectedBranch)
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "worktree-changed",
+              });
+          }
+          if (input.action === "reset") {
+            if (!input.expectedBranch || !["soft", "mixed", "hard"].includes(input.resetMode ?? ""))
+              return yield* new GitExplorerError({ operation: "reset", reason: "invalid-reset" });
+            if (
+              !input.revision ||
+              !HASH.test(input.revision) ||
+              (yield* run(cwd, ["cat-file", "-t", input.revision], {
+                allowNonZero: true,
+              })).stdout.trim() !== "commit"
+            )
+              return yield* new GitExplorerError({
+                operation: "reset",
+                reason: "invalid-revision",
+              });
+            yield* git.execute({
+              operation: "GitExplorer.reset",
+              cwd,
+              args: [
+                "-c",
+                "submodule.recurse=false",
+                "reset",
+                `--${input.resetMode}`,
+                input.revision,
+                "--",
+              ],
+              env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+            });
+            yield* git.invalidateRefs(cwd);
+            return {
+              message: `Reset ${input.expectedBranch} to ${input.revision.slice(0, 12)} (${input.resetMode}).`,
+            };
+          }
+          if (input.action === "merge") {
+            const { expectedBranch, mergeRef, revision } = input;
+            if (!expectedBranch || !revision || !HASH.test(revision))
+              return yield* new GitExplorerError({
+                operation: "merge",
+                reason: "invalid-revision",
+              });
+            if (mergeRef !== undefined) {
+              if (
+                !/^refs\/(?:heads|remotes)\//.test(mergeRef) ||
+                (yield* run(cwd, ["check-ref-format", mergeRef], { allowNonZero: true }))
+                  .exitCode !== 0
+              )
+                return yield* new GitExplorerError({
+                  operation: "merge",
+                  reason: "invalid-branch",
+                });
+              const hash = (yield* run(
+                cwd,
+                ["rev-parse", "--verify", "--quiet", `${mergeRef}^{commit}`],
+                { allowNonZero: true },
+              )).stdout.trim();
+              if (hash !== revision)
+                return yield* new GitExplorerError({
+                  operation: "merge",
+                  reason: "branch-changed",
+                });
+            } else if (
+              (yield* run(cwd, ["cat-file", "-t", revision], {
+                allowNonZero: true,
+              })).stdout.trim() !== "commit"
+            )
+              return yield* new GitExplorerError({
+                operation: "merge",
+                reason: "invalid-revision",
+              });
+            if (yield* mergeInProgress(cwd))
+              return yield* new GitExplorerError({
+                operation: "merge",
+                reason: "merge-in-progress",
+              });
+            const source =
+              mergeRef?.replace(/^refs\/(?:heads|remotes)\//, "") ?? revision.slice(0, 12);
+            const conflictedPaths = yield* mergeIntoHead(
+              cwd,
+              revision,
+              mergeRef === undefined ? undefined : mergeMessage(mergeRef, expectedBranch),
+            );
+            if (conflictedPaths)
+              return {
+                message: `Merging ${source} into ${expectedBranch} stopped with conflicts in ${conflictedPaths.length} ${conflictedPaths.length === 1 ? "file" : "files"}.`,
+                conflictedPaths,
+              };
+            const head = (yield* run(cwd, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+            return {
+              message:
+                head === input.expectedHead
+                  ? `${expectedBranch} already contains ${source}.`
+                  : `Merged ${source} into ${expectedBranch}.`,
+            };
+          }
+          if (input.action === "release") {
+            const { mergeRef, revision, releaseChannel, tagName, releaseBase } = input;
+            if (!mergeRef || !revision || !releaseChannel || !tagName || !releaseBase)
+              return yield* new GitExplorerError({
+                operation: "release",
+                reason: "invalid-revision",
+              });
+            const { plan, local } = yield* planRelease(cwd, worktrees, {
+              channel: releaseChannel,
+              sourceRef: mergeRef,
+              revision,
+            });
+            if (plan.blocked || plan.tag !== tagName || plan.base !== releaseBase)
+              return yield* new GitExplorerError({
+                operation: "release",
+                reason: "release-changed",
+              });
+            const branch = plan.releaseBranch;
+            let commit = plan.tagCommit;
+            if (plan.merge?.inWorktree) {
+              const conflictedPaths = yield* mergeIntoHead(
+                cwd,
+                revision,
+                mergeMessage(mergeRef, branch),
+              );
+              if (conflictedPaths)
+                return {
+                  message: `Merging ${plan.source} into ${branch} stopped with conflicts. Nothing was tagged or pushed.`,
+                  conflictedPaths,
+                };
+              commit = (yield* run(cwd, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+            } else if (plan.merge) {
+              // The release branch is not checked out, so the merge is built without a worktree.
+              const merged = yield* git.execute({
+                operation: "GitExplorer.releaseMergeTree",
+                cwd,
+                args: ["merge-tree", "--write-tree", "--no-messages", plan.base, revision],
+                allowNonZeroExit: true,
+              });
+              if (merged.exitCode === 1)
+                return yield* new GitExplorerError({
+                  operation: "release",
+                  reason: "release-conflicts",
+                });
+              if (merged.exitCode !== 0)
+                return yield* new GitExplorerError({ operation: "release", reason: "read-failed" });
+              commit = (yield* git.execute({
+                operation: "GitExplorer.releaseMergeCommit",
+                cwd,
+                args: [
+                  "commit-tree",
+                  merged.stdout.split("\n")[0]!,
+                  "-p",
+                  plan.base,
+                  "-p",
+                  revision,
+                  "-m",
+                  mergeMessage(mergeRef, branch),
+                ],
+              })).stdout.trim();
+              if (local)
+                yield* git.execute({
+                  operation: "GitExplorer.releaseUpdateBranch",
+                  cwd,
+                  args: [
+                    "update-ref",
+                    "-m",
+                    "release: merge",
+                    `refs/heads/${branch}`,
+                    commit,
+                    local,
+                  ],
+                });
+            }
+            if (!commit)
+              return yield* new GitExplorerError({
+                operation: "release",
+                reason: "release-changed",
+              });
+            const tagRef = `refs/tags/${plan.tag}`;
+            yield* git.execute({
+              operation: "GitExplorer.releaseTag",
+              cwd,
+              args: ["tag", "--no-sign", "--", plan.tag, commit],
+            });
+            yield* git
+              .execute({
+                operation: "GitExplorer.releasePush",
+                cwd,
+                // Atomic, so CI's build of the branch push always finds the tag.
+                args: [
+                  "push",
+                  "--atomic",
+                  "--no-follow-tags",
+                  "--",
+                  GIT_EXPLORER_RELEASE_REMOTE,
+                  `${commit}:refs/heads/${branch}`,
+                  `${tagRef}:${tagRef}`,
+                ],
+                env: { GIT_TERMINAL_PROMPT: "0" },
+                timeoutMs: null,
+              })
+              .pipe(
+                // Without the tag, releasing again works out the same version.
+                Effect.tapError(() =>
+                  git
+                    .execute({
+                      operation: "GitExplorer.releaseUntag",
+                      cwd,
+                      args: ["update-ref", "-d", tagRef, commit],
+                    })
+                    .pipe(Effect.ignore),
+                ),
+                Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
+              );
+            return { message: `Released ${plan.tag}: pushed ${branch} and the tag to origin.` };
+          }
+          if (
+            input.action === "create-tag" ||
+            input.action === "push-tag" ||
+            input.action === "delete-tag"
+          ) {
+            const name = input.tagName;
+            const revision = input.revision;
+            if (
+              !name ||
+              name.startsWith("-") ||
+              !revision ||
+              !HASH.test(revision) ||
+              (yield* run(cwd, ["check-ref-format", `refs/tags/${name}`], { allowNonZero: true }))
+                .exitCode !== 0
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-tag",
+              });
+            const ref = `refs/tags/${name}`;
+            if (input.action === "create-tag") {
+              if (
+                (yield* run(cwd, ["cat-file", "-t", revision], {
+                  allowNonZero: true,
+                })).stdout.trim() !== "commit"
+              )
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "invalid-revision",
+                });
+              yield* git.execute({
+                operation: "GitExplorer.create-tag",
+                cwd,
+                args: [
+                  "tag",
+                  "--no-sign",
+                  ...(input.message?.trim() ? ["-a", "-m", input.message.trim()] : []),
+                  "--",
+                  name,
+                  revision,
+                ],
+                env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+              });
+              yield* git.invalidateRefs(cwd);
+              return { message: `Created tag ${name}.` };
+            }
+            const object = (yield* run(cwd, ["rev-parse", "--verify", ref], {
+              allowNonZero: true,
+            })).stdout.trim();
+            const commit = (yield* run(cwd, ["rev-parse", "--verify", `${ref}^{commit}`], {
+              allowNonZero: true,
+            })).stdout.trim();
+            if (!HASH.test(object) || commit !== revision)
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "tag-changed",
+              });
+            if (input.action === "delete-tag") {
+              yield* git.execute({
+                operation: "GitExplorer.delete-tag",
+                cwd,
+                args: ["update-ref", "-d", ref, object],
+              });
+              yield* git.invalidateRefs(cwd);
+              return { message: `Deleted local tag ${name}.` };
+            }
+            if (!input.remote || !(yield* readMergeConfig(cwd)).remotes.includes(input.remote))
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-remote",
+              });
+            yield* git.execute({
+              operation: "GitExplorer.push-tag",
+              cwd,
+              // Publishing a ref to an existing commit has nothing for pre-push checks to verify.
+              args: [
+                "push",
+                "--no-verify",
+                "--no-follow-tags",
+                "--",
+                input.remote,
+                `${object}:${ref}`,
+              ],
+              env: { GIT_TERMINAL_PROMPT: "0" },
+              timeoutMs: null,
+            });
+            return { message: `Pushed tag ${name} to ${input.remote}.` };
+          }
+          if (input.action === "switch" || input.action === "rename") {
+            const name = input.branchName;
+            if (
+              !name?.startsWith("refs/heads/") ||
+              !input.branchHash ||
+              (yield* run(cwd, ["check-ref-format", name], { allowNonZero: true })).exitCode !== 0
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-branch",
+              });
+            const hash = (yield* run(cwd, ["show-ref", "--verify", "--hash", name], {
+              allowNonZero: true,
+            })).stdout.trim();
+            if (hash !== input.branchHash)
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "branch-changed",
+              });
+            const shortName = name.slice("refs/heads/".length);
+            const { worktrees } = yield* resolve(input);
+            if (worktrees.some((tree) => tree.branch === shortName && tree.path !== cwd))
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "branch-in-use",
+              });
+            if (input.action === "switch") {
+              yield* git.switchRef({
+                cwd,
+                refName: shortName,
+                ...(input.filePaths ? { discardPaths: input.filePaths } : {}),
+              });
+              return { message: `Switched to ${shortName}.` };
+            }
+            if (
+              !input.newName ||
+              input.newName.startsWith("-") ||
+              (yield* run(cwd, ["check-ref-format", `refs/heads/${input.newName}`], {
+                allowNonZero: true,
+              })).exitCode !== 0
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "invalid-branch-name",
+              });
+            yield* git.renameBranch({
+              cwd,
+              oldBranch: shortName,
+              newBranch: input.newName,
+              exactName: true,
+            });
+            return { message: `Renamed ${shortName} to ${input.newName}.` };
+          }
+          if (input.action === "push") {
+            const result = yield* git.pushCurrentBranch(cwd, null, { force: input.force === true });
+            return {
+              message:
+                result.status !== "pushed"
+                  ? "Already up to date."
+                  : input.force
+                    ? "Force pushed successfully."
+                    : "Pushed successfully.",
+            };
+          }
+          if (input.action === "pull") {
+            const result = yield* git.pullCurrentBranch(cwd);
+            return {
+              message: result.status === "pulled" ? "Pulled successfully." : "Already up to date.",
+            };
+          }
+          if (
+            input.action === "apply-stash" ||
+            input.action === "pop-stash" ||
+            input.action === "drop-stash"
+          ) {
+            const stashHash = input.stashHash;
+            if (
+              !stashHash ||
+              !(yield* readStashes(cwd)).stashes.some((stash) => stash.hash === stashHash)
+            )
+              return yield* new GitExplorerError({
+                operation: input.action,
+                reason: "stash-unavailable",
+              });
+            if (input.action !== "drop-stash") {
+              yield* git
+                .execute({
+                  operation: `GitExplorer.${input.action}`,
+                  cwd,
+                  args: [
+                    "stash",
+                    "apply",
+                    ...(input.restoreIndex === false ? [] : ["--index"]),
+                    stashHash,
+                  ],
+                  timeoutMs: null,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new GitExplorerError({
+                        operation: input.action,
+                        reason: "stash-apply-failed",
+                        cause,
+                      }),
+                  ),
+                );
+            }
+            if (input.action !== "apply-stash") {
+              // Applying can take time. Resolve the current reflog position again before removing it.
+              const current = (yield* readStashes(cwd).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitExplorerError({
+                      operation: input.action,
+                      reason:
+                        input.action === "pop-stash"
+                          ? "stash-pop-drop-failed"
+                          : "stash-drop-failed",
+                      cause,
+                    }),
+                ),
+              )).stashes.find((stash) => stash.hash === stashHash);
+              if (current) {
+                yield* git
+                  .execute({
+                    operation: `GitExplorer.${input.action}`,
+                    cwd,
+                    args: ["stash", "drop", current.name],
+                    timeoutMs: null,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new GitExplorerError({
+                          operation: input.action,
+                          reason:
+                            input.action === "pop-stash"
+                              ? "stash-pop-drop-failed"
+                              : "stash-drop-failed",
+                          cause,
+                        }),
+                    ),
+                  );
+              }
+            }
+            yield* git.invalidateRefs(cwd);
+            return {
+              message:
+                input.action === "apply-stash"
+                  ? "Stash applied. The saved stash was kept."
+                  : input.action === "pop-stash"
+                    ? "Stash applied and removed from the stash list."
+                    : "Stash deleted. Working files were kept.",
+            };
+          }
+          let args: string[];
+          let stdin: string | undefined;
+          switch (input.action) {
+            case "stage":
+            case "unstage": {
+              const review = yield* details({ ...input, revision: null });
+              const selected = input.filePaths?.map((name) =>
+                review.files.find(
+                  (file) =>
+                    file.path === name &&
+                    (input.action === "unstage"
+                      ? file.stage === "staged"
+                      : file.stage === "unstaged" || file.stage === "untracked"),
+                ),
+              );
+              if (!selected?.length || selected.some((file) => !file))
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "invalid-path",
+                });
+              const paths = [
+                ...new Set(
+                  selected.flatMap((file) =>
+                    file ? [file.path, ...(file.oldPath ? [file.oldPath] : [])] : [],
+                  ),
+                ),
+              ];
+              args =
+                input.action === "stage"
+                  ? ["add", "-A", "--", ...paths]
+                  : input.expectedHead
+                    ? ["reset", "-q", "HEAD", "--", ...paths]
+                    : ["update-index", "--force-remove", "--", ...paths];
+              break;
+            }
+            case "discard": {
+              const filePaths = input.filePaths ?? [];
+              const stages = input.fileStages ?? (input.fileStage ? [input.fileStage] : []);
+              const tokens = input.changeTokens ?? (input.changeToken ? [input.changeToken] : []);
+              if (
+                filePaths.length === 0 ||
+                new Set(filePaths).size !== filePaths.length ||
+                stages.length !== filePaths.length ||
+                tokens.length !== filePaths.length
+              )
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "invalid-path",
+                });
+              const current = yield* Effect.forEach(
+                filePaths,
+                (filePath, index) =>
+                  patch({ ...input, revision: null, path: filePath, stage: stages[index]! }),
+                { concurrency: 4 },
+              );
+              if (
+                current.some((file, index) => file.truncated || file.changeToken !== tokens[index])
+              )
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "changes-changed",
+                });
+              const review = yield* details({ ...input, revision: null });
+              if (
+                review.files.some(
+                  (file) => file.status === "unmerged" && filePaths.includes(file.path),
+                )
+              )
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "invalid-path",
+                });
+              const untracked = filePaths.filter((_, index) => stages[index] === "untracked");
+              const tracked = filePaths.filter((_, index) => stages[index] === "unstaged");
+              const gitlinks = tracked.length
+                ? (yield* run(cwd, ["ls-files", "--stage", "-z", "--", ...tracked])).stdout
+                    .split("\0")
+                    .filter((record) => record.startsWith("160000 "))
+                    .map((record) => record.slice(record.indexOf("\t") + 1))
+                : [];
+              // Restoring a gitlink checks out the recorded commit inside the submodule, overwriting its edits.
+              for (const gitlink of gitlinks) {
+                const status = yield* run(path.join(cwd, gitlink), ["status", "--porcelain"], {
+                  allowNonZero: true,
+                });
+                if (status.exitCode !== 0 || status.stdout.trim())
+                  return yield* new GitExplorerError({
+                    operation: input.action,
+                    reason: "submodule-has-changes",
+                  });
+              }
+              if (untracked.length && tracked.length)
+                yield* git.execute({
+                  operation: "GitExplorer.discard",
+                  cwd,
+                  args: ["--literal-pathspecs", "clean", "-f", "--", ...untracked],
+                  env: { GIT_TERMINAL_PROMPT: "0" },
+                  timeoutMs: null,
+                });
+              args = tracked.length
+                ? [
+                    "restore",
+                    ...(gitlinks.length ? ["--recurse-submodules"] : []),
+                    "--worktree",
+                    "--",
+                    ...tracked,
+                  ]
+                : ["clean", "-f", "--", ...untracked];
+              break;
+            }
+            case "commit": {
+              if (!input.message?.trim())
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "commit-message-required",
+                });
+              const indexVersion = yield* contentToken(
+                (yield* run(cwd, ["ls-files", "--stage", "-z"])).stdout,
+              );
+              if (indexVersion !== input.indexVersion)
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "changes-changed",
+                });
+              args = ["commit", ...(input.amend ? ["--amend"] : []), "--file", "-"];
+              stdin = input.message.trim();
+              break;
+            }
+            case "fetch":
+              args = ["fetch", "--all"];
+              break;
+            case "stash":
+              args = [
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                input.message?.trim() || "Git Explorer stash",
+              ];
+              break;
+          }
+          const result = yield* git.execute({
+            operation: `GitExplorer.${input.action}`,
+            cwd,
+            args: [
+              ...(["stage", "unstage", "discard"].includes(input.action)
+                ? ["--literal-pathspecs"]
+                : []),
+              ...args,
+            ],
+            ...(stdin === undefined ? {} : { stdin }),
+            env: { GIT_TERMINAL_PROMPT: "0" },
+            timeoutMs: null,
+            appendTruncationMarker: true,
+          });
+          yield* git.invalidateRefs(cwd);
+          return {
+            message:
+              input.action === "stage"
+                ? "Selected files staged."
+                : input.action === "unstage"
+                  ? "Selected files unstaged."
+                  : input.action === "discard"
+                    ? "Selected changes discarded."
+                    : input.action === "commit"
+                      ? input.amend
+                        ? "Amended the latest commit."
+                        : "Committed staged changes."
+                      : input.action === "fetch"
+                        ? "Fetched all remotes."
+                        : result.stdout.trim() || "Changes stashed.",
+          };
+        }),
+      );
+    },
+  );
+  const releasePlan: GitExplorer["Service"]["releasePlan"] = Effect.fn("GitExplorer.releasePlan")(
+    function* (input) {
+      const { cwd, commonDirectory, worktrees } = yield* resolve(input);
+      const { plan } = yield* withMutationLock(commonDirectory, planRelease(cwd, worktrees, input));
+      return plan;
     },
   );
 
@@ -2343,6 +2667,7 @@ const make = Effect.gen(function* () {
     branchStatuses,
     deleteBranch,
     runAction,
+    releasePlan,
   });
 });
 

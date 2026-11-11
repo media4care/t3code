@@ -63,6 +63,16 @@ A failed push keeps the local tag so you can retry. To push an existing tag or d
 right-click the tag on web and desktop, or select its commit and use **Manage tags** on mobile.
 Deleting a local tag keeps any published copy on the remote.
 
+In repositories that release from `vX.Y` branches, right-click the tip of `master` (or `main`)
+or of a release branch and choose **Release → Beta…** or **Production…**. On mobile, long-press
+the commit or the branch. Production tags the next `X.Y.N`, and beta tags that same version with
+the next `-beta`, `-beta1`, … suffix. Releasing `master` first merges it into the newest release
+branch. The branch and the tag are pushed to `origin` together, and the dialog shows each step
+before anything runs. Release is unavailable when the commit is already on `origin`, because
+pushing only a tag doesn't start CI builds that run on branch pushes. If the merge conflicts
+while the release branch is checked out, an agent resolves it and nothing is tagged. Release
+again afterwards.
+
 Select a tag to review its commit, or a stash to inspect its saved changes against the stash's
 base commit, including saved untracked files. Stashes are listed separately from the graph.
 Reviewing a stash does not apply or remove it.

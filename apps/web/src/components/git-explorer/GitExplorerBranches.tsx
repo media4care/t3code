@@ -7,6 +7,7 @@ import {
   gitExplorerEmphasizedRefs,
   gitExplorerBranchRows,
   gitExplorerFolderExpanded,
+  gitExplorerReleaseSource,
   type GitExplorerBranchTreeRow,
 } from "@t3tools/client-runtime/git-explorer";
 import type {
@@ -15,6 +16,7 @@ import type {
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
   GitExplorerRef,
+  GitExplorerReleaseChannel,
   GitExplorerStash,
   GitExplorerSubmodule,
 } from "@t3tools/contracts";
@@ -58,8 +60,11 @@ import { useGitExplorerQuery } from "./useGitExplorerQuery";
 import {
   copyGitExplorerValue,
   gitExplorerMenuPosition,
+  gitExplorerReleaseMenu,
+  gitExplorerReleaseMenuChannel,
   showGitExplorerContextMenu,
 } from "./gitExplorerContextMenu";
+import type { GitExplorerReleaseRequest } from "./GitExplorerReleaseAction";
 
 import type { GitExplorerStashActionKind } from "./GitExplorerStashAction";
 
@@ -122,6 +127,9 @@ interface BranchActions {
   onBranchAction: (action: "switch" | "rename", reference: GitExplorerRef) => void;
   headBranch: string | null;
   onMerge: (reference: GitExplorerRef) => void;
+  onRelease: (request: GitExplorerReleaseRequest) => void;
+  // Every ref, since releasing master needs a release branch to merge into.
+  refs: readonly GitExplorerRef[];
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
 }
 
@@ -297,8 +305,17 @@ function ReferenceRow({
       !actions.headBranch ||
       actions.deleteUnavailable !== null ||
       actions.pendingBranch !== null;
+    const releasable = actions && gitExplorerReleaseSource([reference], actions.refs) === reference;
     return showGitExplorerContextMenu<
-      "copy-name" | "copy-hash" | "switch" | "rename" | "merge" | "push-tag" | "delete-tag"
+      | "copy-name"
+      | "copy-hash"
+      | "switch"
+      | "rename"
+      | "merge"
+      | "push-tag"
+      | "delete-tag"
+      | "release"
+      | `release:${GitExplorerReleaseChannel}`
     >(
       [
         {
@@ -343,9 +360,22 @@ function ReferenceRow({
               },
             ]
           : []),
+        ...(releasable
+          ? [
+              gitExplorerReleaseMenu(
+                actions.deleteUnavailable !== null || actions.pendingBranch !== null,
+              ),
+            ]
+          : []),
       ],
       position,
       async (action) => {
+        const channel = gitExplorerReleaseMenuChannel(action);
+        if (channel) {
+          if (releasable && !actions.deleteUnavailable && !actions.pendingBranch)
+            actions.onRelease({ channel, reference });
+          return;
+        }
         if (action === "copy-name")
           await copyGitExplorerValue(
             reference.shortName,

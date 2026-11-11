@@ -102,6 +102,11 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
       },
     }),
+    readReleasePlan: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git-explorer:read-release-plan",
+      tag: WS_METHODS.gitExplorerReleasePlan,
+      scheduler: vcsCommandScheduler,
+    }),
     deleteBranch: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:git-explorer:delete-branch",
       tag: WS_METHODS.gitExplorerDeleteBranch,

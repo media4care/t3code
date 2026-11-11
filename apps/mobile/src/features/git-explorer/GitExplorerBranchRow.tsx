@@ -3,6 +3,8 @@ import type { GitExplorerOverviewResult, GitExplorerRef } from "@t3tools/contrac
 import {
   formatGitExplorerSync,
   gitExplorerBranchDeletionBlock,
+  gitExplorerReleaseChannels,
+  gitExplorerReleaseSource,
   gitExplorerUpstreamMergeSummary,
 } from "@t3tools/client-runtime/git-explorer";
 import type { ReactNode } from "react";
@@ -318,6 +320,20 @@ export function GitExplorerBranchRow(props: {
               disabled: current || !props.overview.headBranch || props.actions.mergeUnavailable,
             },
           },
+          ...(gitExplorerReleaseSource([ref], props.overview.refs) === ref
+            ? [
+                {
+                  id: "release",
+                  title: "Release",
+                  image: "shippingbox",
+                  attributes: { disabled: props.actions.releaseUnavailable },
+                  subactions: gitExplorerReleaseChannels.map((channel) => ({
+                    id: `release:${channel.value}`,
+                    title: `${channel.label}…`,
+                  })),
+                },
+              ]
+            : []),
           {
             id: "status",
             title: `Local branch: ${mergeDescription}`,
@@ -350,6 +366,10 @@ export function GitExplorerBranchRow(props: {
           if (nativeEvent.event === "merge")
             props.actions.confirmMerge(props.overview, ref.hash, ref);
           if (nativeEvent.event === "delete") requestDelete();
+          const channel = gitExplorerReleaseChannels.find(
+            (option) => nativeEvent.event === `release:${option.value}`,
+          )?.value;
+          if (channel) props.actions.confirmRelease(props.overview, channel, ref);
         }}
       >
         {row}
