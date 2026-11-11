@@ -384,26 +384,29 @@ const make = Effect.gen(function* () {
             ? "Individual results will appear when this run produces its report."
             : "This run has no per-test report. Run the suite with JUnit reporting to see individual results.",
       };
-    const parsed = yield* Effect.try(() => {
-      const tests: QaTestResults["tests"][number][] = [];
-      const terms = (input.search ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-      let matched = 0;
-      const summary = parseJunitReport(reportXml, (test) => {
-        if (input.status && test.status !== input.status) return;
-        const searchable = `${test.name} ${test.group ?? ""} ${test.file ?? ""}`.toLowerCase();
-        if (!terms.every((term) => searchable.includes(term))) return;
-        if (matched >= offset && tests.length < QA_TEST_PAGE_SIZE) tests.push(test);
-        matched += 1;
-      });
-      return {
-        run,
-        tests,
-        total: summary.tests,
-        matched,
-        offset,
-        nextOffset: offset + tests.length < matched ? offset + tests.length : null,
-        unavailableReason: null,
-      };
+    const parsed = yield* Effect.try({
+      try: () => {
+        const tests: QaTestResults["tests"][number][] = [];
+        const terms = (input.search ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+        let matched = 0;
+        const summary = parseJunitReport(reportXml, (test) => {
+          if (input.status && test.status !== input.status) return;
+          const searchable = `${test.name} ${test.group ?? ""} ${test.file ?? ""}`.toLowerCase();
+          if (!terms.every((term) => searchable.includes(term))) return;
+          if (matched >= offset && tests.length < QA_TEST_PAGE_SIZE) tests.push(test);
+          matched += 1;
+        });
+        return {
+          run,
+          tests,
+          total: summary.tests,
+          matched,
+          offset,
+          nextOffset: offset + tests.length < matched ? offset + tests.length : null,
+          unavailableReason: null,
+        };
+      },
+      catch: () => new QaError({ reason: "report" }),
     }).pipe(Effect.result);
     return parsed._tag === "Success"
       ? parsed.success
@@ -594,7 +597,10 @@ const make = Effect.gen(function* () {
           const info = yield* fs.stat(reportPath);
           if (info.size > MAX_REPORT) return yield* new QaError({ reason: "configuration" });
           const xml = yield* fs.readFileString(reportPath);
-          const counts = yield* Effect.try(() => parseJunitReport(xml));
+          const counts = yield* Effect.try({
+            try: () => parseJunitReport(xml),
+            catch: () => new QaError({ reason: "report" }),
+          });
           return { xml, counts };
         }).pipe(Effect.result);
         if (report._tag === "Success") {

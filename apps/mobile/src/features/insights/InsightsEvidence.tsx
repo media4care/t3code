@@ -3,7 +3,7 @@ import { View } from "react-native";
 import type { EnvironmentId, InsightEvidence } from "@t3tools/contracts";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
 export function InsightsEvidence({
   environmentId,

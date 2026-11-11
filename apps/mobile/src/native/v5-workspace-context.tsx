@@ -1,4 +1,6 @@
-import { createContext, type ReactNode } from "react";
+import { createContext } from "react";
+
+import type { InspectorContent } from "../features/layout/inspector-panes";
 
 export const NativeWorkspaceModeContext = createContext(false);
 /**
@@ -35,6 +37,6 @@ export const NativePrimaryColumnContext = createContext<{
   readonly gitExplorerRoute: { readonly key: string; readonly params: object | undefined } | null;
 } | null>(null);
 export const NativeWorkspaceInspectorContext = createContext<{
-  readonly render: (() => ReactNode) | undefined;
+  readonly content: InspectorContent | undefined;
   readonly visible: boolean;
-}>({ render: undefined, visible: false });
+}>({ content: undefined, visible: false });

@@ -59,10 +59,11 @@ describe("V2 preview upgrade", () => {
         [77, "RepairBooleanSettledOverride"],
         [78, "DropOrchestrationEventCorrelationIndex"],
         [79, "DelegatedRecoveryIndexes"],
-        [80, "Insights"],
-        [81, "QaRuns"],
-        [82, "QaInputs"],
-        [83, "QaAutomation"],
+        [80, "ScheduledTaskThreadMode"],
+        [81, "Insights"],
+        [82, "QaRuns"],
+        [83, "QaInputs"],
+        [84, "QaAutomation"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -165,10 +166,11 @@ describe("V2 preview upgrade", () => {
         [77, "RepairBooleanSettledOverride"],
         [78, "DropOrchestrationEventCorrelationIndex"],
         [79, "DelegatedRecoveryIndexes"],
-        [80, "Insights"],
-        [81, "QaRuns"],
-        [82, "QaInputs"],
-        [83, "QaAutomation"],
+        [80, "ScheduledTaskThreadMode"],
+        [81, "Insights"],
+        [82, "QaRuns"],
+        [83, "QaInputs"],
+        [84, "QaAutomation"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

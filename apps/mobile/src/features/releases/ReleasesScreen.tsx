@@ -51,7 +51,7 @@ import { connectedEnvironmentIdsAtom } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 
 // An open screen asks this often; the server skips the command until the document is stale.
 const STALE_CHECK_MS = 60_000;

@@ -10,7 +10,7 @@ import { QA_TEST_FILTERS, qaTestDuration, type QaTestFilter } from "@t3tools/cli
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { SearchField } from "../../components/ui/SearchField";
-import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 

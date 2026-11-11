@@ -28,8 +28,8 @@ import { serverEnvironment } from "../../state/server";
 import { QaDashboard } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaTestList } from "./QaTestList";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
-import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 export function QaScreen() {

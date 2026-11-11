@@ -3,7 +3,7 @@ import { useAtomSet } from "@effect/atom-react";
 import { useProjects } from "../../state/entities";
 import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 
 type ProjectRef = { readonly environmentId: string; readonly projectId: string };
 

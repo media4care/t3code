@@ -21,7 +21,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { SearchField } from "../../components/ui/SearchField";
-import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
 
 const KINDS = {
   unit: {

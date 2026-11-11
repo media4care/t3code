@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/operations";
 import { createEnvironmentCommand, executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import { CommandId } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -31,9 +32,10 @@ const command = createEnvironmentCommand(connectionAtomRuntime, {
       Stream.runDrain,
     );
     // A timed-out background startup must never approve later when the phone unlocks.
+    const now = yield* Clock.currentTimeMillis;
     yield* Effect.sync(() => {
       input.signal.throwIfAborted();
-      if (Date.now() >= input.expiresAt) throw new Error("Notification reply expired.");
+      if (now >= input.expiresAt) throw new Error("Notification reply expired.");
     });
     const { answer, commandId } = input;
     const common = { commandId, threadId: answer.threadId, requestId: answer.requestId };

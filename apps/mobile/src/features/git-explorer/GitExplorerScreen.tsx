@@ -36,8 +36,8 @@ import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
 import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
 import { useGitExplorerSync } from "./useGitExplorerSync";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
-import { LIST_FILTER_ROW_STYLE, ListFilterMenu } from "../workspace/ListFilterMenu";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { LIST_FILTER_ROW_STYLE, ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
@@ -160,7 +160,6 @@ function GitExplorerHome(props: { readonly workspace: boolean }) {
         {props.workspace && Platform.OS === "ios" ? null : (
           <AppBar
             title="Git Explorer"
-            sidebar={!props.workspace}
             onBack={props.workspace ? undefined : () => navigation.goBack()}
           />
         )}
@@ -394,7 +393,6 @@ function GitExplorerRepository(props: {
           <AppBar
             title="Git Explorer"
             subtitle={subtitle}
-            sidebar={!home.workspace}
             onBack={home.workspace ? undefined : () => navigation.goBack()}
           />
         )

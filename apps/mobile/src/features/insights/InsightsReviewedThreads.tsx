@@ -5,7 +5,7 @@ import { insightTaskMeasures, reviewedInsightThreads } from "@t3tools/client-run
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { useProjects } from "../../state/entities";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
 const INITIAL_ROWS = 8;
 

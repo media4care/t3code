@@ -10,7 +10,7 @@ import { InsightImplementationBadge } from "./InsightImplementationBadge";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { InsightsDecisionBrief } from "./InsightsDecisionBrief";
 import { InsightsFriction } from "./InsightsFriction";
 import { InsightsReviewedThreads } from "./InsightsReviewedThreads";

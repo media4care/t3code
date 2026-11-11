@@ -17,7 +17,7 @@ export function useGitExplorerListNavigation({
   const optionId = (index: number) => `${id}-${index}`;
   const select = (index: number) => {
     // Focus stays on the list so recycling an offscreen row cannot strand the keyboard.
-    listRef.current?.getScrollableNode().focus({ preventScroll: true });
+    listRef.current?.getScrollableNode()?.focus({ preventScroll: true });
     onSelect(index);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

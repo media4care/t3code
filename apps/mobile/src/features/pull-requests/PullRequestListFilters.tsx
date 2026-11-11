@@ -4,7 +4,10 @@ import type { ScopedProjectRef, SidebarProjectGroupingMode } from "@t3tools/cont
 import { Atom } from "effect/reactivity";
 import { Platform, ScrollView } from "react-native";
 import type { MenuProps } from "../../components/ui/Menu.types";
-import { LIST_FILTER_ROW_STYLE as ROW_STYLE, ListFilterMenu } from "../workspace/ListFilterMenu";
+import {
+  LIST_FILTER_ROW_STYLE as ROW_STYLE,
+  ListFilterMenu,
+} from "../layout/workspace/ListFilterMenu";
 import { environmentProjects } from "../../state/projects";
 import { environmentThreadShells } from "../../state/threads";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
@@ -353,6 +356,7 @@ export function PullRequestListFilters(props: {
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
+      style={{ overflow: "visible" }}
       // In the Android sidebar the first pill lines up with the rows' content instead
       // (8dp row margin + 12dp padding).
       contentContainerStyle={

@@ -55,6 +55,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 class QaTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.qa) {}
 
 const projectId = ProjectId.make("qa-test");
+// The fake simlock runs under node, so the service PATH must keep the host PATH.
+const hostEnvironment = process.env;
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeRun = Schema.decodeUnknownEffect(QaRun);
 const decodeSharedRecord = Schema.decodeEffect(
@@ -1506,10 +1508,10 @@ ${body}`;
       yield* setup.fs.writeFileString(setup.path.join(bin, "simlock"), script);
       yield* setup.fs.chmod(setup.path.join(bin, "simlock"), 0o755);
     }
-    const PATH = script === null ? bin : `${bin}${NodePath.delimiter}${process.env.PATH ?? ""}`;
+    const PATH = script === null ? bin : `${bin}${NodePath.delimiter}${hostEnvironment.PATH ?? ""}`;
     const context = yield* Layer.build(
       Layer.fresh(setup.serviceLayer).pipe(
-        Layer.provide(Layer.succeed(HostProcess.Environment, { ...process.env, PATH })),
+        Layer.provide(Layer.succeed(HostProcess.Environment, { ...hostEnvironment, PATH })),
       ),
     );
     return { service: Context.get(context, Qa.QaService), bin };

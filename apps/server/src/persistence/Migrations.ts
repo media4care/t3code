@@ -1,7 +1,7 @@
-import InsightsMigration from "./Migrations/080_Insights.ts";
-import QaRunsMigration from "./Migrations/081_QaRuns.ts";
-import QaInputsMigration from "./Migrations/082_QaInputs.ts";
-import QaAutomationMigration from "./Migrations/083_QaAutomation.ts";
+import InsightsMigration from "./Migrations/081_Insights.ts";
+import QaRunsMigration from "./Migrations/082_QaRuns.ts";
+import QaInputsMigration from "./Migrations/083_QaInputs.ts";
+import QaAutomationMigration from "./Migrations/084_QaAutomation.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -85,8 +85,8 @@ import Migration0075 from "./Migrations/075_SubagentDeliveryState.ts";
 import Migration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 import Migration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
 import Migration0078 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
-
 import Migration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import Migration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -169,10 +169,11 @@ const migrationEntries = [
   [77, "RepairBooleanSettledOverride", Migration0077],
   [78, "DropOrchestrationEventCorrelationIndex", Migration0078],
   [79, "DelegatedRecoveryIndexes", Migration0079],
-  [80, "Insights", InsightsMigration],
-  [81, "QaRuns", QaRunsMigration],
-  [82, "QaInputs", QaInputsMigration],
-  [83, "QaAutomation", QaAutomationMigration],
+  [80, "ScheduledTaskThreadMode", Migration0080],
+  [81, "Insights", InsightsMigration],
+  [82, "QaRuns", QaRunsMigration],
+  [83, "QaInputs", QaInputsMigration],
+  [84, "QaAutomation", QaAutomationMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -223,10 +224,10 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 
 const run = Migrator.make({});
 
-const FIRST_EXPLORER_MIGRATION_ID = 80;
+const FIRST_EXPLORER_MIGRATION_ID = 81;
 const EXPLORER_MIGRATION_NAMES = ["Insights", "QaRuns", "QaInputs", "QaAutomation"];
 
-// Explorer shipped its migrations at 73 and then 77 before upstream claimed those ids; move them
+// Explorer shipped its migrations at 73, then 77, then 80 before upstream claimed those ids; move them
 // past upstream's, keeping their tables and timestamps, and run the upstream migrations they hid.
 const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;

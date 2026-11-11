@@ -3,7 +3,7 @@ import { InsightsChange } from "./InsightsChange";
 import { InsightsDashboard } from "./InsightsDashboard";
 import { InsightsEvidence } from "./InsightsEvidence";
 import { useNowMinuteMs } from "../../lib/clock";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import {
@@ -60,8 +60,8 @@ import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
-import { ListFilterMenu, ListFilterRow } from "../workspace/ListFilterMenu";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
+import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 const VIEWS = [
@@ -136,7 +136,6 @@ export function InsightsScreen({ workspace: inWorkspace }: { readonly workspace?
         <AppBar
           title="Insights"
           subtitle="Improve your agent workflows"
-          sidebar={!inWorkspace}
           onBack={inWorkspace ? undefined : () => navigation.goBack()}
         />
       )}

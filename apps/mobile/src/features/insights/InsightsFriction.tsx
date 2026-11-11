@@ -2,7 +2,7 @@ import { Pressable, View } from "react-native";
 import type { EnvironmentId, InsightRecommendation, InsightsReport } from "@t3tools/contracts";
 import { recurringInsightFriction } from "@t3tools/client-runtime/insights";
 import { AppText as Text } from "../../components/ui/AppText";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
 export function InsightsFriction({
   environmentId,

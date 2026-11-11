@@ -9,10 +9,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import Insights from "./Migrations/080_Insights.ts";
-import QaRuns from "./Migrations/081_QaRuns.ts";
-import QaInputs from "./Migrations/082_QaInputs.ts";
-import QaAutomation from "./Migrations/083_QaAutomation.ts";
+import Insights from "./Migrations/081_Insights.ts";
+import QaRuns from "./Migrations/082_QaRuns.ts";
+import QaInputs from "./Migrations/083_QaInputs.ts";
+import QaAutomation from "./Migrations/084_QaAutomation.ts";
 
 const explorerMigrations = [
   ["Insights", Insights],
@@ -21,7 +21,7 @@ const explorerMigrations = [
   ["QaAutomation", QaAutomation],
 ] as const;
 
-// Explorer builds recorded their migrations right after upstream's 72, and later after its 76.
+// Explorer builds recorded their migrations right after upstream's 72, then after its 76, then after its 79.
 const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, count: number) {
   yield* runMigrations({ toMigrationInclusive: base - 1 });
   yield* Migrator.make({})({
@@ -55,44 +55,45 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
-  it.effect.each([73, 77].flatMap((base) => [1, 2, 3, 4].map((count) => [base, count] as const)))(
-    "preserves Explorer data when upgrading %s-based migrations through %s",
-    ([base, count]) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* seedExplorer(base, count);
-        yield* sql`INSERT INTO insights_reports VALUES ('report', 'thread', 'completed', '2026-10-30', 42, '{"recommendations":["keep"]}')`;
-        yield* sql`UPDATE effect_sql_migrations SET created_at = '2026-10-30 00:00:00' WHERE migration_id >= ${base}`;
-        if (count >= 2)
-          yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, output) VALUES ('run', 'project', 'suite', '2026-10-30', 'passed', '{}', 'saved output')`;
-        if (count >= 3) yield* sql`INSERT INTO qa_run_inputs VALUES ('run', '{"hash":"saved"}')`;
-        if (count >= 4) yield* sql`INSERT INTO qa_schedules VALUES ('project', '{"enabled":true}')`;
-        const tables = [
-          "insights_reports",
-          ...(count >= 2 ? ["qa_runs"] : []),
-          ...(count >= 3 ? ["qa_run_inputs"] : []),
-          ...(count >= 4 ? ["qa_schedules"] : []),
-        ];
-        const before = yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`);
-        yield* runMigrations();
-        assert.deepStrictEqual(yield* history, migrationManifest);
-        assert.deepStrictEqual(
-          yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`),
-          before,
-        );
-        assert.deepStrictEqual(
-          yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 80`,
-          [{ created_at: "2026-10-30 00:00:00" }],
-        );
-        const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
-        assert.ok(columns.some((column) => column.name === "pinned_at"));
-        assert.deepStrictEqual(yield* runMigrations(), []);
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each(
+    [73, 77, 80].flatMap((base) => [1, 2, 3, 4].map((count) => [base, count] as const)),
+  )("preserves Explorer data when upgrading %s-based migrations through %s", ([base, count]) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedExplorer(base, count);
+      yield* sql`INSERT INTO insights_reports VALUES ('report', 'thread', 'completed', '2026-10-30', 42, '{"recommendations":["keep"]}')`;
+      yield* sql`UPDATE effect_sql_migrations SET created_at = '2026-10-30 00:00:00' WHERE migration_id >= ${base}`;
+      if (count >= 2)
+        yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json, output) VALUES ('run', 'project', 'suite', '2026-10-30', 'passed', '{}', 'saved output')`;
+      if (count >= 3) yield* sql`INSERT INTO qa_run_inputs VALUES ('run', '{"hash":"saved"}')`;
+      if (count >= 4) yield* sql`INSERT INTO qa_schedules VALUES ('project', '{"enabled":true}')`;
+      const tables = [
+        "insights_reports",
+        ...(count >= 2 ? ["qa_runs"] : []),
+        ...(count >= 3 ? ["qa_run_inputs"] : []),
+        ...(count >= 4 ? ["qa_schedules"] : []),
+      ];
+      const before = yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`);
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(
+        yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`),
+        before,
+      );
+      assert.deepStrictEqual(
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 81`,
+        [{ created_at: "2026-10-30 00:00:00" }],
+      );
+      const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
+      assert.ok(columns.some((column) => column.name === "pinned_at"));
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect.each([
     [73, "ProjectionProjectsPinArchive"],
     [77, "DelegatedRecoveryIndexes"],
+    [80, "ScheduledTaskThreadMode"],
   ] as const)("rolls back a %s-based Explorer upgrade if %s fails", ([base, failing]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -109,23 +110,23 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([73, 77].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]))(
-    "refuses a %s-based Explorer history with a %s",
-    ([base, problem]) =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* seedExplorer(base, 4);
-        if (problem === "gap") {
-          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${base + 1}`;
-        } else {
-          yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 4}, 'UnknownMigration')`;
-        }
-        const before = yield* history;
-        const exit = yield* Effect.exit(runMigrations());
-        assert.isTrue(Exit.isFailure(exit));
-        assert.include(String(exit), "Cannot upgrade Explorer with unexpected later migrations");
-        assert.deepStrictEqual(yield* history, before);
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each(
+    [73, 77, 80].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+  )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedExplorer(base, 4);
+      if (problem === "gap") {
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${base + 1}`;
+      } else {
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 4}, 'UnknownMigration')`;
+      }
+      const before = yield* history;
+      const exit = yield* Effect.exit(runMigrations());
+      assert.isTrue(Exit.isFailure(exit));
+      assert.include(String(exit), "Cannot upgrade Explorer with unexpected later migrations");
+      assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("refuses to start when another migration took a V2 id", () =>
@@ -168,7 +169,7 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([54, 76, 79])("upgrades a database at exactly %s", (id) =>
+  it.effect.each([54, 76, 79, 80])("upgrades a database at exactly %s", (id) =>
     Effect.gen(function* () {
       yield* runMigrations({ toMigrationInclusive: id });
       assert.deepStrictEqual(
