@@ -5,6 +5,7 @@ import type {
   ReleaseBinary,
   ReleaseGate,
   ReleaseOtaUpdate,
+  ReleaseReviewState,
   ReleaseStatusDocument,
   ReleaseTarget,
   ReleaseVersion,
@@ -28,6 +29,16 @@ export const RELEASE_REACH: Record<
   "no-one": { label: "Reaches no one", tone: "error" },
   superseded: { label: "Store build is newer", tone: "muted" },
   unknown: { label: "Reach unknown", tone: "muted" },
+};
+
+export const RELEASE_REVIEW: Record<
+  ReleaseReviewState,
+  { readonly label: string; readonly tone: ReleaseTone }
+> = {
+  waiting: { label: "Waiting for review", tone: "info" },
+  "in-review": { label: "In review", tone: "info" },
+  approved: { label: "Approved", tone: "ok" },
+  rejected: { label: "Rejected", tone: "error" },
 };
 
 export interface ReleaseOtaLane {

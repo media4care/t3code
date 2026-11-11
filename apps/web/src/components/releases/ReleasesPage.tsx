@@ -44,6 +44,7 @@ import {
   ReleaseServiceTable,
   ReleaseSourceList,
 } from "./ReleaseSections";
+import { rejectedReleaseProjectsAtom } from "./releaseRejections";
 
 // An open page asks this often; the server skips the command until the document is stale.
 const STALE_CHECK_MS = 60_000;
@@ -56,9 +57,15 @@ const projectStatesAtom = releaseProjectStatesAtom(
 export function ReleasesPage() {
   const choices = releaseProjectChoices(useProjects(), useAtomValue(projectStatesAtom));
   const projects = choices.projects;
+  const rejections = useAtomValue(rejectedReleaseProjectsAtom);
   const { environments } = useEnvironments();
   const [selection, setSelection] = useState<string | null>(null);
   const key = (project: (typeof projects)[number]) => `${project.environmentId}:${project.id}`;
+  const rejected = (project: (typeof projects)[number]) =>
+    rejections.some(
+      (rejection) =>
+        rejection.environmentId === project.environmentId && rejection.projectId === project.id,
+    );
   const connected = (environmentId: string) =>
     environments.find((candidate) => candidate.environmentId === environmentId)?.connection
       .phase === "connected";
@@ -98,6 +105,9 @@ export function ReleasesPage() {
                   {item.title} ·{" "}
                   {environments.find((e) => e.environmentId === item.environmentId)?.label ??
                     "Environment"}
+                  {rejected(item) ? (
+                    <span className="text-destructive-foreground"> · Review rejected</span>
+                  ) : null}
                 </SelectItem>
               ))}
             </SelectPopup>

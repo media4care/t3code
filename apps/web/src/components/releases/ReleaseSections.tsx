@@ -1,6 +1,7 @@
 import type {
   ReleaseBinary,
   ReleaseGate,
+  ReleaseReview,
   ReleaseService,
   ReleaseStatusDocument,
   ReleaseStore,
@@ -8,6 +9,7 @@ import type {
 import {
   releaseAge,
   RELEASE_REACH,
+  RELEASE_REVIEW,
   type ReleaseApp,
   type ReleaseAppRow,
   type ReleaseAttention,
@@ -208,6 +210,42 @@ function rolloutText(binary: ReleaseBinary) {
   return `${rollout.state} ${rollout.percent}%`;
 }
 
+function ReviewLabel(props: { review: ReleaseReview }) {
+  const status = RELEASE_REVIEW[props.review.state];
+  if (!props.review.message) return <span className={TONE_TEXT[status.tone]}>{status.label}</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className={TONE_TEXT[status.tone]} />}>
+        {status.label}
+      </TooltipTrigger>
+      <TooltipPopup>{props.review.message}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function ReviewEntry(props: {
+  binary: ReleaseBinary;
+  review: ReleaseReview;
+  version: string;
+  now: number;
+}) {
+  const { binary, review } = props;
+  const age = releaseAge(review.since ?? binary.updatedAt, props.now);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+      <StoreIcon binary={binary} />
+      <ExternalLink href={review.url ?? binary.url}>
+        <Version version={binary.version} selected={props.version} />
+      </ExternalLink>
+      <span className="truncate">
+        {binary.build && binary.build !== binary.version ? `(${binary.build}) ` : ""}
+        <ReviewLabel review={review} />
+        {age ? ` · ${age}` : ""}
+      </span>
+    </div>
+  );
+}
+
 function StoreCell(props: { binary: ReleaseBinary | null; version: string; now: number }) {
   const binary = props.binary;
   if (!binary) return <span className="text-xs text-muted-foreground">{EMPTY}</span>;
@@ -233,6 +271,12 @@ function StoreCell(props: { binary: ReleaseBinary | null; version: string; now: 
           {binary.label}
           {percent !== null ? ` · ${rolloutText(binary)}` : ""}
           {binary.audience !== "public" && binary.build ? ` · ${binary.build}` : ""}
+          {binary.review ? (
+            <>
+              {" · "}
+              <ReviewLabel review={binary.review} />
+            </>
+          ) : null}
           {age ? ` · ${age}` : ""}
         </span>
       </div>
@@ -426,7 +470,19 @@ function AppRow(props: { row: ReleaseAppRow; nested: boolean; version: string; n
         </div>
       </td>
       <td className="max-w-56 px-2 py-1.5">
-        <StoreCell binary={row.store} version={props.version} now={props.now} />
+        <div className="flex flex-col gap-1">
+          {row.store || !row.review?.review ? (
+            <StoreCell binary={row.store} version={props.version} now={props.now} />
+          ) : null}
+          {row.review?.review ? (
+            <ReviewEntry
+              binary={row.review}
+              review={row.review.review}
+              version={props.version}
+              now={props.now}
+            />
+          ) : null}
+        </div>
       </td>
       <td className="max-w-80 px-2 py-1.5">
         <OtaCell row={row} version={props.version} />
