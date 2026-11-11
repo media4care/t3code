@@ -61,6 +61,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeServerLifecycle
   | typeof WS_METHODS.qaSubscribe
   | typeof WS_METHODS.releasesSubscribe
+  | typeof WS_METHODS.releasesRejections
   | typeof WS_METHODS.insightsSubscribe
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.serverGetStorageCleanupReport

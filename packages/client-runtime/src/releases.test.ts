@@ -6,6 +6,8 @@ import {
   type ReleaseStatusDocument,
   type ReleaseTarget,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -14,6 +16,7 @@ import {
   releasePlatformSummaries,
   releasePresence,
   releaseProjectChoices,
+  releaseRejectionsAtom,
   type ReleaseProjectsState,
   type ReleaseReach,
 } from "./releases.ts";
@@ -447,5 +450,26 @@ describe("releaseProjectChoices", () => {
       projects: [t3code, app, old],
       loading: false,
     });
+  });
+});
+
+describe("releaseRejectionsAtom", () => {
+  it("lists rejected projects of answering environments; one that fails or waits adds none", () => {
+    const local = EnvironmentId.make("local");
+    const old = EnvironmentId.make("old");
+    const slow = EnvironmentId.make("slow");
+    const app = ProjectId.make("app");
+    const results = new Map<
+      EnvironmentId,
+      AsyncResult.AsyncResult<ReadonlyArray<ProjectId>, string>
+    >([
+      [local, AsyncResult.success([app])],
+      [old, AsyncResult.failure(Cause.fail("unknown method"))],
+      [slow, AsyncResult.initial(true)],
+    ]);
+    const atom = releaseRejectionsAtom(Atom.make([local, old, slow]), ({ environmentId }) =>
+      Atom.make(results.get(environmentId) ?? AsyncResult.initial()),
+    );
+    expect(AtomRegistry.make().get(atom)).toEqual([{ environmentId: local, projectId: app }]);
   });
 });

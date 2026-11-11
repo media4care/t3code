@@ -107,6 +107,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.releasesSubscribe]: "releases",
   [WS_METHODS.releasesRefresh]: "releases",
   [WS_METHODS.releasesProjects]: "releases",
+  [WS_METHODS.releasesRejections]: "releases",
   [WS_METHODS.insightsSubscribe]: "insights",
   [WS_METHODS.insightsConfigure]: "insights",
   [WS_METHODS.insightsRunNow]: "insights",

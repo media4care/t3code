@@ -120,6 +120,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.qaTests]: AuthTerminalReadScope,
   [WS_METHODS.releasesSubscribe]: AuthTerminalReadScope,
   [WS_METHODS.releasesProjects]: AuthTerminalReadScope,
+  [WS_METHODS.releasesRejections]: AuthTerminalReadScope,
   [WS_METHODS.insightsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.insightsReport]: AuthOrchestrationReadScope,
   [WS_METHODS.insightsRecommendation]: AuthOrchestrationReadScope,

@@ -17,8 +17,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -45,6 +48,7 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (
     readonly releaseEnvironments?: ServerSettings["releaseEnvironments"];
     readonly secrets?: Readonly<Record<string, string>>;
     readonly otherProjects?: Readonly<Record<string, string>>;
+    readonly refreshMinutes?: number;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -52,7 +56,9 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-releases-test-" });
   yield* fs.writeFileString(
     path.join(root, "t3.json"),
-    encodeJson({ releases: { command: "node status.cjs" } }),
+    encodeJson({
+      releases: { command: "node status.cjs", refreshMinutes: options.refreshMinutes },
+    }),
   );
   yield* fs.writeFileString(path.join(root, "status.cjs"), script);
   const row = (id: ProjectId, workspaceRoot: string) => ({
@@ -129,6 +135,52 @@ const finishedAfter = (
   );
 
 const layer = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
+
+/** A release command that prints `output()` without spawning, counting its runs; `hangs` never finish. */
+const printing = (output: () => ReleaseStatusDocument, hangs = (_cwd: string) => false) => {
+  const counter = { runs: 0 };
+  const runner = ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      Effect.suspend(() => (input.cwd && hangs(input.cwd) ? Effect.never : Effect.void)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            counter.runs += 1;
+            return {
+              stdout: encodeJson(output()),
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+        ),
+      ),
+  });
+  return { counter, runner };
+};
+
+const rejectedDocument: ReleaseStatusDocument = {
+  ...document,
+  targets: [
+    {
+      id: "app-ios",
+      group: "app",
+      name: "App",
+      platform: "ios",
+      binaries: [
+        {
+          label: "App Store",
+          audience: "public",
+          version: "1.2.0",
+          review: { state: "rejected" },
+        },
+      ],
+    },
+  ],
+};
 
 describe("ReleasesService", () => {
   it.live("runs the configured command and keeps a fresh document until forced", () =>
@@ -309,6 +361,117 @@ describe("ReleasesService", () => {
         },
       });
       assert.deepStrictEqual(yield* service.projects, [projectId, ProjectId.make("broken")]);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.effect("keeps documents fresh in the background while a client watches rejections", () =>
+    Effect.gen(function* () {
+      let output = rejectedDocument;
+      const { counter, runner } = printing(() => output);
+      const { service } = yield* fixture("", { refreshMinutes: 1 }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+      );
+      const emissions = yield* Queue.unbounded<ReadonlyArray<ProjectId>>();
+      yield* service.rejections.pipe(
+        Stream.runForEach((ids) => Queue.offer(emissions, ids)),
+        Effect.forkScoped,
+      );
+      assert.deepStrictEqual(yield* Queue.take(emissions), []);
+      assert.deepStrictEqual(yield* Queue.take(emissions), [projectId]);
+
+      output = document;
+      yield* TestClock.adjust("1 minute");
+      assert.deepStrictEqual(yield* Queue.take(emissions), []);
+      assert.strictEqual(counter.runs, 2);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.effect("refreshes a project in the background while another project's command hangs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const slow = yield* fs.makeTempDirectoryScoped({ prefix: "t3-releases-slow-" });
+      yield* fs.writeFileString(
+        path.join(slow, "t3.json"),
+        encodeJson({ releases: { command: "node status.cjs", refreshMinutes: 1 } }),
+      );
+      let output = rejectedDocument;
+      const { runner } = printing(
+        () => output,
+        (cwd) => cwd.includes("t3-releases-slow-"),
+      );
+      const { service } = yield* fixture("", {
+        refreshMinutes: 1,
+        otherProjects: { slow },
+      }).pipe(Effect.provideService(ProcessRunner.ProcessRunner, runner));
+      const emissions = yield* Queue.unbounded<ReadonlyArray<ProjectId>>();
+      yield* service.rejections.pipe(
+        Stream.runForEach((ids) => Queue.offer(emissions, ids)),
+        Effect.forkScoped,
+      );
+      assert.deepStrictEqual(yield* Queue.take(emissions), []);
+      assert.deepStrictEqual(yield* Queue.take(emissions), [projectId]);
+
+      output = document;
+      yield* TestClock.adjust("1 minute");
+      assert.deepStrictEqual(yield* Queue.take(emissions), []);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.effect("runs at most two release commands in the background at once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const otherProjects: Record<string, string> = {};
+      for (const id of ["second", "third"]) {
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: `t3-releases-${id}-` });
+        yield* fs.writeFileString(
+          path.join(dir, "t3.json"),
+          encodeJson({ releases: { command: "node status.cjs" } }),
+        );
+        otherProjects[id] = dir;
+      }
+      const started = yield* Queue.unbounded<void>();
+      const gates: Array<Deferred.Deferred<void>> = [];
+      const active = { now: 0, max: 0 };
+      const prints = printing(() => document).runner;
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) =>
+          Effect.gen(function* () {
+            const gate = yield* Deferred.make<void>();
+            gates.push(gate);
+            active.now += 1;
+            active.max = Math.max(active.max, active.now);
+            yield* Queue.offer(started, undefined);
+            yield* Deferred.await(gate);
+            active.now -= 1;
+            return yield* prints.run(input);
+          }),
+      });
+      const { service } = yield* fixture("", { otherProjects }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+      );
+      yield* service.rejections.pipe(Stream.runDrain, Effect.forkScoped);
+      yield* service.subscribe({ projectId: ProjectId.make("third") }).pipe(
+        Stream.filter((snapshot) => snapshot.running),
+        Stream.runHead,
+      );
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(yield* Queue.size(started), 2);
+      yield* Effect.forEach(gates.slice(0, 1), (gate) => Deferred.succeed(gate, undefined));
+      yield* Queue.takeN(started, 3);
+      assert.strictEqual(active.max, 2);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.effect("runs nothing in the background while no client watches rejections", () =>
+    Effect.gen(function* () {
+      const { counter, runner } = printing(() => rejectedDocument);
+      yield* fixture("", { refreshMinutes: 1 }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+      );
+      yield* TestClock.adjust("5 minutes");
+      assert.strictEqual(counter.runs, 0);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

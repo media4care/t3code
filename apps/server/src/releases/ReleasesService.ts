@@ -4,6 +4,7 @@ import {
   ReleasesConfiguration,
   ReleasesError,
   RELEASES_DEFAULT_REFRESH_MINUTES,
+  releaseDocumentRejected,
   type ProjectId,
   type ReleasesProjectInput,
   type ReleasesRefreshInput,
@@ -12,6 +13,7 @@ import {
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -38,6 +41,10 @@ const decodeConfig = Schema.decodeEffect(
 );
 const decodeDocument = Schema.decodeEffect(Schema.fromJsonString(ReleaseStatusDocument));
 const ICON_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+// The smallest refreshMinutes, so a project refreshes within a minute of going stale.
+const SWEEP_INTERVAL_MS = 60_000;
+const BACKGROUND_RUNS = 2;
+const sameProjects = Arr.makeEquivalence<ProjectId>((a, b) => a === b);
 
 interface ProjectState {
   readonly running: boolean;
@@ -67,6 +74,8 @@ export class ReleasesService extends Context.Service<
     /** The snapshot, after running the command first when the document is stale. */
     readonly read: (input: ReleasesProjectInput) => Effect.Effect<ReleasesSnapshot, ReleasesError>;
     readonly projects: Effect.Effect<ReadonlyArray<ProjectId>, ReleasesError>;
+    /** Projects whose document has a rejected store review; watching keeps every document fresh. */
+    readonly rejections: Stream.Stream<ReadonlyArray<ProjectId>, ReleasesError>;
   }
 >()("t3/releases/ReleasesService") {}
 
@@ -82,7 +91,8 @@ const make = Effect.gen(function* () {
   const secrets = yield* SecretResolver.SecretResolver;
   const scope = yield* Effect.scope;
   const updates = yield* PubSub.sliding<ProjectId>(64);
-  // Release status is cheap to rebuild and only matters while someone looks at it.
+  // Release status is cheap to rebuild, and kept fresh in the background only while a client
+  // watches rejections.
   const states = new Map<ProjectId, ProjectState>();
   const stateOf = (projectId: ProjectId) => states.get(projectId) ?? EMPTY;
 
@@ -252,29 +262,98 @@ const make = Effect.gen(function* () {
     });
   });
 
-  return ReleasesService.of({
-    projects: Effect.gen(function* () {
-      const rows = yield* projects
-        .list()
-        .pipe(Effect.mapError((cause) => new ReleasesError({ reason: "workspace", cause })));
-      const configured = yield* Effect.forEach(
-        rows,
-        (row) =>
-          fs.realPath(row.workspaceRoot).pipe(
-            Effect.flatMap((root) =>
-              configuration(root).pipe(
-                Effect.map((config) => config !== null),
-                // A broken section still counts, so its error stays visible on the page.
-                Effect.orElseSucceed(() => true),
-              ),
+  const configuredProjects = Effect.gen(function* () {
+    const rows = yield* projects
+      .list()
+      .pipe(Effect.mapError((cause) => new ReleasesError({ reason: "workspace", cause })));
+    const configured = yield* Effect.forEach(
+      rows,
+      (row) =>
+        fs.realPath(row.workspaceRoot).pipe(
+          Effect.flatMap((root) =>
+            configuration(root).pipe(
+              Effect.map((config) => config !== null),
+              // A broken section still counts, so its error stays visible on the page.
+              Effect.orElseSucceed(() => true),
             ),
-            Effect.orElseSucceed(() => false),
-            Effect.map((configured) => (configured ? [row.projectId] : [])),
           ),
-        { concurrency: 8 },
+          Effect.orElseSucceed(() => false),
+          Effect.map((configured) => (configured ? [row.projectId] : [])),
+        ),
+      { concurrency: 8 },
+    );
+    return configured.flat();
+  }).pipe(Effect.withSpan("ReleasesService.projects"));
+
+  const rejected = Effect.sync(() =>
+    Array.from(states)
+      .flatMap(([projectId, state]) =>
+        state.document && releaseDocumentRejected(state.document) ? [projectId] : [],
+      )
+      .sort(),
+  );
+
+  const backgroundRuns = yield* Semaphore.make(BACKGROUND_RUNS);
+  /** Starts every stale configured project and forgets projects no longer configured. */
+  const sweep = Effect.fn("ReleasesService.sweep")(function* () {
+    const configured = new Set(yield* configuredProjects);
+    for (const projectId of Array.from(states.keys())) {
+      if (configured.has(projectId)) continue;
+      states.delete(projectId);
+      yield* PubSub.publish(updates, projectId);
+    }
+    yield* Effect.forEach(
+      configured,
+      (projectId) =>
+        start({ projectId }).pipe(
+          // Not joined: a slow command must not hold back the other projects' next refresh.
+          Effect.flatMap((pending) => Effect.forkIn(backgroundRuns.withPermits(1)(pending), scope)),
+          Effect.catch((error) =>
+            Effect.logDebug(`Background release refresh skipped ${projectId}: ${error.reason}`),
+          ),
+        ),
+      { discard: true },
+    );
+  });
+
+  // Ticks stay on a one-minute grid from the first watcher, skipping any a slow sweep overran.
+  const sweepLoop = Effect.gen(function* () {
+    let tick = yield* Clock.currentTimeMillis;
+    while (true) {
+      yield* sweep().pipe(
+        Effect.catch((error) =>
+          Effect.logDebug(`Background release sweep failed: ${error.reason}`),
+        ),
       );
-      return configured.flat();
-    }).pipe(Effect.withSpan("ReleasesService.projects")),
+      const now = yield* Clock.currentTimeMillis;
+      tick += SWEEP_INTERVAL_MS * Math.max(1, Math.ceil((now - tick) / SWEEP_INTERVAL_MS));
+      yield* Effect.sleep(tick - now);
+    }
+  });
+  let watchers = 0;
+  let sweeper: Fiber.Fiber<never> | undefined;
+  const watch = Effect.acquireRelease(
+    Effect.suspend(() => {
+      watchers += 1;
+      if (watchers > 1) return Effect.void;
+      return Effect.forkIn(sweepLoop, scope).pipe(
+        Effect.map((fiber) => {
+          sweeper = fiber;
+        }),
+      );
+    }),
+    () =>
+      Effect.suspend(() => {
+        watchers -= 1;
+        const fiber = sweeper;
+        if (watchers > 0 || !fiber) return Effect.void;
+        sweeper = undefined;
+        return Fiber.interrupt(fiber);
+      }),
+  );
+
+  return ReleasesService.of({
+    projects: configuredProjects,
     refresh: Effect.fn("ReleasesService.refresh")(function* (input) {
       yield* Effect.forkIn(yield* start(input), scope);
     }),
@@ -296,6 +375,18 @@ const make = Effect.gen(function* () {
           );
         }),
       ),
+    rejections: Stream.unwrap(
+      Effect.gen(function* () {
+        const queue = yield* PubSub.subscribe(updates);
+        // Read before the first sweep starts, so the first emission is the state a client joined.
+        const initial = yield* rejected;
+        yield* watch;
+        return Stream.concat(
+          Stream.make(initial),
+          Stream.fromSubscription(queue).pipe(Stream.mapEffect(() => rejected)),
+        ).pipe(Stream.changesWith(sameProjects));
+      }),
+    ),
   });
 });
 

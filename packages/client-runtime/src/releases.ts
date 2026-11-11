@@ -153,6 +153,27 @@ export function releaseProjectStatesAtom(
 }
 
 /**
+ * The projects with a rejected store review across connected environments. One that has not
+ * answered yet or cannot, such as an older server or a missing permission, adds none.
+ */
+export function releaseRejectionsAtom(
+  connectedEnvironmentIds: Atom.Atom<ReadonlyArray<EnvironmentId>>,
+  releaseRejections: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: {};
+  }) => Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<ProjectId>, unknown>>,
+) {
+  return Atom.make((get) =>
+    get(connectedEnvironmentIds).flatMap((environmentId) => {
+      const result = get(releaseRejections({ environmentId, input: {} }));
+      return AsyncResult.isSuccess(result)
+        ? result.value.map((projectId) => ({ environmentId, projectId }))
+        : [];
+    }),
+  );
+}
+
+/**
  * The projects the Releases picker offers: those with a release command, then those of connected
  * environments that can't say. With none known, every project, so the setup hint stays reachable.
  */
