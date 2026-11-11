@@ -106,6 +106,18 @@ export const ReleaseStore = Schema.Literals([
 ]);
 export type ReleaseStore = typeof ReleaseStore.Type;
 
+export const ReleaseReviewState = Schema.Literals(["waiting", "in-review", "approved", "rejected"]);
+export type ReleaseReviewState = typeof ReleaseReviewState.Type;
+
+/** The store's review of a submitted binary; `approved` waits for its release. */
+export const ReleaseReview = Schema.Struct({
+  state: ReleaseReviewState,
+  since: Schema.optionalKey(IsoDateTime),
+  message: Schema.optionalKey(Text),
+  url: Schema.optionalKey(Url),
+});
+export type ReleaseReview = typeof ReleaseReview.Type;
+
 export const ReleaseBinary = Schema.Struct({
   /** Where it is installed from, such as "Play production" or "TestFlight". */
   label: ShortText,
@@ -116,6 +128,7 @@ export const ReleaseBinary = Schema.Struct({
   /** The OTA runtime baked into the binary; updates only reach binaries with the same one. */
   runtime: Schema.optionalKey(ShortText),
   rollout: Schema.optionalKey(Schema.Struct({ percent: Percent, state: ReleaseRolloutState })),
+  review: Schema.optionalKey(ReleaseReview),
   updatedAt: Schema.optionalKey(IsoDateTime),
   url: Schema.optionalKey(Url),
 });
@@ -211,6 +224,12 @@ export const ReleaseStatusDocument = Schema.Struct({
   services: Schema.Array(ReleaseService).check(Schema.isMaxLength(100)),
 });
 export type ReleaseStatusDocument = typeof ReleaseStatusDocument.Type;
+
+export function releaseDocumentRejected(document: ReleaseStatusDocument): boolean {
+  return document.targets.some((target) =>
+    target.binaries.some((binary) => binary.review?.state === "rejected"),
+  );
+}
 
 export const ReleasesSnapshot = Schema.Struct({
   configured: Schema.Boolean,
