@@ -312,6 +312,13 @@ export function GitExplorerBranchRow(props: {
             attributes: { disabled: current || props.actions.switchUnavailable !== null },
           },
           {
+            id: "merge",
+            title: `Merge into ${props.overview.headBranch ?? "current branch"}…`,
+            attributes: {
+              disabled: current || !props.overview.headBranch || props.actions.mergeUnavailable,
+            },
+          },
+          {
             id: "status",
             title: `Local branch: ${mergeDescription}`,
             subtitle: statusDetail,
@@ -340,6 +347,8 @@ export function GitExplorerBranchRow(props: {
         ]}
         onPressAction={({ nativeEvent }) => {
           if (nativeEvent.event === "switch") props.actions.confirmSwitch(ref, props.overview);
+          if (nativeEvent.event === "merge")
+            props.actions.confirmMerge(props.overview, ref.hash, ref);
           if (nativeEvent.event === "delete") requestDelete();
         }}
       >

@@ -19,6 +19,7 @@ import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
+import { useGitExplorerMerge } from "./useGitExplorerMerge";
 
 export function describeBranchMerge(status: GitExplorerBranchStatus | null) {
   if (!status) return "Checking merge status";
@@ -63,6 +64,7 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     gitExplorerEnvironment.runAction.permissionAtom(target.environmentId),
   );
   const runSwitch = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
+  const merge = useGitExplorerMerge(params, onRefresh);
   const pending = useRef(false);
   const [busyBranch, setBusyBranch] = useState<string | null>(null);
   const unavailableReason = !connected
@@ -191,5 +193,13 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     });
   };
 
-  return { busyBranch, unavailableReason, confirmDelete, switchUnavailable, confirmSwitch };
+  return {
+    busyBranch,
+    unavailableReason,
+    confirmDelete,
+    switchUnavailable,
+    confirmSwitch,
+    mergeUnavailable: merge.mergeUnavailable || busyBranch !== null,
+    confirmMerge: merge.confirmMerge,
+  };
 }

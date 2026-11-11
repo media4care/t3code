@@ -8,6 +8,7 @@ import type {
   GitExplorerOverviewInput,
   GitExplorerOverviewResult,
   GitExplorerRunActionInput,
+  GitExplorerRunActionResult,
 } from "@t3tools/contracts";
 import { describeGitFailure } from "@t3tools/client-runtime/git-explorer";
 import { useRef, useState } from "react";
@@ -22,12 +23,14 @@ export function useGitExplorerAction({
   overview,
   refresh,
   onBusyChange,
+  onSuccess,
 }: {
   environmentId: EnvironmentId;
   input: GitExplorerOverviewInput;
   overview: GitExplorerOverviewResult;
   refresh: () => void;
   onBusyChange: (busy: boolean) => void;
+  onSuccess?: (result: GitExplorerRunActionResult) => void;
 }) {
   const allowed = useAtomValue(gitExplorerEnvironment.runAction.permissionAtom(environmentId));
   const run = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
@@ -60,7 +63,11 @@ export function useGitExplorerAction({
     })
       .then((result) => {
         if (result._tag === "Success") {
-          toastManager.add({ type: "success", title: result.value.message });
+          toastManager.add({
+            type: result.value.conflictedPaths ? "warning" : "success",
+            title: result.value.message,
+          });
+          onSuccess?.(result.value);
           return true;
         }
         if (!isAtomCommandInterrupted(result)) {

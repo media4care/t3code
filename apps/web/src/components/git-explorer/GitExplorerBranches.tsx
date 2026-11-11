@@ -120,6 +120,8 @@ interface BranchActions {
   onDeleteFolder: (path: string) => void;
   onDeleteBranches: (references: readonly GitExplorerRef[]) => void;
   onBranchAction: (action: "switch" | "rename", reference: GitExplorerRef) => void;
+  headBranch: string | null;
+  onMerge: (reference: GitExplorerRef) => void;
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
 }
 
@@ -288,8 +290,15 @@ function ReferenceRow({
     const canManage = actions && reference.kind === "local";
     const blocked =
       !canManage || actions.deleteUnavailable !== null || actions.pendingBranch !== null;
+    const mergeBlocked =
+      !actions ||
+      reference.kind === "tag" ||
+      current ||
+      !actions.headBranch ||
+      actions.deleteUnavailable !== null ||
+      actions.pendingBranch !== null;
     return showGitExplorerContextMenu<
-      "copy-name" | "copy-hash" | "switch" | "rename" | "push-tag" | "delete-tag"
+      "copy-name" | "copy-hash" | "switch" | "rename" | "merge" | "push-tag" | "delete-tag"
     >(
       [
         {
@@ -324,6 +333,16 @@ function ReferenceRow({
               { id: "rename" as const, label: "Rename branch…", disabled: blocked },
             ]
           : []),
+        ...(actions && reference.kind !== "tag"
+          ? [
+              {
+                id: "merge" as const,
+                label: `Merge into ${actions.headBranch ?? "current branch"}…`,
+                disabled: mergeBlocked,
+                separatorBefore: !canManage,
+              },
+            ]
+          : []),
       ],
       position,
       async (action) => {
@@ -338,6 +357,7 @@ function ReferenceRow({
           tagActions?.unavailable === null
         )
           tagActions.onAction(action === "push-tag" ? "push" : "delete", reference);
+        else if (action === "merge" && !mergeBlocked) actions.onMerge(reference);
         else if (!blocked && (action === "rename" || (action === "switch" && !current)))
           actions.onBranchAction(action, reference);
       },

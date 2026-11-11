@@ -13,7 +13,9 @@ import { gitExplorerEnvironment } from "../../state/git-explorer";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import type { GitExplorerTagRequest } from "./GitExplorerTagDialog";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
+import { useGitExplorerMerge } from "./useGitExplorerMerge";
 
 export type GitExplorerCommitMenu = {
   readonly getActions: (hash: string, tags: readonly GitExplorerRef[]) => MenuAction[];
@@ -35,6 +37,7 @@ export function useGitExplorerCommitMenu(props: {
       environment.connectionState === "connected",
   );
   const run = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
+  const merge = useGitExplorerMerge(props.params, props.onRefresh);
   const inFlight = useRef(false);
   const [resetting, setResetting] = useState(false);
   const [tagRequest, setTagRequest] = useState<GitExplorerTagRequest | null>(null);
@@ -55,6 +58,18 @@ export function useGitExplorerCommitMenu(props: {
         subtitle: mode.description,
         attributes: { destructive: mode.value === "hard" },
       })),
+    },
+    {
+      id: "merge",
+      title: `Merge into ${overview?.headBranch ?? "current branch"}…`,
+      image: PullRequestGlyph.merged,
+      attributes: {
+        disabled:
+          merge.mergeUnavailable ||
+          resetting ||
+          !overview?.headBranch ||
+          hash === overview?.headHash,
+      },
     },
     { id: "tag", title: "Add tag…", image: "tag", attributes: { disabled: unavailable } },
     ...tags.map((tag) => ({
@@ -124,6 +139,8 @@ export function useGitExplorerCommitMenu(props: {
       void Clipboard.setStringAsync(hash).catch(() => undefined);
     } else if (action.startsWith("reset:")) {
       confirmReset(hash, action.slice(6));
+    } else if (action === "merge") {
+      if (overview && !resetting) merge.confirmMerge(overview, hash);
     } else if (unavailable) {
       return;
     } else if (action === "tag") {

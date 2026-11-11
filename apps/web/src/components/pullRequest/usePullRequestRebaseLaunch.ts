@@ -1,14 +1,10 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { CONFLICT_AGENT_MODEL_SELECTION } from "@t3tools/client-runtime/git-explorer";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  type EnvironmentId,
-  type ModelSelection,
-  type ProjectId,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -22,12 +18,6 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { toastManager } from "../ui/toast";
 import { checkoutFailureDescription, readableFailure } from "./pullRequestDetail.logic";
-
-const REBASE_MODEL_SELECTION: ModelSelection = {
-  instanceId: ProviderInstanceId.make("claudeAgent"),
-  model: "claude-opus-5-5",
-  options: [{ id: "effort", value: "high" }],
-};
 
 /**
  * Checks the pull request out in its own worktree and starts a thread there that rebases it,
@@ -85,7 +75,7 @@ export function usePullRequestRebaseLaunch(input: {
       input: {
         threadId,
         message: { messageId: newMessageId(), role: "user", text: task.prompt, attachments: [] },
-        modelSelection: REBASE_MODEL_SELECTION,
+        modelSelection: CONFLICT_AGENT_MODEL_SELECTION,
         titleSeed: task.title,
         runtimeMode,
         interactionMode: "default",
@@ -93,7 +83,7 @@ export function usePullRequestRebaseLaunch(input: {
           createThread: {
             projectId,
             title: task.title,
-            modelSelection: REBASE_MODEL_SELECTION,
+            modelSelection: CONFLICT_AGENT_MODEL_SELECTION,
             runtimeMode,
             interactionMode: "default",
             branch: prepared.value.branch,
