@@ -2371,6 +2371,7 @@ export const layerWsRpc = (
         [WS_METHODS.qaTests]: (input) => qa.tests(input),
         [WS_METHODS.qaSetSchedule]: (input) => qa.setSchedule(input),
         [WS_METHODS.qaSetDevice]: (input) => qa.setDevice(input),
+        [WS_METHODS.qaDeleteCheckout]: (input) => qa.deleteCheckout(input),
         [WS_METHODS.qaImport]: (input) => qa.importReport(input),
         [WS_METHODS.releasesSubscribe]: (input) => releases.subscribe(input),
         [WS_METHODS.releasesRefresh]: (input) => releases.refresh(input),

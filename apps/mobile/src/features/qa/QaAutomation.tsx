@@ -27,12 +27,15 @@ const isScheduleConfiguration = Schema.is(QaScheduleConfiguration);
 export function QaAutomation({
   environmentId,
   projectId,
+  gitRef,
   snapshot,
   connected,
   onView,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  /** The ref QA tests in its own checkout; each ref has its own schedule. */
+  gitRef: string | null;
   snapshot: QaSnapshot;
   connected: boolean;
   onView: (id: string) => void;
@@ -54,9 +57,10 @@ export function QaAutomation({
       return;
     }
     setBusy(true);
-    const result = await save({ environmentId, input: { projectId, configuration } }).finally(() =>
-      setBusy(false),
-    );
+    const result = await save({
+      environmentId,
+      input: { projectId, ...(gitRef ? { ref: gitRef } : {}), configuration },
+    }).finally(() => setBusy(false));
     if (result._tag === "Success") {
       setEditing(false);
       setMessage(null);
@@ -88,8 +92,9 @@ export function QaAutomation({
       <View className="gap-3 rounded-2xl border border-border-subtle bg-card p-4">
         <Text className="text-lg font-t3-semibold">Recurring runs</Text>
         <Text className="text-xs text-foreground-muted">
-          Runs on this environment while its server is online, using the selected branch and current
-          working files.
+          {gitRef
+            ? `Runs on this environment while its server is online. Fetches ${gitRef} first and tests it in QA's own checkout.`
+            : "Runs on this environment while its server is online, using the selected branch and current working files."}
         </Text>
         {schedule ? (
           <>
@@ -121,6 +126,7 @@ export function QaAutomation({
             key={schedule?.revision ?? "new"}
             initial={schedule?.configuration ?? qaDefaultSchedule(snapshot.branch ?? "")}
             suites={snapshot.suites}
+            fixedBranch={gitRef !== null}
             disabled={!connected || !canSchedule || busy}
             onSave={configure}
             onCancel={() => setEditing(false)}
@@ -184,7 +190,7 @@ export function QaAutomation({
                 {run.suite.name} · {qaStatusLabel(run)}
               </Text>
               <Text className="text-xs text-foreground-muted">
-                {qaRunSource(run)} · {run.branch} · {run.commit?.slice(0, 8)}
+                {qaRunSource(run)} · {run.ref ?? run.branch} · {run.commit?.slice(0, 8)}
                 {"\n"}
                 {new Date(run.finishedAt ?? run.startedAt).toLocaleString()}
               </Text>
@@ -239,12 +245,15 @@ export function QaAutomation({
 function ScheduleEditor({
   initial,
   suites,
+  fixedBranch,
   disabled,
   onSave,
   onCancel,
 }: {
   initial: QaScheduleConfiguration;
   suites: QaSnapshot["suites"];
+  /** The schedule belongs to the shown ref, so its branch cannot change. */
+  fixedBranch: boolean;
   disabled: boolean;
   onSave: (value: QaScheduleConfiguration) => Promise<void>;
   onCancel: () => void;
@@ -352,14 +361,16 @@ function ScheduleEditor({
         value={value.timeZone}
         onChange={(timeZone) => setValue({ ...value, timeZone })}
       />
-      <QaField
-        label="Branch"
-        value={value.branch}
-        onChange={(branch) => setValue({ ...value, branch })}
-      />
+      {fixedBranch ? null : (
+        <QaField
+          label="Branch"
+          value={value.branch}
+          onChange={(branch) => setValue({ ...value, branch })}
+        />
+      )}
       <Text className="text-xs text-foreground-muted">
-        Other branches are skipped. Fixed times missed by more than 10 minutes are skipped;
-        intervals resume once.
+        {fixedBranch ? "" : "Other branches are skipped. "}Fixed times missed by more than 10
+        minutes are skipped; intervals resume once.
       </Text>
       <View className="flex-row gap-2">
         <Button

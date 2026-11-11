@@ -20,6 +20,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.qaStart]: AuthTerminalOperateScope,
   [WS_METHODS.qaSetSchedule]: AuthTerminalOperateScope,
   [WS_METHODS.qaSetDevice]: AuthTerminalOperateScope,
+  [WS_METHODS.qaDeleteCheckout]: AuthTerminalOperateScope,
   [WS_METHODS.qaImport]: AuthTerminalOperateScope,
   [WS_METHODS.qaStartAffected]: AuthTerminalOperateScope,
   [WS_METHODS.qaCancelAffected]: AuthTerminalOperateScope,

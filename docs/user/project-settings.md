@@ -64,7 +64,9 @@ A project on several machines must have every machine connected to pin or archiv
 
 ## QA test suites
 
-Open **QA** and choose a project to run its test suites and inspect previous runs.
+Open **QA** and choose a repository to run its test suites and inspect previous runs.
+Clones and worktrees of one remote share their QA, so a repository appears once per
+environment.
 On mobile, QA is available in the navigation overflow; use **Settings → Navigation**
 to move it into the tab bar. Web and desktop also offer **Open QA** in the command
 palette and the configurable `qa.open` keyboard command.
@@ -102,10 +104,21 @@ Switch between component and test-type groups, search the catalog, or select a
 health total to filter suites by their latest result. **Needs attention** includes
 failed, incomplete, cancelled, and interrupted runs; **Never run** means no QA history.
 
-Runs execute on the selected project's environment, in its current checkout,
-including uncommitted changes. Prepare the test database, browser, or installed
-app as your command requires. One suite runs at a time per project; closing QA
-or disconnecting the client does not stop it. Cancel stops the command and its
+For a repository with a remote, QA tests pushed code in its own checkout, separate
+from your projects and agent worktrees. Pick a branch or tag next to the repository;
+it starts on the default branch, and **Other branch or tag…** opens any other, such
+as a release tag. Before each run QA fetches the remote, moves its checkout of that
+ref to the latest commit and runs the ref's `t3.json` setup script (the one marked
+`runOnWorktreeCreate`) when the commit changed. Each run records the exact commit it
+tested. Results, freshness and history are kept per ref, and **Compare branches and
+tags** shows each suite's latest result on every ref side by side. QA keeps one
+checkout per ref so dependencies are reused; **Delete checkout** removes one and
+keeps its history, and checkouts unused for 14 days are removed automatically.
+
+A project without a remote is tested in its current checkout, including uncommitted
+changes. Prepare the test database, browser, or installed app as your command
+requires. One suite runs at a time per repository; closing QA or disconnecting the
+client does not stop it. Cancel stops the command and its
 child processes. A server interruption is recorded separately from test failure.
 
 When several machines share your projects, pick the one that runs QA. On each other
@@ -158,8 +171,8 @@ inputs that changed during a run cannot be treated as verified. Older runs witho
 input evidence and inputs that cannot be read show unknown freshness.
 
 To share results with other developers, add `"sharedResults": true` beside `suites`
-in `qa`. Completed manual and scheduled runs then save a small summary per suite in
-`t3.qa-results/`. Cancellation, server interruption and launch failures stay in local
+in `qa`. Completed manual and scheduled runs in a project's own checkout then save a
+small summary per suite in `t3.qa-results/`; runs in QA's checkout do not. Cancellation, server interruption and launch failures stay in local
 history and leave the last shared result intact. Commit these files with the tested changes and share the commit
 through your normal Git workflow. QA reads them after another developer pulls;
 **Repository result** identifies a summary from the checkout. Refresh QA after pulling.
@@ -260,12 +273,14 @@ eligible for a rerun. Recurring schedules are not configured by this action.
 
 To run tests regularly, use **Recurring runs → Add schedule** in QA. Choose all
 suites, affected suites, or one suite, then set an interval or a time and weekdays.
-Fixed times use the time zone you enter. The schedule belongs to the selected
-project on that environment and stays there across restarts; it is not copied
-with the repository. The environment's server must be running.
+Fixed times use the time zone you enter. Each branch or tag has its own schedule,
+so you can run `main` and a release tag nightly. Schedules stay on that environment
+across restarts; they are not copied with the repository. The environment's server
+must be running.
 
-Schedules use the current working files only when the checkout is on the branch
-you selected. They do not pull or switch branches. Manual work takes priority;
+A schedule fetches its ref and tests it in QA's checkout. For a project without a
+remote, it uses the current working files only when the checkout is on the branch
+you selected, and does not pull or switch branches. Manual work takes priority;
 scheduled work waits while a suite is active. Fixed-time runs missed by more than
 10 minutes are recorded as missed, and interval schedules resume once without
 replaying a backlog. Next and last execution are shown alongside the result.
