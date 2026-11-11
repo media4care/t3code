@@ -303,7 +303,8 @@ iOS and Android build, the store version and rollout, the OTA update on top of
 it, and the tester build, plus approvals waiting in its pipeline and the version
 deployed to each environment. Pick a release to highlight it and see which
 builds carry it. The project list shows only projects with a `releases` command,
-and opens on the first; with none set up, it shows every project. On mobile,
+marks those with a rejected store review, and opens on the first; with none set
+up, it shows every project. On mobile,
 Releases is in the navigation overflow. Web and desktop also offer **Open Releases** in the command
 palette and the configurable `releases.open` keyboard command.
 
@@ -323,7 +324,10 @@ The document format is `ReleaseStatusDocument` in
 [`packages/contracts/src/releases.ts`](../../packages/contracts/src/releases.ts):
 releases per environment, pipeline gates, targets with their store binaries and
 OTA channel, and deployed services. Set a binary's `store` (`app-store`,
-`testflight`, `play`, `firebase` or `direct`) to show its store icon. The Apps
+`testflight`, `play`, `firebase` or `direct`) to show its store icon. Set its
+`review` (`waiting`, `in-review`, `approved` or `rejected`, with an optional
+`message`) when the store reports one; Google Play does not expose review state
+to its API. The Apps
 table nests targets by `group` (the app), `name` (the build) and an optional
 `variant`, such as managed or in-app, with a row per platform. List each app in
 `groups` with its store `name` and an `icon`: a small PNG, JPEG or WebP copy of
@@ -338,13 +342,21 @@ Google Play keys) under **Settings → Projects → Releases**, or with
 **Credentials** on the Releases page. They apply to every checkout of the same
 repository on that environment, and tokens can come from a secret provider.
 Saving or removing one runs the command again and shows what each source
-reported under the fields, so a rejected token shows up there. While
-Releases is open, T3 Code runs it again once the last result is older than
-`refreshMinutes` (default 15); **Refresh** runs it immediately. If a run fails,
+reported under the fields, so a rejected token shows up there. While any
+client is connected, T3 Code runs it in the background once the last result is
+older than `refreshMinutes` (default 15), whether or not Releases is open;
+**Refresh** runs it immediately. If a run fails,
 the page keeps the last status and shows the error.
 
-**Waiting on you** lists pipeline approvals, failed steps, builds left on an
-internal or testing track, paused store rollouts, and live OTA updates of the
+**Apps** shows a build that is waiting for review, in review, approved or
+rejected under the live store build. A rejected review is listed in **Waiting on
+you** with the store's message and puts a badge on **Releases** in the sidebar
+and on the mobile tab bar (on **Settings** while Releases is in the overflow).
+The badge clears when the store state changes, such as after you resubmit.
+
+**Waiting on you** lists pipeline approvals, failed steps, rejected store
+reviews, builds left on an internal or testing track, paused store rollouts, and
+live OTA updates of the
 current prod release whose runtime no public build has. An OTA update only reaches installs of a binary with the
 same runtime, so an update live at 100% on a runtime that is only in TestFlight
 reaches testers only. Each live OTA update says who it reaches: **Reaches
