@@ -1402,6 +1402,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:releases:live",
       tag: WS_METHODS.releasesSubscribe,
     }),
+    releaseRejections: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:releases:rejections",
+      tag: WS_METHODS.releasesRejections,
+    }),
     refreshReleases: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:releases:refresh",
       tag: WS_METHODS.releasesRefresh,

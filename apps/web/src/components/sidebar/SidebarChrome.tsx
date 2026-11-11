@@ -44,6 +44,7 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { rejectedReleaseProjectsAtom } from "../releases/releaseRejections";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -207,10 +208,14 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarUtilityItem({
   icon,
   label,
+  tooltip = label,
+  badge = false,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
+  tooltip?: string;
+  badge?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -223,8 +228,14 @@ function SidebarUtilityItem({
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="top">{tooltip}</TooltipPopup>
       </Tooltip>
+      {badge ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-destructive ring-2 ring-sidebar"
+        />
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -238,6 +249,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const releasesRejected = useAtomValue(rejectedReleaseProjectsAtom).length > 0;
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -309,7 +321,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
           <SidebarUtilityItem
             icon={<PackageIcon />}
-            label="Releases"
+            label={releasesRejected ? "Releases, review rejected" : "Releases"}
+            tooltip={releasesRejected ? "Releases · review rejected" : "Releases"}
+            badge={releasesRejected}
             onClick={() => {
               closeMobileSidebar();
               void navigate({ to: "/releases" });

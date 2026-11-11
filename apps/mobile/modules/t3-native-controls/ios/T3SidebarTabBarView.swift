@@ -14,8 +14,12 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   private let tabBar = WorkspaceTabBar()
   private let composeItem = UITabBarItem(title: nil, image: nil, tag: -1)
   private var itemsByTab: [String: UITabBarItem] = [:]
+  private var labelsByTab: [String: String] = [:]
   var tabs = ["threads", "pullRequests", "gitExplorer", "insights", "usage", "qa", "releases", "settings"] {
     didSet { if tabs != oldValue { updateItems() } }
+  }
+  var badgedTabs: [String] = [] {
+    didSet { if badgedTabs != oldValue { updateBadges() } }
   }
   var selectedTab = "threads" { didSet { updateSelection() } }
   var selectedColor: UIColor = .systemBlue { didSet { tabBar.tintColor = selectedColor } }
@@ -62,6 +66,15 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
       item.accessibilityIdentifier = "workspace-tab-\(tab)"
       if tab == "threads" { item.selectedImage = tabIcon(UIImage(systemName: "text.bubble.fill")) }
       itemsByTab[tab] = item
+      labelsByTab[tab] = label
+    }
+  }
+
+  private func updateBadges() {
+    for (tab, item) in itemsByTab {
+      let badged = badgedTabs.contains(tab)
+      item.badgeValue = badged ? "!" : nil
+      item.accessibilityLabel = badged ? "\(labelsByTab[tab] ?? tab), review rejected" : labelsByTab[tab]
     }
   }
 

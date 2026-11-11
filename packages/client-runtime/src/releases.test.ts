@@ -1,10 +1,13 @@
 import {
   EnvironmentId,
   ProjectId,
+  releaseDocumentRejected,
   type ReleaseBinary,
   type ReleaseStatusDocument,
   type ReleaseTarget,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -13,6 +16,7 @@ import {
   releasePlatformSummaries,
   releasePresence,
   releaseProjectChoices,
+  releaseRejectionsAtom,
   type ReleaseProjectsState,
   type ReleaseReach,
 } from "./releases.ts";
@@ -166,6 +170,37 @@ describe("releaseApps", () => {
     ]);
   });
 
+  it("shows the public submission under review and flags a rejected one", () => {
+    const draft = store({ version: "2.1.0", rollout: { percent: 0, state: "draft" } });
+    const rows = (review: NonNullable<ReleaseBinary["review"]>) =>
+      releaseApps(
+        statusDocument([target([store({ review: { state: "approved" } }), { ...draft, review }])]),
+      )[0]?.rows[0];
+    expect(rows({ state: "in-review" })).toMatchObject({
+      review: { version: "2.1.0" },
+      tone: "ok",
+    });
+    expect(rows({ state: "rejected" })?.tone).toBe("error");
+    const waiting = { ...draft, version: "2.0.9", review: { state: "waiting" as const } };
+    const rejected = { ...draft, review: { state: "rejected" as const } };
+    expect(
+      releaseApps(statusDocument([target([store(), waiting, rejected])]))[0]?.rows[0]?.review,
+    ).toBe(rejected);
+    const submitted = store({ version: "2.1.0", runtime: "next", rollout: undefined });
+    const row = (review: NonNullable<ReleaseBinary["review"]>) =>
+      releaseApps(
+        statusDocument([
+          target([{ ...submitted, review }, store({ runtime: "old" })], live("next")),
+        ]),
+      )[0]?.rows[0];
+    expect(row({ state: "in-review" })).toMatchObject({
+      store: { version: "2.0.0" },
+      review: { version: "2.1.0" },
+      ota: [{ reach: "testers" }],
+    });
+    expect(row({ state: "rejected" })?.store?.version).toBe("2.0.0");
+  });
+
   it("nests rows by app, build and variant, iOS first, under the app's store name", () => {
     const build = (id: string, name: string, platform: "ios" | "android", variant?: string) => ({
       ...target([store({ version: id })]),
@@ -305,10 +340,37 @@ describe("releaseAttention", () => {
       },
       {
         ...target([
-          store({ label: "App Store · pending release", rollout: { percent: 0, state: "draft" } }),
+          store({
+            label: "App Store · pending release",
+            rollout: { percent: 0, state: "draft" },
+            review: { state: "approved" },
+          }),
         ]),
         id: "pending",
         name: "Web",
+      },
+      {
+        ...target([
+          store({
+            label: "App Store",
+            rollout: { percent: 0, state: "draft" },
+            review: { state: "in-review" },
+          }),
+        ]),
+        id: "reviewing",
+        name: "Reviewing",
+      },
+      {
+        ...target([
+          store({
+            label: "App Store",
+            version: "2.1.0",
+            rollout: { percent: 0, state: "draft" },
+            review: { state: "rejected", message: "Guideline 2.1" },
+          }),
+        ]),
+        id: "rejected",
+        name: "Rejected",
       },
     ],
     services: [
@@ -331,6 +393,7 @@ describe("releaseAttention", () => {
     expect(releaseAttention(document).map((item) => [item.tone, item.title])).toEqual([
       ["error", "OTA update reaches testers only"],
       ["error", "OTA update reaches testers only"],
+      ["error", "Store review rejected"],
       ["warning", "Approve 25%"],
       ["warning", "Build uploaded, not promoted"],
       ["warning", "Approve Backend deploy"],
@@ -338,6 +401,10 @@ describe("releaseAttention", () => {
       ["info", "Store release pending"],
       ["info", "Could not read Google Play"],
     ]);
+    expect(releaseAttention(document).find((item) => item.id.startsWith("review:"))?.detail).toBe(
+      "B2B · Rejected · 2.1.0 on App Store: Guideline 2.1",
+    );
+    expect(releaseDocumentRejected(document)).toBe(true);
   });
 });
 
@@ -383,5 +450,26 @@ describe("releaseProjectChoices", () => {
       projects: [t3code, app, old],
       loading: false,
     });
+  });
+});
+
+describe("releaseRejectionsAtom", () => {
+  it("lists rejected projects of answering environments; one that fails or waits adds none", () => {
+    const local = EnvironmentId.make("local");
+    const old = EnvironmentId.make("old");
+    const slow = EnvironmentId.make("slow");
+    const app = ProjectId.make("app");
+    const results = new Map<
+      EnvironmentId,
+      AsyncResult.AsyncResult<ReadonlyArray<ProjectId>, string>
+    >([
+      [local, AsyncResult.success([app])],
+      [old, AsyncResult.failure(Cause.fail("unknown method"))],
+      [slow, AsyncResult.initial(true)],
+    ]);
+    const atom = releaseRejectionsAtom(Atom.make([local, old, slow]), ({ environmentId }) =>
+      Atom.make(results.get(environmentId) ?? AsyncResult.initial()),
+    );
+    expect(AtomRegistry.make().get(atom)).toEqual([{ environmentId: local, projectId: app }]);
   });
 });

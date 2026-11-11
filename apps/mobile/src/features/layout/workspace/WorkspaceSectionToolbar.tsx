@@ -1,4 +1,8 @@
-import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
+import {
+  enabledNavigationTabs,
+  selectedNavigationTab,
+  visibleNavigationTabs,
+} from "./navigation-tab-order";
 import { Toolbar } from "../../../components/ui/Toolbar";
 import { useControlTheme } from "../../../components/ui/useControlTheme";
 import { useDeviceType } from "../../../native/native-layout-metrics";
@@ -11,8 +15,15 @@ import {
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 import { useCompactWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
+import {
+  RELEASES_REJECTED_BADGE,
+  rejectedTabLabel,
+  releasesBadgeTab,
+  useReleasesRejected,
+} from "../../releases/releaseRejections";
 
 const PULL_REQUEST_ICON = require("../../../../assets/icons/pull-request.png");
+const REJECTED_BADGE = { value: RELEASES_REJECTED_BADGE };
 
 export function WorkspaceTabToolbarButtons() {
   const order = useNavigationTabOrder();
@@ -26,13 +37,22 @@ export function WorkspaceTabToolbarButtons() {
     hidden,
   );
   const selectedTint = useControlTheme().colors["--color-primary"];
+  const tabs = visibleNavigationTabs(order, hidden);
+  const badgedTab = useReleasesRejected()
+    ? releasesBadgeTab(tabs, enabledNavigationTabs(order, hidden))
+    : null;
   return (
     <>
-      {visibleNavigationTabs(order, hidden).map((tab) => (
+      {tabs.map((tab) => (
         <Toolbar.Button
           key={tab}
           identifier={`workspace-tab-${tab}`}
-          accessibilityLabel={WORKSPACE_TAB_LABELS[tab]}
+          accessibilityLabel={
+            badgedTab === tab
+              ? rejectedTabLabel(WORKSPACE_TAB_LABELS[tab])
+              : WORKSPACE_TAB_LABELS[tab]
+          }
+          badge={badgedTab === tab ? REJECTED_BADGE : undefined}
           icon={
             tab === "pullRequests"
               ? { type: "image", source: PULL_REQUEST_ICON, tinted: true }
@@ -44,7 +64,8 @@ export function WorkspaceTabToolbarButtons() {
       ))}
       <Toolbar.Button
         identifier="workspace-tab-settings"
-        accessibilityLabel="Settings"
+        accessibilityLabel={badgedTab === "settings" ? rejectedTabLabel("Settings") : "Settings"}
+        badge={badgedTab === "settings" ? REJECTED_BADGE : undefined}
         icon="gearshape"
         tintColor={selected === "settings" ? selectedTint : undefined}
         onPress={() => selectTab("settings")}

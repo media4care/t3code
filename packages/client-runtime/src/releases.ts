@@ -5,6 +5,7 @@ import type {
   ReleaseBinary,
   ReleaseGate,
   ReleaseOtaUpdate,
+  ReleaseReviewState,
   ReleaseStatusDocument,
   ReleaseTarget,
   ReleaseVersion,
@@ -28,6 +29,16 @@ export const RELEASE_REACH: Record<
   "no-one": { label: "Reaches no one", tone: "error" },
   superseded: { label: "Store build is newer", tone: "muted" },
   unknown: { label: "Reach unknown", tone: "muted" },
+};
+
+export const RELEASE_REVIEW: Record<
+  ReleaseReviewState,
+  { readonly label: string; readonly tone: ReleaseTone }
+> = {
+  waiting: { label: "Waiting for review", tone: "info" },
+  "in-review": { label: "In review", tone: "info" },
+  approved: { label: "Approved", tone: "ok" },
+  rejected: { label: "Rejected", tone: "error" },
 };
 
 export interface ReleaseOtaLane {
@@ -54,6 +65,8 @@ export interface ReleaseAppRow {
   /** What the public installs from the store. */
   readonly store: ReleaseBinary | null;
   readonly testers: ReleaseBinary | null;
+  /** A public submission the store is reviewing or has reviewed, which the live store build does not show. */
+  readonly review: ReleaseBinary | null;
   readonly ota: ReadonlyArray<ReleaseOtaLane>;
   readonly hasOtaChannel: boolean;
   readonly tone: ReleaseTone;
@@ -109,6 +122,14 @@ export interface ReleaseAttention {
 }
 
 const AUDIENCE_RANK: Record<ReleaseAudience, number> = { public: 0, testers: 1, internal: 2 };
+const REVIEW_RANK: Record<ReleaseReviewState, number> = {
+  rejected: 0,
+  "in-review": 1,
+  waiting: 2,
+  approved: 3,
+};
+const reviewRank = (binary: ReleaseBinary) =>
+  binary.review ? REVIEW_RANK[binary.review.state] : Object.keys(REVIEW_RANK).length;
 const TONE_RANK: Record<ReleaseTone, number> = { error: 0, warning: 1, info: 2, muted: 3, ok: 4 };
 const PLATFORMS = ["ios", "android", "web"] as const;
 const PLATFORM_LABEL = { ios: "iOS", android: "Android", web: "Web" } as const;
@@ -139,6 +160,27 @@ export function releaseProjectStatesAtom(
           return [environmentId, state] as const;
         }),
       ),
+  );
+}
+
+/**
+ * The projects with a rejected store review across connected environments. One that has not
+ * answered yet or cannot, such as an older server or a missing permission, adds none.
+ */
+export function releaseRejectionsAtom(
+  connectedEnvironmentIds: Atom.Atom<ReadonlyArray<EnvironmentId>>,
+  releaseRejections: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: {};
+  }) => Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<ProjectId>, unknown>>,
+) {
+  return Atom.make((get) =>
+    get(connectedEnvironmentIds).flatMap((environmentId) => {
+      const result = get(releaseRejections({ environmentId, input: {} }));
+      return AsyncResult.isSuccess(result)
+        ? result.value.map((projectId) => ({ environmentId, projectId }))
+        : [];
+    }),
   );
 }
 
@@ -182,8 +224,11 @@ export function defaultReleaseVersion(document: ReleaseStatusDocument): string |
   );
 }
 
+// A submission the store has not approved is not installable, whatever its rollout says.
 const installable = (binary: ReleaseBinary) =>
-  binary.audience === "public" && binary.rollout?.state !== "draft";
+  binary.audience === "public" &&
+  binary.rollout?.state !== "draft" &&
+  (!binary.review || binary.review.state === "approved");
 
 /** Compares the leading numeric parts of two versions; null when either has none. */
 function compareVersions(a: string, b: string): number | null {
@@ -248,6 +293,7 @@ function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
   );
   if (store?.rollout?.state === "paused" || store?.rollout?.state === "halted")
     tones.push("warning");
+  if (binaries.some((binary) => binary.review?.state === "rejected")) tones.push("error");
   return {
     key: targets.map((target) => target.id).join("+"),
     name: first.name,
@@ -257,6 +303,10 @@ function appRow(targets: ReadonlyArray<ReleaseTarget>): ReleaseAppRow {
     binaries,
     store,
     testers: binaries.find((binary) => binary.audience !== "public") ?? null,
+    review:
+      binaries
+        .filter((binary) => binary.review && binary.audience === "public" && binary !== store)
+        .sort((a, b) => reviewRank(a) - reviewRank(b))[0] ?? null,
     ota,
     hasOtaChannel: targets.some((target) => target.ota),
     tone: tones.sort((a, b) => TONE_RANK[a] - TONE_RANK[b])[0] ?? "ok",
@@ -386,7 +436,7 @@ export function releaseGates(
   return document.gates.filter((gate) => gate.version === version);
 }
 
-/** Work that waits on a person, newest releases only, most severe first. */
+/** Work that waits on a person, newest releases and rejected reviews only, most severe first. */
 export function releaseAttention(
   document: ReleaseStatusDocument,
   apps: ReadonlyArray<ReleaseApp> = releaseApps(document),
@@ -438,22 +488,39 @@ export function releaseAttention(
             since: lane.live.publishedAt,
             url: lane.live.url,
           });
+      const where = (binary: ReleaseBinary) =>
+        `${name} · ${binary.version}${binary.build ? ` (${binary.build})` : ""} on ${binary.label}`;
       const storeItem = (binary: ReleaseBinary, tone: ReleaseAttention["tone"], title: string) =>
         items.push({
           id: `store:${row.key}:${title}`,
           tone,
           title,
-          detail: `${name} · ${binary.version}${binary.build ? ` (${binary.build})` : ""} on ${binary.label}`,
+          detail: where(binary),
           source: "Stores",
           since: binary.updatedAt,
           url: binary.url,
         });
+      for (const binary of row.binaries) {
+        const review = binary.review;
+        if (review?.state === "rejected")
+          items.push({
+            id: `review:${row.key}:${binary.label}:${binary.version}`,
+            tone: "error",
+            title: `${binary.audience === "public" ? "Store" : "Tester"} review rejected`,
+            detail: `${where(binary)}${review.message ? `: ${review.message}` : ""}`,
+            source: "Stores",
+            since: review.since ?? binary.updatedAt,
+            url: review.url ?? binary.url,
+          });
+      }
       const own = row.binaries
         .filter((binary) => binary.version === prod)
         .sort((a, b) => AUDIENCE_RANK[a.audience] - AUDIENCE_RANK[b.audience])[0];
       if (own && own.audience !== "public")
         storeItem(own, "warning", "Build uploaded, not promoted");
-      if (own?.rollout?.state === "draft") storeItem(own, "info", "Store release pending");
+      // While the store reviews the build, the store holds it, not the user.
+      if (own?.rollout?.state === "draft" && (!own.review || own.review.state === "approved"))
+        storeItem(own, "info", "Store release pending");
       const rollout = row.store?.rollout?.state;
       if (row.store && (rollout === "paused" || rollout === "halted"))
         storeItem(row.store, "info", `Store rollout ${rollout}`);

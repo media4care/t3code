@@ -1,14 +1,25 @@
-import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
+import {
+  enabledNavigationTabs,
+  selectedNavigationTab,
+  visibleNavigationTabs,
+} from "./navigation-tab-order";
 import { requireNativeView } from "expo";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
 import { useControlTheme } from "../../../components/ui/useControlTheme";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
+import {
+  badgedTabs,
+  releasesBadgeTab,
+  useReleasesRejected,
+} from "../../releases/releaseRejections";
 
 const NativeSidebarTabBar = requireNativeView<
   ViewProps & {
     tabs: readonly string[];
+    /** Tabs drawn with a review-rejected badge. */
+    badgedTabs: readonly string[];
     selectedTab: string;
     selectedColor: string;
     appearance: string;
@@ -26,14 +37,18 @@ export function WorkspaceSidebarTabs(props: {
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const tabs = [...visibleNavigationTabs(order, hidden), "settings" as const];
+  const badgedTab = useReleasesRejected()
+    ? releasesBadgeTab(tabs, enabledNavigationTabs(order, hidden))
+    : null;
   const selectTab = useSelectWorkspaceTab();
   const { colors, colorScheme } = useControlTheme();
   // UIKit loses accessible names when updating nil-titled items in place.
-  const tabBarKey = tabs.join(":");
+  const tabBarKey = `${tabs.join(":")}:${badgedTab}`;
   return (
     <NativeSidebarTabBar
       key={tabBarKey}
       tabs={tabs}
+      badgedTabs={badgedTabs(badgedTab)}
       selectedTab={selectedNavigationTab(
         order,
         workspace.state.selectedTab,

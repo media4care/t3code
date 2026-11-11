@@ -2375,6 +2375,7 @@ export const layerWsRpc = (
         [WS_METHODS.releasesSubscribe]: (input) => releases.subscribe(input),
         [WS_METHODS.releasesRefresh]: (input) => releases.refresh(input),
         [WS_METHODS.releasesProjects]: () => releases.projects,
+        [WS_METHODS.releasesRejections]: () => releases.rejections,
         [WS_METHODS.insightsSubscribe]: () => insights.subscribe(),
         [WS_METHODS.insightsConfigure]: (input) => insights.configure(input),
         [WS_METHODS.insightsRunNow]: () => insights.runNow(),

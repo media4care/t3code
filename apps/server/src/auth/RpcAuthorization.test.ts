@@ -60,6 +60,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.qaTests,
       WS_METHODS.releasesSubscribe,
       WS_METHODS.releasesProjects,
+      WS_METHODS.releasesRejections,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalReadScope);
     }
