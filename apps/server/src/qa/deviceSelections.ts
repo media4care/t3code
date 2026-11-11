@@ -1,4 +1,4 @@
-import { ProjectId, QaDeviceSelection, QaError, type QaSetDeviceInput } from "@t3tools/contracts";
+import { QaDeviceSelection, QaError, type QaSetDeviceInput } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -11,17 +11,18 @@ import * as ServerConfig from "../config.ts";
 // Choices belong to this environment's devices, so they stay out of the repository.
 const SELECTIONS_FILE_NAME = "qa-devices.json";
 
+// Version 1 kept choices per project; they are dropped now that QA belongs to repositories.
 const SelectionsFile = Schema.fromJsonString(
   Schema.Struct({
-    version: Schema.Literal(1),
-    selections: Schema.Array(Schema.Struct({ projectId: ProjectId, ...QaDeviceSelection.fields })),
+    version: Schema.Literal(2),
+    selections: Schema.Array(Schema.Struct({ scope: Schema.String, ...QaDeviceSelection.fields })),
   }),
 );
 const decodeSelections = Schema.decodeEffect(SelectionsFile);
 const encodeSelections = Schema.encodeEffect(SelectionsFile);
 type StoredSelection = (typeof SelectionsFile.Type)["selections"][number];
 
-/** The devices people chose for suites, per project. */
+/** The devices people chose for suites, per QA scope (a repository, or a project without one). */
 export const makeDeviceSelections = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -38,23 +39,21 @@ export const makeDeviceSelections = Effect.gen(function* () {
     ),
   );
 
-  const forProject = (projectId: ProjectId): ReadonlyArray<QaDeviceSelection> =>
-    selections.flatMap(({ projectId: owner, ...selection }) =>
-      owner === projectId ? [selection] : [],
-    );
+  const forScope = (scope: string): ReadonlyArray<QaDeviceSelection> =>
+    selections.flatMap(({ scope: owner, ...selection }) => (owner === scope ? [selection] : []));
 
   const set = Effect.fn("QaService.setDeviceSelection")(
-    function* ({ projectId, suiteId, requirement, deviceKey }: QaSetDeviceInput) {
+    function* (scope: string, { suiteId, requirement, deviceKey }: QaSetDeviceInput) {
       const next = [
         ...selections.filter(
           (selection) =>
-            selection.projectId !== projectId ||
+            selection.scope !== scope ||
             selection.suiteId !== suiteId ||
             selection.requirement !== requirement,
         ),
-        ...(deviceKey ? [{ projectId, suiteId, requirement, deviceKey }] : []),
+        ...(deviceKey ? [{ scope, suiteId, requirement, deviceKey }] : []),
       ];
-      const contents = yield* encodeSelections({ version: 1, selections: next });
+      const contents = yield* encodeSelections({ version: 2, selections: next });
       yield* writeFileStringAtomically({ filePath, contents }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
@@ -65,5 +64,5 @@ export const makeDeviceSelections = Effect.gen(function* () {
     Effect.mapError((cause) => new QaError({ reason: "storage", cause })),
   );
 
-  return { forProject, set };
+  return { forScope, set };
 });

@@ -1352,7 +1352,15 @@ export function createServerEnvironmentAtoms<R, E>(
         Atom.make(
           (get) =>
             AsyncResult.getOrElse(
-              get(qaLive({ environmentId, input: { projectId: input.projectId } })),
+              get(
+                qaLive({
+                  environmentId,
+                  input: {
+                    projectId: input.projectId,
+                    ...(input.ref ? { ref: input.ref } : {}),
+                  },
+                }),
+              ),
               () => null,
             )?.recentRuns.find((run) => run.id === input.runId)?.status,
         ),
@@ -1365,7 +1373,15 @@ export function createServerEnvironmentAtoms<R, E>(
         Atom.make(
           (get) =>
             AsyncResult.getOrElse(
-              get(qaLive({ environmentId, input: { projectId: input.projectId } })),
+              get(
+                qaLive({
+                  environmentId,
+                  input: {
+                    projectId: input.projectId,
+                    ...(input.ref ? { ref: input.ref } : {}),
+                  },
+                }),
+              ),
               () => null,
             )?.recentRuns.find((run) => run.id === input.runId)?.status,
         ),
@@ -1385,6 +1401,10 @@ export function createServerEnvironmentAtoms<R, E>(
     setQaDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:device",
       tag: WS_METHODS.qaSetDevice,
+    }),
+    deleteQaCheckout: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:qa:delete-checkout",
+      tag: WS_METHODS.qaDeleteCheckout,
     }),
     importQaReport: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:qa:import",

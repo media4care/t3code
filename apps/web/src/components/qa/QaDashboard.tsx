@@ -16,7 +16,13 @@ import {
   SquareIcon,
   TerminalIcon,
 } from "lucide-react";
-import type { DevicePoolEntry, QaDeviceSelection, QaRun, QaTestKind } from "@t3tools/contracts";
+import type {
+  DevicePoolEntry,
+  QaDeviceSelection,
+  QaRun,
+  QaRunStatus,
+  QaTestKind,
+} from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
   qaRunDuration,
@@ -158,28 +164,38 @@ export function QaSummary({
 }
 
 export function QaRunBadge({ run }: { run: QaRun | undefined }) {
-  const Icon = !run
+  return <QaStatusBadge status={run?.status} label={qaStatusLabel(run)} />;
+}
+
+export function QaStatusBadge({
+  status,
+  label,
+}: {
+  status: QaRunStatus | undefined;
+  label: string;
+}) {
+  const Icon = !status
     ? CircleDashedIcon
-    : run.status === "passed"
+    : status === "passed"
       ? CheckCircle2Icon
-      : run.status === "running"
+      : status === "running"
         ? ActivityIcon
         : AlertCircleIcon;
   return (
     <Badge
       variant={
-        !run
+        !status
           ? "secondary"
-          : run.status === "passed"
+          : status === "passed"
             ? "success"
-            : run.status === "failed"
+            : status === "failed"
               ? "error"
-              : run.status === "running"
+              : status === "running"
                 ? "info"
                 : "warning"
       }
     >
-      <Icon /> {qaStatusLabel(run)}
+      <Icon /> {label}
     </Badge>
   );
 }

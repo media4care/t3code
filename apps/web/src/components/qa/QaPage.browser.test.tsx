@@ -53,6 +53,7 @@ vi.mock("../../state/server", async () => {
       startAffectedQa: { kind: "startAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelAffectedQa: { kind: "cancelAffected", permissionAtom: () => Atom.make(state.allowed) },
       cancelQa: { kind: "cancel" },
+      deleteQaCheckout: { kind: "deleteCheckout", permissionAtom: () => Atom.make(state.allowed) },
       setQaDevice: { kind: "setDevice", permissionAtom: () => Atom.make(state.allowed) },
     },
   };
@@ -248,7 +249,7 @@ it("keeps runs scoped to the selected project and environment when switching the
   await expect
     .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .toBeVisible();
-  await screen.getByRole("combobox", { name: "QA project" }).click();
+  await screen.getByRole("combobox", { name: "QA repository" }).click();
   await page.getByRole("option", { name: "Beta · Remote" }).click();
   await expect.element(screen.getByRole("heading", { name: "beta tests" })).toBeVisible();
   await expect
@@ -303,7 +304,7 @@ it("manages recurring runs and imports CI results in the selected environment", 
     </SidebarProvider>,
     { router: "/qa" },
   );
-  await screen.getByRole("combobox", { name: "QA project" }).click();
+  await screen.getByRole("combobox", { name: "QA repository" }).click();
   await page.getByRole("option", { name: "Beta · Remote" }).click();
   await screen.getByRole("button", { name: "Add schedule", exact: true }).click();
   await screen.getByRole("combobox", { name: "Scheduled suites" }).click();

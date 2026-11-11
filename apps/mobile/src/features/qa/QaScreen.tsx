@@ -7,6 +7,7 @@ import {
   QA_CONFIGURATION_EXAMPLE,
   qaDashboard,
   qaProjects,
+  qaRepositories,
   qaStatusLabel,
   qaRunDuration,
   qaRunSummary,
@@ -27,6 +28,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import { QaDashboard } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
+import { QaCheckoutLine, QaRefComparison, QaRefMenu } from "./QaRefs";
 import { QaTestList } from "./QaTestList";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
@@ -35,24 +37,27 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 export function QaScreen() {
   const allProjects = useProjects();
   const { environments } = useEnvironments();
-  const projects = qaProjects(allProjects, environments);
+  const repositories = qaRepositories(qaProjects(allProjects, environments));
   const [selection, setSelection] = useState<string | null>(null);
-  const projectKey = (project: (typeof projects)[number]) =>
-    `${project.environmentId}:${project.id}`;
-  const project = projects.find((item) => projectKey(item) === selection) ?? projects[0];
+  const repository = repositories.find((item) => item.key === selection) ?? repositories[0];
+  const project = repository?.project;
   const environment = environments.find((item) => item.environmentId === project?.environmentId);
-  const multipleEnvironments = new Set(projects.map((item) => item.environmentId)).size > 1;
-  const projectPicker = project ? (
+  const multipleEnvironments =
+    new Set(repositories.map((item) => item.project.environmentId)).size > 1;
+  const projectPicker = repository ? (
     <ListFilterMenu
-      label={project.title}
-      accessibilityLabel="QA project"
-      actions={projects.map((item) => ({
-        id: projectKey(item),
+      label={repository.title}
+      accessibilityLabel="QA repository"
+      actions={repositories.map((item) => ({
+        id: item.key,
         title: item.title,
         ...(multipleEnvironments
-          ? { subtitle: environments.find((e) => e.environmentId === item.environmentId)?.label }
+          ? {
+              subtitle: environments.find((e) => e.environmentId === item.project.environmentId)
+                ?.label,
+            }
           : {}),
-        state: projectKey(item) === projectKey(project) ? ("on" as const) : ("off" as const),
+        state: item.key === repository.key ? ("on" as const) : ("off" as const),
       }))}
       onSelect={setSelection}
     />
@@ -62,9 +67,9 @@ export function QaScreen() {
       {/* The workspace header belongs to the tab bar's toolbar on iOS. */}
       {Platform.OS === "ios" ? null : <AppBar title="QA" subtitle="Test suites and run history" />}
       <ScreenContent>
-        {project ? (
+        {repository && project ? (
           <ProjectQa
-            key={projectKey(project)}
+            key={repository.key}
             environmentId={project.environmentId}
             projectId={project.id}
             projectPicker={projectPicker}
@@ -94,8 +99,13 @@ function ProjectQa({
   connected: boolean;
   environmentLabel: string;
 }) {
-  const query = useEnvironmentQuery(
-    serverEnvironment.qaLive({ environmentId, input: { projectId } }),
+  // Null shows the default branch, which only the server knows.
+  const [ref, setRef] = useState<string | null>(null);
+  const scope = { projectId, ...(ref ? { ref } : {}) };
+  const query = useEnvironmentQuery(serverEnvironment.qaLive({ environmentId, input: scope }));
+  const deleteCheckout = useAtomCommand(serverEnvironment.deleteQaCheckout);
+  const canDeleteCheckout = useAtomValue(
+    serverEnvironment.deleteQaCheckout.permissionAtom(environmentId),
   );
   const start = useAtomCommand(serverEnvironment.startQa);
   const startAffected = useAtomCommand(serverEnvironment.startAffectedQa);
@@ -129,7 +139,7 @@ function ProjectQa({
   const [showHistory, setShowHistory] = useState(false);
   const runSuite = async (suiteId: string) => {
     setBusy(true);
-    const result = await start({ environmentId, input: { projectId, suiteId } });
+    const result = await start({ environmentId, input: { ...scope, suiteId } });
     if (result._tag === "Success") viewRun(result.value.id);
     setBusy(false);
   };
@@ -150,6 +160,16 @@ function ProjectQa({
     >
       <ListFilterRow bleed={16}>
         {projectPicker}
+        {snapshot?.ref ? (
+          <QaRefMenu
+            value={snapshot.ref}
+            refs={snapshot.refs ?? []}
+            onChange={(next) => {
+              setSelectedRun(null);
+              setRef(next);
+            }}
+          />
+        ) : null}
         <Chip
           label="Refresh"
           icon="arrow.clockwise"
@@ -160,6 +180,16 @@ function ProjectQa({
           disabled={!connected}
         />
       </ListFilterRow>
+      {snapshot?.ref && snapshot.checkout ? (
+        <QaCheckoutLine
+          gitRef={snapshot.ref}
+          checkout={snapshot.checkout}
+          canDelete={connected && canDeleteCheckout && !running && !snapshot.batchRunning}
+          onDelete={() => {
+            void deleteCheckout({ environmentId, input: scope });
+          }}
+        />
+      ) : null}
       {connected ? null : (
         <Text accessibilityRole="alert" className="text-sm text-foreground-muted">
           {environmentLabel} is offline. Reconnect to run QA.
@@ -205,6 +235,7 @@ function ProjectQa({
           key={selectedRun}
           environmentId={environmentId}
           projectId={projectId}
+          gitRef={ref}
           runId={selectedRun}
           supportsTests={snapshot?.testResultsAvailable ?? false}
           onClose={() => setSelectedRun(null)}
@@ -216,6 +247,7 @@ function ProjectQa({
         <QaAutomation
           environmentId={environmentId}
           projectId={projectId}
+          gitRef={snapshot.ref ?? null}
           snapshot={snapshot}
           connected={connected}
           onView={viewRun}
@@ -243,7 +275,7 @@ function ProjectQa({
                 disabled={!connected || !stopPermission || busy}
                 onPress={() => {
                   setBusy(true);
-                  void cancelAffected({ environmentId, input: { projectId } }).finally(() =>
+                  void cancelAffected({ environmentId, input: scope }).finally(() =>
                     setBusy(false),
                   );
                 }}
@@ -256,13 +288,21 @@ function ProjectQa({
               disabled={!connected || !affectedPermission || busy || running || !affectedCount}
               onPress={() => {
                 setBusy(true);
-                void startAffected({ environmentId, input: { projectId } }).finally(() =>
-                  setBusy(false),
-                );
+                void startAffected({ environmentId, input: scope }).finally(() => setBusy(false));
               }}
             />
           )}
         </View>
+      ) : null}
+      {snapshot?.ref && snapshot.refs ? (
+        <QaRefComparison
+          refs={snapshot.refs}
+          selected={snapshot.ref}
+          onSelect={(next) => {
+            setSelectedRun(null);
+            setRef(next);
+          }}
+        />
       ) : null}
       {counts.total > 0 ? (
         <QaDashboard
@@ -305,6 +345,7 @@ function ProjectQa({
                 {new Date(run.startedAt).toLocaleString()} · {qaRunDuration(run)}
               </Text>
               <Text className="font-mono text-xs text-foreground-muted">
+                {run.ref ? `${run.ref} · ` : ""}
                 {run.commit?.slice(0, 8) ?? "Unknown revision"}
                 {run.dirty ? " + changes" : ""}
               </Text>
@@ -319,18 +360,23 @@ function ProjectQa({
 function RunDetails({
   environmentId,
   projectId,
+  gitRef,
   runId,
   supportsTests,
   onClose,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  gitRef: string | null;
   runId: string;
   supportsTests: boolean;
   onClose: () => void;
 }) {
   const query = useEnvironmentQuery(
-    serverEnvironment.qaDetails({ environmentId, input: { projectId, runId } }),
+    serverEnvironment.qaDetails({
+      environmentId,
+      input: { projectId, runId, ...(gitRef ? { ref: gitRef } : {}) },
+    }),
   );
   const [showReport, setShowReport] = useState(false);
   const [showCommand, setShowCommand] = useState(false);
@@ -364,7 +410,7 @@ function RunDetails({
             </Text>
           )}
           <Text className="text-xs text-foreground-muted">
-            {qaRunSource(data.run)} · {data.run.branch ?? "No branch"} ·{" "}
+            {qaRunSource(data.run)} · {data.run.ref ?? data.run.branch ?? "No branch"} ·{" "}
             {data.run.commit?.slice(0, 8) ?? "Unknown revision"}
             {data.run.dirty ? " + changes" : ""}
             {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
@@ -413,7 +459,12 @@ function RunDetails({
           ) : null}
           {data.run.note ? <Text>{data.run.note}</Text> : null}
           {running || !data.run.summary ? null : supportsTests ? (
-            <QaTestList environmentId={environmentId} projectId={projectId} runId={runId} />
+            <QaTestList
+              environmentId={environmentId}
+              projectId={projectId}
+              gitRef={gitRef}
+              runId={runId}
+            />
           ) : (
             <Text className="text-sm text-foreground-muted">
               Update this environment’s server to view individual test results.
