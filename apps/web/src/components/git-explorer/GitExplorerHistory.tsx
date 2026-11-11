@@ -123,6 +123,7 @@ interface HistoryProps {
   revealRequest?: { revision: string } | null;
   onAddTag?: (revision: string) => void;
   onReset?: (revision: string) => void;
+  onMerge?: (revision: string) => void;
   resetUnavailable?: boolean;
   tagUnavailable?: string | null;
   onSelect: (revision: string | null) => void;
@@ -160,6 +161,7 @@ function GitExplorerHistoryList({
   onAddTag,
   tagUnavailable,
   onReset,
+  onMerge,
   resetUnavailable,
   onSelect,
   refresh,
@@ -374,6 +376,15 @@ function GitExplorerHistoryList({
                             },
                           ]
                         : []),
+                      ...(onMerge
+                        ? [
+                            {
+                              id: "merge",
+                              label: `Merge into ${overview.headBranch ?? "current branch"}…`,
+                              disabled: resetUnavailable || !overview.headBranch || isHead,
+                            },
+                          ]
+                        : []),
                       ...(onAddTag
                         ? [{ id: "tag", label: "Tag…", disabled: tagUnavailable != null }]
                         : []),
@@ -381,6 +392,7 @@ function GitExplorerHistoryList({
                     gitExplorerMenuPosition(event),
                     (action) => {
                       if (action === "reset") onReset?.(commit.hash);
+                      else if (action === "merge") onMerge?.(commit.hash);
                       else if (action === "tag") onAddTag?.(commit.hash);
                       else return copyGitExplorerValue(commit.hash, "commit hash");
                     },

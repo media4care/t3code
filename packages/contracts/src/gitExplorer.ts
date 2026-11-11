@@ -140,6 +140,7 @@ export const GitExplorerRunActionInput = Schema.Struct({
     "discard",
     "commit",
     "reset",
+    "merge",
     "create-tag",
     "push-tag",
     "delete-tag",
@@ -170,10 +171,16 @@ export const GitExplorerRunActionInput = Schema.Struct({
   tagName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   revision: Schema.optional(GitExplorerHash),
   resetMode: Schema.optional(Schema.Literals(["soft", "mixed", "hard"])),
+  // Merge this local or remote-tracking branch (full ref), which must still point at `revision`.
+  mergeRef: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   remote: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
 });
 export type GitExplorerRunActionInput = typeof GitExplorerRunActionInput.Type;
-export const GitExplorerRunActionResult = Schema.Struct({ message: Schema.String });
+export const GitExplorerRunActionResult = Schema.Struct({
+  message: Schema.String,
+  // Set when a merge stopped with conflicts and is still in progress.
+  conflictedPaths: Schema.optional(Schema.Array(Schema.String)),
+});
 export type GitExplorerRunActionResult = typeof GitExplorerRunActionResult.Type;
 export const GitExplorerHistoryInput = Schema.Struct({
   ...GitExplorerScope,
@@ -281,6 +288,7 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "changes-changed",
     "commit-message-required",
     "invalid-reset",
+    "merge-in-progress",
     "invalid-tag",
     "tag-changed",
     "invalid-remote",
@@ -336,6 +344,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "Enter a commit message.";
       case "invalid-reset":
         return "Choose a reset mode and a commit for the checked-out branch.";
+      case "merge-in-progress":
+        return "A merge is already in progress. Conclude or abort it before merging again.";
       case "invalid-tag":
         return "Enter a valid Git tag name and select a commit.";
       case "tag-changed":

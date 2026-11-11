@@ -1456,6 +1456,87 @@ const make = Effect.gen(function* () {
             message: `Reset ${input.expectedBranch} to ${input.revision.slice(0, 12)} (${input.resetMode}).`,
           };
         }
+        if (input.action === "merge") {
+          const { expectedBranch, mergeRef, revision } = input;
+          if (!expectedBranch || !revision || !HASH.test(revision))
+            return yield* new GitExplorerError({ operation: "merge", reason: "invalid-revision" });
+          if (mergeRef !== undefined) {
+            if (
+              !/^refs\/(?:heads|remotes)\//.test(mergeRef) ||
+              (yield* run(cwd, ["check-ref-format", mergeRef], { allowNonZero: true })).exitCode !==
+                0
+            )
+              return yield* new GitExplorerError({ operation: "merge", reason: "invalid-branch" });
+            const hash = (yield* run(
+              cwd,
+              ["rev-parse", "--verify", "--quiet", `${mergeRef}^{commit}`],
+              { allowNonZero: true },
+            )).stdout.trim();
+            if (hash !== revision)
+              return yield* new GitExplorerError({ operation: "merge", reason: "branch-changed" });
+          } else if (
+            (yield* run(cwd, ["cat-file", "-t", revision], {
+              allowNonZero: true,
+            })).stdout.trim() !== "commit"
+          )
+            return yield* new GitExplorerError({ operation: "merge", reason: "invalid-revision" });
+          const merging = run(cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], {
+            allowNonZero: true,
+          }).pipe(Effect.map((result) => result.exitCode === 0));
+          if (yield* merging)
+            return yield* new GitExplorerError({ operation: "merge", reason: "merge-in-progress" });
+          const source =
+            mergeRef?.replace(/^refs\/(?:heads|remotes)\//, "") ?? revision.slice(0, 12);
+          const conflictedPaths = yield* git
+            .execute({
+              operation: "GitExplorer.merge",
+              cwd,
+              args: [
+                "-c",
+                "submodule.recurse=false",
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                // Merge the verified tip, worded as Git words a merge by branch name.
+                ...(mergeRef === undefined
+                  ? []
+                  : [
+                      "-m",
+                      `Merge ${mergeRef.startsWith("refs/heads/") ? "branch" : "remote-tracking branch"} '${source}' into ${expectedBranch}`,
+                    ]),
+                revision,
+              ],
+              env: { GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+              timeoutMs: null,
+            })
+            .pipe(
+              Effect.as(null),
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  const paths = (yield* merging)
+                    ? (yield* run(cwd, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout
+                        .split("\0")
+                        .filter(Boolean)
+                    : [];
+                  // A stopped merge without conflicts (a rejecting hook, say) is reported as its Git error.
+                  return paths.length > 0 ? paths : yield* error;
+                }),
+              ),
+              Effect.ensuring(git.invalidateRefs(cwd).pipe(Effect.ignore)),
+            );
+          if (conflictedPaths)
+            return {
+              message: `Merging ${source} into ${expectedBranch} stopped with conflicts in ${conflictedPaths.length} ${conflictedPaths.length === 1 ? "file" : "files"}.`,
+              conflictedPaths,
+            };
+          const head = (yield* run(cwd, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
+          return {
+            message:
+              head === input.expectedHead
+                ? `${expectedBranch} already contains ${source}.`
+                : `Merged ${source} into ${expectedBranch}.`,
+          };
+        }
         if (
           input.action === "create-tag" ||
           input.action === "push-tag" ||

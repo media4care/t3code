@@ -1227,6 +1227,49 @@ it.layer(layer)("GitExplorer", (it) => {
     }),
   );
 
+  it.effect("merges without fast-forward and leaves a conflicted merge in progress", () =>
+    Effect.gen(function* () {
+      const { explorer, git, write, root } = yield* fixture;
+      yield* write("main.txt", "main\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "main"]);
+      const main = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "-c", "topic", root]);
+      const merge = {
+        ...scope,
+        action: "merge" as const,
+        expectedHead: root,
+        expectedBranch: "topic",
+        mergeRef: "refs/heads/main",
+        revision: main,
+      };
+      assert.equal(
+        (yield* explorer.runAction({ ...merge, revision: root }).pipe(Effect.flip)).reason,
+        "branch-changed",
+      );
+      const result = yield* explorer.runAction(merge);
+      assert.equal(result.conflictedPaths, undefined);
+      assert.equal(yield* git(["rev-parse", "HEAD^1", "HEAD^2"]), `${root}\n${main}`);
+      assert.equal(yield* git(["log", "-1", "--format=%s"]), "Merge branch 'main' into topic");
+
+      yield* write("hello.txt", "topic\n");
+      yield* git(["commit", "-am", "topic"]);
+      const topic = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "main"]);
+      yield* write("hello.txt", "main again\n");
+      yield* git(["commit", "-am", "main again"]);
+      const next = yield* git(["rev-parse", "HEAD"]);
+      yield* git(["switch", "topic"]);
+      const conflicted = { ...merge, expectedHead: topic, mergeRef: undefined, revision: next };
+      assert.deepEqual((yield* explorer.runAction(conflicted)).conflictedPaths, ["hello.txt"]);
+      assert.equal(yield* git(["rev-parse", "MERGE_HEAD"]), next);
+      assert.equal(
+        (yield* explorer.runAction(conflicted).pipe(Effect.flip)).reason,
+        "merge-in-progress",
+      );
+    }),
+  );
+
   it.effect("keeps conflicted paths unique and renders the working file against ours", () =>
     Effect.gen(function* () {
       const { explorer, git, write, cwd } = yield* fixture;
