@@ -799,6 +799,46 @@ it.layer(layer)("GitExplorer", (it) => {
   );
 
   it.effect(
+    "keeps local branches, their upstreams, and the newest refs when a remote has thousands",
+    () =>
+      Effect.gen(function* () {
+        const { explorer, git, cwd, root } = yield* fixture;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.execute({
+          operation: "GitExplorer.test.old-commit",
+          cwd,
+          args: ["fast-import", "--quiet"],
+          stdin: `commit refs/remotes/upstream/old\ncommitter Test <test@example.com> 1700000000 +0000\ndata 4\nold\n\n`,
+        });
+        const old = yield* git(["rev-parse", "refs/remotes/upstream/old"]);
+        yield* driver.execute({
+          operation: "GitExplorer.test.many-refs",
+          cwd,
+          args: ["update-ref", "--stdin"],
+          stdin: Array.from(
+            { length: 2100 },
+            (_, index) => `create refs/remotes/upstream/topic-${index} ${old}\n`,
+          ).join(""),
+        });
+        yield* git(["remote", "add", "origin", cwd]);
+        yield* git(["update-ref", "refs/remotes/origin/zzz-tracked", old]);
+        yield* git(["update-ref", "refs/remotes/upstream/newest", root]);
+        yield* git(["branch", "--set-upstream-to=origin/zzz-tracked", "main"]);
+        const overview = yield* explorer.overview(scope);
+        const names = overview.refs.map((ref) => ref.name);
+        assert.isAtMost(names.length, 2048);
+        assert.includeMembers(names, [
+          "refs/heads/main",
+          "refs/remotes/origin/zzz-tracked",
+          "refs/remotes/upstream/newest",
+        ]);
+        const main = overview.refs.find((ref) => ref.name === "refs/heads/main");
+        assert.equal(main?.upstreamMissing, false);
+        assert.equal(main?.behind, 1);
+      }),
+  );
+
+  it.effect(
     "pushes, fetches without moving HEAD, and pulls by fast-forward from a local remote",
     () =>
       Effect.gen(function* () {

@@ -75,6 +75,8 @@ const DIFF_OPTIONS = [
   "-l1000",
 ];
 const MAX_FILES = 2_000;
+const MAX_REFS = 2_048;
+const REF_FORMAT = "--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)";
 const MAX_STASHES = 200;
 const MAX_SUBMODULES = 256;
 const MAX_PATCH_BYTES = 512 * 1024;
@@ -543,20 +545,64 @@ const make = Effect.gen(function* () {
     }
     return { signature: result.stdout, remotes: [...remotes], bases };
   });
+  const listRefs = Effect.fn("GitExplorer.listRefs")(function* (
+    cwd: string,
+    args: readonly string[],
+  ) {
+    return (yield* run(cwd, ["for-each-ref", REF_FORMAT, ...args])).stdout
+      .split("\n")
+      .filter(Boolean);
+  });
+  // Remotes like a fork's upstream can carry thousands of branches. Keep every local branch,
+  // the remote refs they track or compare against, then the newest remaining refs.
+  const readRefLines = Effect.fn("GitExplorer.readRefLines")(function* (cwd: string) {
+    const locals = yield* listRefs(cwd, [`--count=${MAX_REFS + 1}`, "refs/heads"]);
+    if (locals.length > MAX_REFS)
+      return yield* new GitExplorerError({ operation: "refs", reason: "too-large" });
+    const newest = yield* listRefs(cwd, [
+      "--sort=-creatordate",
+      `--count=${MAX_REFS}`,
+      "refs/remotes",
+      "refs/tags",
+    ]);
+    let lines = [...locals, ...newest];
+    if (newest.length === MAX_REFS) {
+      const remoteHeads = yield* listRefs(cwd, ["refs/remotes/*/HEAD"]);
+      const patterns = new Set([
+        "refs/remotes/*/main",
+        "refs/remotes/*/master",
+        ...[...locals, ...remoteHeads].flatMap((line) => {
+          const [, , upstream, symbolic] = line.split("\0");
+          return [upstream, symbolic].filter((name): name is string => !!name);
+        }),
+        ...[...(yield* readMergeConfig(cwd)).bases.values()].flatMap((base) => {
+          const short = base.replace(/^refs\/(heads|remotes)\//, "");
+          return [
+            ...(base.startsWith("refs/") ? [base] : []),
+            `refs/remotes/${short}`,
+            `refs/remotes/*/${short}`,
+          ];
+        }),
+      ]);
+      const essentials = yield* listRefs(cwd, [...patterns]);
+      const byName = new Map<string, string>();
+      for (const line of [...locals, ...remoteHeads, ...essentials, ...newest]) {
+        if (byName.size >= MAX_REFS) break;
+        const name = line.slice(0, line.indexOf("\0"));
+        if (!byName.has(name)) byName.set(name, line);
+      }
+      lines = [...byName.values()];
+    }
+    // NUL ends each refname, so sorting whole lines sorts by refname like for-each-ref does.
+    return lines.toSorted().join("\n");
+  });
   const readOverviewState = Effect.fn("GitExplorer.readOverviewState")(function* (
     input: GitExplorerOverviewInput,
   ) {
     // A commit can move the branch between worktree enumeration and ref enumeration.
     for (let attempt = 0; attempt < 2; attempt++) {
       const context = yield* resolve(input);
-      const output = yield* run(context.cwd, [
-        "for-each-ref",
-        "--count=2049",
-        "--format=%(refname)%00%(objectname)%00%(upstream)%00%(symref)",
-        "refs/heads",
-        "refs/remotes",
-        "refs/tags",
-      ]);
+      const output = { stdout: yield* readRefLines(context.cwd) };
       const currentBranchHash =
         context.selected.branch === null
           ? null
@@ -578,8 +624,6 @@ const make = Effect.gen(function* () {
       const { cwd, root, commonDirectory, worktrees, selected } = context;
       const shallowBoundary = yield* readShallowBoundary(commonDirectory);
       const mergeConfig = yield* readMergeConfig(cwd);
-      if (output.stdout.split("\n").filter(Boolean).length > 2048)
-        return yield* new GitExplorerError({ operation: "refs", reason: "too-large" });
       const records = output.stdout
         .trimEnd()
         .split("\n")
@@ -621,8 +665,6 @@ const make = Effect.gen(function* () {
       });
       const { stashes, signature: stashSignature } = yield* readStashes(cwd);
       const submodules = yield* readSubmodules(cwd);
-      if (refs.length > 2048)
-        return yield* new GitExplorerError({ operation: "refs", reason: "too-large" });
       const fetchPath = (yield* run(cwd, [
         "rev-parse",
         "--path-format=absolute",
