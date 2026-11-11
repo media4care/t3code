@@ -3,6 +3,7 @@ import {
   formatGitExplorerSync,
   layoutGitGraph,
   gitExplorerEmphasizedRefs,
+  gitExplorerReleaseSource,
   type GitGraphRow,
 } from "@t3tools/client-runtime/git-explorer";
 import type {
@@ -43,8 +44,11 @@ import { useGitExplorerListNavigation } from "./useGitExplorerListNavigation";
 import {
   copyGitExplorerValue,
   gitExplorerMenuPosition,
+  gitExplorerReleaseMenu,
+  gitExplorerReleaseMenuChannel,
   showGitExplorerContextMenu,
 } from "./gitExplorerContextMenu";
+import type { GitExplorerReleaseRequest } from "./GitExplorerReleaseAction";
 
 const LANE_WIDTH = 11;
 const AUTHOR_COLUMN_CLASS = "hidden w-40 shrink-0 truncate px-2 @min-[40rem]/git-history:block";
@@ -124,6 +128,7 @@ interface HistoryProps {
   onAddTag?: (revision: string) => void;
   onReset?: (revision: string) => void;
   onMerge?: (revision: string) => void;
+  onRelease?: (request: GitExplorerReleaseRequest) => void;
   resetUnavailable?: boolean;
   tagUnavailable?: string | null;
   onSelect: (revision: string | null) => void;
@@ -162,6 +167,7 @@ function GitExplorerHistoryList({
   tagUnavailable,
   onReset,
   onMerge,
+  onRelease,
   resetUnavailable,
   onSelect,
   refresh,
@@ -357,6 +363,9 @@ function GitExplorerHistoryList({
               selectGitExplorerReferences(references, overview.headBranch, maxVisibleRefs);
             const otherWorktrees = worktreesByHash.get(commit.hash);
             const isHead = overview.headHash === commit.hash;
+            const releaseSource = onRelease
+              ? gitExplorerReleaseSource(references, overview.refs)
+              : null;
             return (
               <button
                 type="button"
@@ -388,10 +397,14 @@ function GitExplorerHistoryList({
                       ...(onAddTag
                         ? [{ id: "tag", label: "Tag…", disabled: tagUnavailable != null }]
                         : []),
+                      ...(releaseSource ? [gitExplorerReleaseMenu(resetUnavailable === true)] : []),
                     ],
                     gitExplorerMenuPosition(event),
                     (action) => {
-                      if (action === "reset") onReset?.(commit.hash);
+                      const channel = gitExplorerReleaseMenuChannel(action);
+                      if (channel && releaseSource && !resetUnavailable)
+                        onRelease?.({ channel, reference: releaseSource });
+                      else if (action === "reset") onReset?.(commit.hash);
                       else if (action === "merge") onMerge?.(commit.hash);
                       else if (action === "tag") onAddTag?.(commit.hash);
                       else return copyGitExplorerValue(commit.hash, "commit hash");

@@ -73,6 +73,7 @@ describe("command permissions", () => {
   it.effect.each([
     [WS_METHODS.gitExplorerDeleteBranch, AuthSourceControlWriteScope],
     [WS_METHODS.gitExplorerRunAction, AuthSourceControlWriteScope],
+    [WS_METHODS.gitExplorerReleasePlan, AuthSourceControlWriteScope],
     [WS_METHODS.qaStart, AuthTerminalOperateScope],
     [WS_METHODS.qaSetSchedule, AuthTerminalOperateScope],
     [WS_METHODS.qaImport, AuthTerminalOperateScope],

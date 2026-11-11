@@ -1,6 +1,9 @@
 import {
+  GIT_EXPLORER_RELEASE_REMOTE,
   GitCommandError,
+  gitExplorerReleaseSourceKind,
   ProviderInstanceId,
+  type GitExplorerReleasePlanResult,
   type GitExplorerRef,
   type GitExplorerBranchStatus,
   type GitExplorerSubmodule,
@@ -391,6 +394,115 @@ export function gitExplorerMergeConflictTask(input: {
       "If a conflict cannot be resolved safely, stop and report what needs a decision.",
     ].join("\n"),
   };
+}
+
+const releaseSourceName = (ref: GitExplorerRef) =>
+  ref.kind === "local"
+    ? ref.name.replace(/^refs\/heads\//, "")
+    : ref.kind === "remote" && ref.name.startsWith(`refs/remotes/${GIT_EXPLORER_RELEASE_REMOTE}/`)
+      ? ref.name.slice(`refs/remotes/${GIT_EXPLORER_RELEASE_REMOTE}/`.length)
+      : null;
+
+/**
+ * The branch among a commit's `refs` that a release starts from: a release branch before
+ * master, a local branch before its origin copy. Master needs a release branch to merge into.
+ */
+export function gitExplorerReleaseSource(
+  refs: readonly GitExplorerRef[],
+  allRefs: readonly GitExplorerRef[],
+) {
+  let source: { ref: GitExplorerRef; rank: number } | null = null;
+  for (const ref of refs) {
+    const name = releaseSourceName(ref);
+    const kind = name === null ? null : gitExplorerReleaseSourceKind(name);
+    if (!kind) continue;
+    const rank = (kind === "release-branch" ? 0 : 2) + (ref.kind === "local" ? 0 : 1);
+    if (!source || rank < source.rank) source = { ref, rank };
+  }
+  if (!source || source.rank < 2) return source?.ref ?? null;
+  return allRefs.some((ref) => {
+    const name = releaseSourceName(ref);
+    return name !== null && gitExplorerReleaseSourceKind(name) === "release-branch";
+  })
+    ? source.ref
+    : null;
+}
+
+export const gitExplorerReleaseChannels = [
+  { value: "beta", label: "Beta", environment: "stage" },
+  { value: "production", label: "Production", environment: "production" },
+] as const;
+
+/** Text parts of a release step; names are set apart so a client can style them. */
+export type GitExplorerReleaseText = readonly (
+  | string
+  | { readonly branch: string }
+  | { readonly tag: string }
+)[];
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+export function gitExplorerReleaseText(text: GitExplorerReleaseText) {
+  return text
+    .map((part) => (typeof part === "string" ? part : "branch" in part ? part.branch : part.tag))
+    .join("");
+}
+
+/** What a release does, in order, plus the caveat for a merge that conflicts. */
+export function describeGitExplorerRelease(plan: GitExplorerReleasePlanResult) {
+  const branch = { branch: plan.releaseBranch };
+  const tag = { tag: plan.tag };
+  const steps: { title: GitExplorerReleaseText; detail: string | null }[] = [];
+  if (plan.merge)
+    steps.push({
+      title: ["Merge ", { branch: plan.source }, " into ", branch],
+      detail: `Brings ${plural(plan.merge.total, "commit")} that ${plan.merge.total === 1 ? "isn't" : "aren't"} on ${plan.releaseBranch} yet`,
+    });
+  steps.push(
+    plan.merge
+      ? { title: ["Tag the merge commit ", tag], detail: null }
+      : {
+          title: ["Tag ", branch, ` at ${plan.tagCommit?.slice(0, 7) ?? ""} `, tag],
+          detail:
+            plan.unpublished > 0 ? `${plural(plan.unpublished, "commit")} not on origin yet` : null,
+        },
+  );
+  steps.push({
+    title: ["Push ", branch, " and ", tag, ` to ${GIT_EXPLORER_RELEASE_REMOTE}`],
+    detail: [
+      `Pushed together, so CI builds it and deploys it to ${plan.channel === "production" ? "production" : "stage"}`,
+      ...(plan.merge && plan.unpublished > 0
+        ? [
+            `Also publishes ${plural(plan.unpublished, "commit")} on ${plan.releaseBranch} that ${plan.unpublished === 1 ? "isn't" : "aren't"} on origin yet`,
+          ]
+        : []),
+    ].join(". "),
+  });
+  const conflicts = !plan.merge
+    ? null
+    : plan.merge.inWorktree
+      ? `If ${plan.source} conflicts with ${plan.releaseBranch}, the merge stays in progress and an agent resolves it in a new thread. Nothing is tagged or pushed; release again from the ${plan.releaseBranch} tip afterwards.`
+      : `If ${plan.source} conflicts with ${plan.releaseBranch}, nothing changes. Check out ${plan.releaseBranch} and release again to resolve the conflicts with an agent.`;
+  return { steps, conflicts };
+}
+
+/** The line under a release's version: which beta it is and the release it follows. */
+export function describeGitExplorerReleaseVersion(
+  plan: GitExplorerReleasePlanResult,
+  formatDate: (iso: string) => string,
+) {
+  const previous = plan.previousRelease;
+  if (plan.channel === "production")
+    return previous
+      ? `Last production release: ${previous.tag} · ${formatDate(previous.createdAt)}`
+      : `First production release on ${plan.releaseBranch}`;
+  const [version, beta = ""] = plan.tag.split("-beta");
+  return [
+    beta ? `Beta ${Number(beta) + 1} for ${version}` : `First beta for ${version}`,
+    previous ? `last production release ${previous.tag}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export type GitExplorerBranchTreeRow =

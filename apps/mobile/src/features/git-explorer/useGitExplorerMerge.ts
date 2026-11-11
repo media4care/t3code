@@ -148,5 +148,5 @@ export function useGitExplorerMerge(params: GitExplorerParams, onRefresh: () => 
     });
   };
 
-  return { mergeUnavailable: unavailable, confirmMerge };
+  return { mergeUnavailable: unavailable, confirmMerge, launchAgent };
 }

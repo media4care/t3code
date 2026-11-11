@@ -20,6 +20,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 import { useGitExplorerMerge } from "./useGitExplorerMerge";
+import { useGitExplorerRelease } from "./useGitExplorerRelease";
 
 export function describeBranchMerge(status: GitExplorerBranchStatus | null) {
   if (!status) return "Checking merge status";
@@ -65,6 +66,7 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
   );
   const runSwitch = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
   const merge = useGitExplorerMerge(params, onRefresh);
+  const release = useGitExplorerRelease(params, onRefresh);
   const pending = useRef(false);
   const [busyBranch, setBusyBranch] = useState<string | null>(null);
   const unavailableReason = !connected
@@ -201,5 +203,7 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     confirmSwitch,
     mergeUnavailable: merge.mergeUnavailable || busyBranch !== null,
     confirmMerge: merge.confirmMerge,
+    releaseUnavailable: release.releaseUnavailable || busyBranch !== null,
+    confirmRelease: release.confirmRelease,
   };
 }

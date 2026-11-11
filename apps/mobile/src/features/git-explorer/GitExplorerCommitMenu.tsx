@@ -1,6 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { MenuAction } from "@react-native-menu/menu";
-import { gitExplorerResetModes } from "@t3tools/client-runtime/git-explorer";
+import {
+  gitExplorerReleaseChannels,
+  gitExplorerReleaseSource,
+  gitExplorerResetModes,
+} from "@t3tools/client-runtime/git-explorer";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -16,10 +20,11 @@ import type { GitExplorerTagRequest } from "./GitExplorerTagDialog";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { gitExplorerTarget, type GitExplorerParams } from "./useGitExplorer";
 import { useGitExplorerMerge } from "./useGitExplorerMerge";
+import { useGitExplorerRelease } from "./useGitExplorerRelease";
 
 export type GitExplorerCommitMenu = {
-  readonly getActions: (hash: string, tags: readonly GitExplorerRef[]) => MenuAction[];
-  readonly onAction: (hash: string, action: string) => void;
+  readonly getActions: (hash: string, refs: readonly GitExplorerRef[]) => MenuAction[];
+  readonly onAction: (hash: string, action: string, refs: readonly GitExplorerRef[]) => void;
 };
 
 export function useGitExplorerCommitMenu(props: {
@@ -38,6 +43,7 @@ export function useGitExplorerCommitMenu(props: {
   );
   const run = useAtomCommand(gitExplorerEnvironment.runAction, { reportFailure: false });
   const merge = useGitExplorerMerge(props.params, props.onRefresh);
+  const release = useGitExplorerRelease(props.params, props.onRefresh);
   const inFlight = useRef(false);
   const [resetting, setResetting] = useState(false);
   const [tagRequest, setTagRequest] = useState<GitExplorerTagRequest | null>(null);
@@ -45,7 +51,9 @@ export function useGitExplorerCommitMenu(props: {
   const unavailable = !allowed || !connected || !overview;
   const resetDisabled = unavailable || resetting || !overview?.headBranch;
 
-  const getActions = (hash: string, tags: readonly GitExplorerRef[]): MenuAction[] => [
+  const releaseSource = (refs: readonly GitExplorerRef[]) =>
+    overview ? gitExplorerReleaseSource(refs, overview.refs) : null;
+  const getActions = (hash: string, refs: readonly GitExplorerRef[]): MenuAction[] => [
     { id: "copy-hash", title: "Copy commit hash", image: "doc.on.doc" },
     {
       id: "reset",
@@ -72,25 +80,41 @@ export function useGitExplorerCommitMenu(props: {
       },
     },
     { id: "tag", title: "Add tag…", image: "tag", attributes: { disabled: unavailable } },
-    ...tags.map((tag) => ({
-      id: tag.name,
-      title: tag.shortName,
-      image: "tag",
-      subactions: [
-        {
-          id: `push:${tag.shortName}`,
-          title: "Push tag…",
-          image: "arrow.up",
-          attributes: { disabled: unavailable },
-        },
-        {
-          id: `delete:${tag.shortName}`,
-          title: "Delete local tag…",
-          image: "trash",
-          attributes: { disabled: unavailable, destructive: true },
-        },
-      ],
-    })),
+    ...(releaseSource(refs)
+      ? [
+          {
+            id: "release",
+            title: "Release",
+            image: "shippingbox",
+            attributes: { disabled: unavailable || resetting || release.releaseUnavailable },
+            subactions: gitExplorerReleaseChannels.map((channel) => ({
+              id: `release:${channel.value}`,
+              title: `${channel.label}…`,
+            })),
+          },
+        ]
+      : []),
+    ...refs
+      .filter((ref) => ref.kind === "tag")
+      .map((tag) => ({
+        id: tag.name,
+        title: tag.shortName,
+        image: "tag",
+        subactions: [
+          {
+            id: `push:${tag.shortName}`,
+            title: "Push tag…",
+            image: "arrow.up",
+            attributes: { disabled: unavailable },
+          },
+          {
+            id: `delete:${tag.shortName}`,
+            title: "Delete local tag…",
+            image: "trash",
+            attributes: { disabled: unavailable, destructive: true },
+          },
+        ],
+      })),
   ];
 
   const confirmReset = (revision: string, value: string) => {
@@ -134,8 +158,15 @@ export function useGitExplorerCommitMenu(props: {
     });
   };
 
-  const onAction = (hash: string, action: string) => {
-    if (action === "copy-hash") {
+  const onAction = (hash: string, action: string, refs: readonly GitExplorerRef[]) => {
+    const channel = gitExplorerReleaseChannels.find(
+      (option) => action === `release:${option.value}`,
+    )?.value;
+    const source = releaseSource(refs);
+    if (channel) {
+      if (overview && source && !unavailable && !resetting)
+        release.confirmRelease(overview, channel, source);
+    } else if (action === "copy-hash") {
       void Clipboard.setStringAsync(hash).catch(() => undefined);
     } else if (action.startsWith("reset:")) {
       confirmReset(hash, action.slice(6));

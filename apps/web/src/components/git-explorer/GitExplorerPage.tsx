@@ -41,6 +41,10 @@ import { GitExplorerStashAction, type GitExplorerStashActionKind } from "./GitEx
 import { GitExplorerToolbar } from "./GitExplorerToolbar";
 import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
 import { GitExplorerMergeAction, type GitExplorerMergeRequest } from "./GitExplorerMergeAction";
+import {
+  GitExplorerReleaseAction,
+  type GitExplorerReleaseRequest,
+} from "./GitExplorerReleaseAction";
 import { GitExplorerResetAction } from "./GitExplorerResetAction";
 import { GitExplorerHistory } from "./GitExplorerHistory";
 import { GitExplorerTagAction, type GitExplorerTagRequest } from "./GitExplorerTagAction";
@@ -151,6 +155,7 @@ function RepositoryExplorer({
   } | null>(null);
   const [resetRevision, setResetRevision] = useState<string | null>(null);
   const [mergeRequest, setMergeRequest] = useState<GitExplorerMergeRequest | null>(null);
+  const [releaseRequest, setReleaseRequest] = useState<GitExplorerReleaseRequest | null>(null);
   const [tagAction, setTagAction] = useState<GitExplorerTagRequest | null>(null);
   const canManageStashes = useAtomValue(
     gitExplorerEnvironment.runAction.permissionAtom(environmentId),
@@ -169,7 +174,8 @@ function RepositoryExplorer({
           stashAction !== null ||
           tagAction !== null ||
           resetRevision !== null ||
-          mergeRequest !== null
+          mergeRequest !== null ||
+          releaseRequest !== null
         ? "Another Git action is in progress."
         : !canDelete
           ? "Source-control write permission is required to delete branches."
@@ -383,7 +389,8 @@ function RepositoryExplorer({
               stashAction !== null ||
               tagAction !== null ||
               resetRevision !== null ||
-              mergeRequest !== null
+              mergeRequest !== null ||
+              releaseRequest !== null
             }
             onBusyChange={setActionBusy}
             refresh={refresh}
@@ -448,6 +455,17 @@ function RepositoryExplorer({
           refresh={refresh}
           onBusyChange={setActionBusy}
           onClose={() => setMergeRequest(null)}
+        />
+      ) : null}
+      {overview && releaseRequest ? (
+        <GitExplorerReleaseAction
+          {...releaseRequest}
+          environmentId={environmentId}
+          input={input}
+          overview={overview}
+          refresh={refresh}
+          onBusyChange={setActionBusy}
+          onClose={() => setReleaseRequest(null)}
         />
       ) : null}
       {overview && tagAction ? (
@@ -549,6 +567,10 @@ function RepositoryExplorer({
                     if (!deleteUnavailable && !deletionInFlight.current)
                       setMergeRequest({ revision: reference.hash, reference });
                   },
+                  refs: overview.refs,
+                  onRelease: (request) => {
+                    if (!deleteUnavailable && !deletionInFlight.current) setReleaseRequest(request);
+                  },
                   onBranchAction: (action, reference) => {
                     if (!deleteUnavailable && !deletionInFlight.current)
                       setBranchAction({ action, reference });
@@ -614,6 +636,7 @@ function RepositoryExplorer({
                   onAddTag={(revision) => setTagAction({ action: "create", revision })}
                   onReset={setResetRevision}
                   onMerge={(revision) => setMergeRequest({ revision })}
+                  onRelease={setReleaseRequest}
                   resetUnavailable={
                     !canManageStashes || deleteUnavailable !== null || pendingBranch !== null
                   }
@@ -659,7 +682,8 @@ function RepositoryExplorer({
                         stashAction !== null ||
                         tagAction !== null ||
                         resetRevision !== null ||
-                        mergeRequest !== null,
+                        mergeRequest !== null ||
+                        releaseRequest !== null,
                       refresh,
                       onBusyChange: setActionBusy,
                     }}
