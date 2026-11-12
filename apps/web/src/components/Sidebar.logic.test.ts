@@ -10,6 +10,7 @@ import {
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
+  pinnedThreadNeedsYou,
   resolveSidebarRowThreadId,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -34,6 +35,7 @@ import {
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
+  sidebarMarkerId,
 } from "./Sidebar.logic";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -976,6 +978,39 @@ describe("unseen completion with background work", () => {
   });
 });
 
+describe("pinnedThreadNeedsYou", () => {
+  const now = "2026-06-20T02:00:00.000Z";
+  const quiet = presentThreadShell(localEnvironmentId, {
+    ...makeThreadFixture().source,
+    latestRunId: RunId.make("run-pinned"),
+    status: "completed",
+    latestRunCompletedAt: DateTime.makeUnsafe("2026-06-20T01:00:00.000Z"),
+    lastVisitedAt: DateTime.makeUnsafe("2026-06-20T01:30:00.000Z"),
+  });
+  it.each([
+    ["a thread you have seen", {}, false],
+    ["a pending approval", { hasPendingApprovals: true }, true],
+    ["a question", { hasPendingUserInput: true }, true],
+    ["a guest request", { pendingGuestMessageCount: 1 }, true],
+    ["an unseen completion", { lastVisitedAt: "2026-06-20T00:30:00.000Z" }, true],
+    [
+      "a woken snooze",
+      { snoozedAt: "2026-06-20T01:40:00.000Z", snoozedUntil: "2026-06-20T01:50:00.000Z" },
+      true,
+    ],
+    [
+      "a woken snooze you opened",
+      {
+        snoozedAt: "2026-06-20T01:10:00.000Z",
+        snoozedUntil: "2026-06-20T01:20:00.000Z",
+      },
+      false,
+    ],
+  ] as const)("%s", (_, overrides, expected) => {
+    expect(pinnedThreadNeedsYou({ ...quiet, ...overrides }, { now })).toBe(expected);
+  });
+});
+
 describe("Working shelf (beta)", () => {
   const runtime = {
     status: "running" as const,
@@ -1088,13 +1123,13 @@ describe("Working shelf (beta)", () => {
       section,
     });
     const items: readonly SidebarListItem[] = [
-      marker("pinned-header"),
-      row("p1", "pinned"),
-      marker("pinned-divider"),
       row("a1", "active"),
       row("a2", "active"),
       marker("working-header"),
       row("w1", "working"),
+      marker("pinned-header"),
+      marker("pinned-placeholder"),
+      row("p1", "pinned"),
       marker("settled-header"),
       row("s1", "settled"),
     ];
@@ -1104,9 +1139,42 @@ describe("Working shelf (beta)", () => {
       expect(resolveSidebarDropTarget(items, "p1", "a2")).toEqual({
         section: "active",
         pinnedOrder: [],
-        activeOrder: ["a1", "a2", "p1"],
+        activeOrder: ["a1", "p1", "a2"],
       });
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
+    });
+
+    it.each([
+      ["a1", sidebarMarkerId("pinned-header"), ["a1", "p1"]],
+      ["s1", sidebarMarkerId("pinned-placeholder"), ["s1", "p1"]],
+      ["a2", "p1", ["p1", "a2"]],
+    ] as const)("pins %s dropped on %s in the shelf above Settled", (key, over, pinnedOrder) => {
+      expect(resolveSidebarDropTarget(items, key, over)).toEqual({
+        section: "pinned",
+        pinnedOrder,
+        activeOrder: ["a1", "a2"].filter((id) => id !== key),
+      });
+    });
+
+    it("drops a pin raised above the Pinned header into the shelf above it", () => {
+      expect(resolveSidebarDropTarget(items, "p1", sidebarMarkerId("pinned-header"))).toBeNull();
+    });
+
+    it("keeps the pin of a pinned thread that needs you when it is reordered in Active", () => {
+      const plan = planSidebarThreadDrop({
+        activeKey: "p1",
+        activeSection: "active",
+        activePinned: true,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["p1", "a1"] },
+        pinnedOrder: [],
+        pinnedKeysById: new Map([["p1", "m"]]),
+        activeOrder: ["a1", "p1"],
+        activeKeysById: new Map([
+          ["a1", "m"],
+          ["p1", "t"],
+        ]),
+      });
+      expect(plan).toMatchObject({ kind: "move-active", unpin: false });
     });
 
     it.each([

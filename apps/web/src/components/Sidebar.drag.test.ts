@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
 import type { SortingStrategy } from "@dnd-kit/sortable";
+import { createSidebarCollisionDetection, createSidebarSortingStrategy } from "./Sidebar.drag";
 import {
-  createSidebarCollisionDetection,
-  createSidebarSortingStrategy,
-  restrictBelowSidebarLabel,
-} from "./Sidebar.drag";
-import {
-  resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
   type SidebarListItem,
@@ -22,7 +17,7 @@ const thread = (key: string, section: SidebarSection): SidebarListItem => ({
 });
 const marker = (marker: SidebarListMarker): SidebarListItem => ({ kind: "marker", marker });
 const pinnedHeader = marker("pinned-header");
-const divider = marker("pinned-divider");
+const pinnedPlaceholder = marker("pinned-placeholder");
 const settledHeader = marker("settled-header");
 const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
 
@@ -33,16 +28,19 @@ function layout(
   scale = 1,
   cardHeight = 82,
 ) {
+  // The Pinned header collapses to a zero-height drop anchor while there are no pins.
+  const hasPins = items.some((item) => item.kind === "thread" && item.section === "pinned");
   let top = 100;
   const rects = items.map((item) => {
     const height =
       item.kind === "thread"
         ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
-        : item.marker === "pinned-header" || item.marker === "pinned-divider"
+        : item.marker.endsWith("placeholder") || (item.marker === "pinned-header" && !hasPins)
           ? 0
-          : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
+          : 32 * scale;
     const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
-    top += height + 1;
+    // Zero-height markers cancel the list gap with -mb-px.
+    top += height === 0 ? 0 : height + 1;
     return rect;
   });
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === active);
@@ -72,9 +70,10 @@ describe("sidebar collision detection", () => {
   function collisionArgs(blockedAboveSource = false) {
     const rows = [thread("source", "active"), thread("blocked", "active")];
     const items = [
-      pinnedHeader,
-      divider,
+      marker("active-placeholder"),
       ...(blockedAboveSource ? rows.toReversed() : rows),
+      pinnedHeader,
+      pinnedPlaceholder,
       settledHeader,
       marker("settled-placeholder"),
     ];
@@ -101,8 +100,8 @@ describe("sidebar collision detection", () => {
   }
 
   it.each([
-    [false, sidebarMarkerId("settled-header")],
-    [true, sidebarMarkerId("pinned-divider")],
+    [false, sidebarMarkerId("pinned-header")],
+    [true, sidebarMarkerId("active-placeholder")],
   ] as const)(
     "rejects unsupported Active instead of selecting %s / %s",
     (blockedAboveSource, nearbyTarget) => {
@@ -116,92 +115,6 @@ describe("sidebar collision detection", () => {
       });
       expect(filtered[0]?.id).toBe(nearbyTarget);
       expect(detector(args).map((collision) => collision.id)).toEqual(["source"]);
-    },
-  );
-
-  it.each([
-    { sourceSection: "active", pins: 0 },
-    { sourceSection: "active", pins: 1 },
-    { sourceSection: "pinned", pins: 1 },
-    { sourceSection: "settled", pins: 1 },
-  ] as const)(
-    "switches on crossing the divider row from $sourceSection with $pins pins",
-    ({ sourceSection, pins }) => {
-      const items = [
-        pinnedHeader,
-        ...(pins ? [thread("p", "pinned")] : []),
-        ...(sourceSection === "pinned" ? [thread("source", "pinned")] : []),
-        divider,
-        thread("a", "active"),
-        ...(sourceSection === "active" ? [thread("source", "active")] : []),
-        settledHeader,
-        ...(sourceSection === "settled" ? [thread("source", "settled")] : []),
-      ];
-      const { rects, activeIndex } = layout(items, "source", "a");
-      const sourceRect = rects[activeIndex]!;
-      let boundaryTop = 300;
-      const boundaryNode = {
-        querySelector: () => ({
-          getBoundingClientRect: () => ({
-            top: boundaryTop,
-            bottom: boundaryTop + 16,
-            left: 0,
-            right: 260,
-          }),
-        }),
-      } as unknown as HTMLElement;
-      const detector = createSidebarCollisionDetection(() => true, {
-        items,
-        activationY: sourceSection === "pinned" ? 200 : 600,
-      });
-      const at = (center: number) => {
-        const collisionRect = {
-          ...sourceRect,
-          top: center - sourceRect.height / 2,
-          bottom: center + sourceRect.height / 2,
-        };
-        const args = {
-          ...collisionArgs(),
-          active: {
-            id: "source",
-            data: { current: {} },
-            rect: { current: { initial: sourceRect, translated: collisionRect } },
-          },
-          collisionRect,
-          pointerCoordinates: { x: 130, y: center },
-          droppableRects: new Map(
-            items.map((item, index) => [sidebarListItemId(item), rects[index]!]),
-          ),
-          droppableContainers: items.map((item, index) => ({
-            id: sidebarListItemId(item),
-            key: sidebarListItemId(item),
-            disabled: false,
-            data: { current: {} },
-            node: {
-              current:
-                item === divider
-                  ? boundaryNode
-                  : item === settledHeader
-                    ? ({ getBoundingClientRect: () => ({ top: 600 }) } as unknown as HTMLElement)
-                    : null,
-            },
-            rect: { current: rects[index]! },
-          })),
-        };
-        const over = detector(args)[0];
-        return over ? resolveSidebarDropTarget(items, "source", String(over.id))?.section : null;
-      };
-      expect(at(330)).toBe("active");
-      expect(at(317)).toBe("active");
-      expect(at(316)).toBe("pinned");
-      boundaryTop = 400;
-      expect(at(316)).toBe("pinned");
-      expect(at(399)).toBe("pinned");
-      expect(at(400)).toBe("active");
-      boundaryTop = 300;
-      expect(at(400)).toBe("active");
-      expect(at(317)).toBe("active");
-      expect(at(316)).toBe("pinned");
     },
   );
 
@@ -223,18 +136,18 @@ describe("sidebar drag projection", () => {
   it.each([
     ["a2", "a1"],
     ["p", "a1"],
-    ["s", sidebarMarkerId("pinned-header")],
+    ["s", sidebarMarkerId("pinned-placeholder")],
     ["z", sidebarMarkerId("settled-header")],
   ])("restores every row and marker when dragging %s out after hovering %s", (active, over) => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       marker("active-placeholder"),
       thread("a1", "active"),
       thread("a2", "active"),
       marker("snoozed-header"),
       thread("z", "snoozed"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       marker("settled-placeholder"),
       thread("s", "settled"),
@@ -243,7 +156,6 @@ describe("sidebar drag projection", () => {
       items,
       settledOrder: ["z", "s"],
       settledExpanded: true,
-      boundaryLabelHeight: 24,
       snoozedThreadCount: 1,
     };
     const reordered = preview(input, active, over);
@@ -261,12 +173,12 @@ describe("sidebar drag projection", () => {
     ["z", "a2"],
   ])("keeps sparse shelves at the bottom when dragging %s over %s", (active, over) => {
     const items = [
-      pinnedHeader,
-      divider,
       thread("a1", "active"),
       thread("a2", "active"),
       marker("snoozed-header"),
       thread("z", "snoozed"),
+      pinnedHeader,
+      thread("p", "pinned"),
       settledHeader,
       thread("s", "settled"),
     ];
@@ -274,11 +186,10 @@ describe("sidebar drag projection", () => {
       items,
       settledOrder: over === sidebarMarkerId("settled-header") ? ["a1", "s"] : ["s"],
       settledExpanded: true,
-      boundaryLabelHeight: 24,
       snoozedThreadCount: 1,
     });
     const args = layout(items, active, over);
-    for (const rect of args.rects.slice(4)) {
+    for (const rect of args.rects.slice(2)) {
       rect.top += 400;
       rect.bottom += 400;
     }
@@ -287,32 +198,50 @@ describe("sidebar drag projection", () => {
   });
 
   const pinned = [
+    thread("a1", "active"),
     pinnedHeader,
+    pinnedPlaceholder,
     thread("p1", "pinned"),
     thread("p2", "pinned"),
-    divider,
-    thread("a1", "active"),
     settledHeader,
     thread("s1", "settled"),
   ];
 
-  it("keeps the pinned header above the gap when a lower pin moves to the top", () => {
-    const result = preview(
-      { items: pinned, settledOrder: [], settledExpanded: true },
-      "p2",
-      sidebarMarkerId("pinned-header"),
-    );
-    expect(result.get(sidebarMarkerId("pinned-header"))).toEqual(stationary);
-    expect(result.get("p1")).toEqual({ ...stationary, y: 83 });
-    expect(result.get(sidebarMarkerId("pinned-divider"))).toEqual(stationary);
+  it("reorders pins under a stationary Pinned header", () => {
+    const result = preview({ items: pinned, settledOrder: [], settledExpanded: true }, "p2", "p1");
     expect(result.get("a1")).toEqual(stationary);
+    expect(result.get(sidebarMarkerId("pinned-header"))).toEqual(stationary);
+    expect(result.get("p1")?.y).toBe(83);
+    expect(result.get(sidebarMarkerId("settled-header"))).toEqual(stationary);
   });
 
-  it("preserves settled order while opening the zero-height Active target", () => {
+  it("opens the empty Pinned target when an active thread is lifted", () => {
     const items = [
+      thread("a1", "active"),
+      thread("a2", "active"),
       pinnedHeader,
-      divider,
+      pinnedPlaceholder,
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const result = preview({ items, settledOrder: ["s"], settledExpanded: true }, "a1", "a1");
+    expect(result.get(sidebarMarkerId("pinned-placeholder"))).toEqual(stationary);
+    expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(37);
+    const pinning = preview(
+      { items, settledOrder: ["s"], settledExpanded: true },
+      "a1",
+      sidebarMarkerId("pinned-placeholder"),
+    );
+    expect(pinning.get(sidebarMarkerId("pinned-placeholder"))?.scaleY).toBe(0);
+    expect(pinning.get("a2")?.y).toBe(-83);
+    expect(pinning.get(sidebarMarkerId("settled-header"))).toEqual(stationary);
+  });
+
+  it("preserves settled order while opening the zero-height Active and Pinned targets", () => {
+    const items = [
       marker("active-placeholder"),
+      pinnedHeader,
+      pinnedPlaceholder,
       settledHeader,
       thread("first", "settled"),
       thread("second", "settled"),
@@ -323,121 +252,40 @@ describe("sidebar drag projection", () => {
       "first",
     );
     expect(result.get(sidebarMarkerId("active-placeholder"))).toEqual(stationary);
-    expect(result.get(sidebarMarkerId("settled-header"))).toEqual({ ...stationary, y: 36 });
-    expect(result.get("first")).toEqual({ ...stationary, y: 36 });
+    expect(result.get(sidebarMarkerId("pinned-placeholder"))).toEqual({ ...stationary, y: 37 });
+    expect(result.get(sidebarMarkerId("settled-header"))).toEqual({ ...stationary, y: 74 });
+    expect(result.get("first")).toEqual({ ...stationary, y: 74 });
     expect(result.get("second")).toEqual(stationary);
   });
 
   it.each([
-    [sidebarMarkerId("pinned-divider"), 0, 0],
-    ["a1", -83, 0],
-    ["a2", -83, -83],
+    ["a1", 83, 83],
+    ["a2", 0, 83],
   ] as const)(
-    "opens the active pointer slot over %s without adding an empty pinned row",
+    "opens the active slot over %s when the only pin rises out of its shelf",
     (over, a1Offset, a2Offset) => {
       const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
         thread("a1", "active"),
         thread("a2", "active"),
+        pinnedHeader,
+        pinnedPlaceholder,
+        thread("p", "pinned"),
         settledHeader,
         thread("s", "settled"),
       ];
       const result = preview({ items, settledOrder: [], settledExpanded: true }, "p", over);
-      expect(result.get(sidebarMarkerId("pinned-header"))).toEqual(stationary);
-      expect(result.get(sidebarMarkerId("pinned-divider"))?.y).toBe(-83);
       expect(result.get("a1")?.y).toBe(a1Offset);
       expect(result.get("a2")?.y).toBe(a2Offset);
-      expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
-    },
-  );
-
-  it("opens label space below each pinned boundary while dragging", () => {
-    const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
-      thread("a1", "active"),
-      thread("a2", "active"),
-      settledHeader,
-      thread("s", "settled"),
-    ];
-    const result = preview(
-      { items, settledOrder: [], settledExpanded: true, boundaryLabelHeight: 16 },
-      "a2",
-      "a1",
-    );
-    expect(result.get(sidebarMarkerId("pinned-header"))).toEqual(stationary);
-    expect(result.get("p")?.y).toBe(16);
-    expect(result.get(sidebarMarkerId("pinned-divider"))?.y).toBe(16);
-    expect(result.get("a2")).toEqual(stationary);
-    expect(result.get("a1")?.y).toBe(32 + 83);
-    expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(32);
-    expect(result.get("s")?.y).toBe(32);
-  });
-
-  it.each(["s1", "missing-target"])(
-    "keeps label clearance when a settled drag is over %s",
-    (over) => {
-      const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
-        thread("a", "active"),
-        settledHeader,
-        thread("s1", "settled"),
-        thread("s2", "settled"),
-      ];
-      const result = preview(
-        {
-          items,
-          settledOrder: ["s1", "s2"],
-          settledExpanded: true,
-          boundaryLabelHeight: 24,
-        },
-        "s2",
-        over,
-      );
-      expect(result.get("p")?.y).toBe(24);
-      expect(result.get(sidebarMarkerId("pinned-divider"))?.y).toBe(24);
-      expect(result.get("a")?.y).toBe(48);
-      expect(result.get("s1")?.y).toBe(48);
-      expect(result.get("s2")).toEqual(stationary);
-    },
-  );
-
-  it.each([
-    ["p", -83, -1],
-    ["s", 0, 82],
-  ] as const)(
-    "replaces the empty Active target when %s enters",
-    (active, dividerOffset, settledOffset) => {
-      const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
-        marker("active-placeholder"),
-        settledHeader,
-        thread("s", "settled"),
-      ];
-      const result = preview(
-        { items, settledOrder: [], settledExpanded: true },
-        active,
-        sidebarMarkerId("active-placeholder"),
-      );
-      expect(result.get(sidebarMarkerId("active-placeholder"))?.scaleY).toBe(0);
-      expect(result.get(sidebarMarkerId("pinned-divider"))?.y).toBe(dividerOffset);
-      expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(settledOffset);
+      expect(result.get(sidebarMarkerId("pinned-placeholder"))?.scaleY).toBe(1);
     },
   );
 
   it("uses the canonical settled rank and the destination's slim height", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       thread("s1", "settled"),
       thread("s2", "settled"),
@@ -459,45 +307,46 @@ describe("sidebar drag projection", () => {
     "reserves a full card at the pointer slot over %s when a slim row enters Active",
     (over, firstOffset) => {
       const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
         thread("a1", "active"),
         thread("a2", "active"),
+        pinnedHeader,
+        pinnedPlaceholder,
+        thread("p", "pinned"),
         settledHeader,
         thread("s", "settled"),
       ];
       const result = preview({ items, settledOrder: [], settledExpanded: true }, "s", over);
       expect(result.get("a1")?.y).toBe(firstOffset);
       expect(result.get("a2")?.y).toBe(83);
+      expect(result.get(sidebarMarkerId("pinned-header"))?.y).toBe(83);
       expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(83);
     },
   );
 
   it("removes the snoozed header when its last row leaves", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
       marker("snoozed-header"),
       thread("z", "snoozed"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       thread("s", "settled"),
     ];
     const result = preview({ items, settledOrder: [], settledExpanded: true }, "z", "a");
     expect(result.get(sidebarMarkerId("snoozed-header"))?.scaleY).toBe(0);
+    expect(result.get(sidebarMarkerId("pinned-header"))?.y).toBe(13);
     expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(13);
-    expect(result.get("s")?.y).toBe(13);
   });
 
   it("keeps a collapsed settled target without inserting a hidden row", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a1", "active"),
       thread("a2", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       marker("settled-placeholder"),
     ];
@@ -512,22 +361,22 @@ describe("sidebar drag projection", () => {
 
   it("previews a time-ordered inbox drop at its time slot, above the Working shelf", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a1", "active"),
       thread("a2", "active"),
       marker("working-header"),
       thread("w", "working"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       marker("settled-placeholder"),
     ];
     const input = { items, settledOrder: [], settledExpanded: false };
-    expect(preview(input, "p", "a1").get("a2")?.y).toBe(0);
-    const byTime = preview({ ...input, activeOrder: ["a1", "a2", "p"] }, "p", "a1");
-    expect(byTime.get("a2")?.y).toBe(-83);
-    expect(byTime.get(sidebarMarkerId("working-header"))).toEqual(stationary);
-    expect(byTime.get("w")).toEqual(stationary);
+    expect(preview(input, "p", "a2").get("a1")?.y).toBe(0);
+    const byTime = preview({ ...input, activeOrder: ["p", "a1", "a2"] }, "p", "a2");
+    expect(byTime.get("a1")?.y).toBe(83);
+    expect(byTime.get(sidebarMarkerId("working-header"))?.y).toBe(83);
+    expect(byTime.get("w")?.y).toBe(83);
   });
 
   it("updates the projection when the target or measured geometry changes", () => {
@@ -536,32 +385,38 @@ describe("sidebar drag projection", () => {
       settledOrder: [],
       settledExpanded: true,
     });
-    const args = layout(pinned, "p1", "p1");
-    expect(strategy({ ...args, index: 2 })?.y).toBe(0);
-    expect(strategy({ ...args, index: 2, overIndex: 4 })?.y).toBe(-83);
-    const smaller = layout(pinned, "p1", "a1", 0.75);
-    expect(strategy({ ...smaller, index: 2 })?.y).toBe(-62.5);
+    const args = layout(pinned, "p2", "p2");
+    expect(strategy({ ...args, index: 3 })?.y).toBe(0);
+    expect(strategy({ ...args, index: 3, overIndex: 3 })?.y).toBe(83);
+    const smaller = layout(pinned, "p2", "a1", 0.75);
+    expect(strategy({ ...smaller, index: 0 })?.y).toBe(62.5);
   });
 
-  it.each(["active", "settled"] as const)(
+  it.each(["active", "pinned", "settled"] as const)(
     "reveals the mounted empty %s target when its last row leaves and hides it on return",
     (section) => {
       const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
         marker("active-placeholder"),
         thread("a", "active"),
+        marker("snoozed-header"),
+        thread("z", "snoozed"),
+        pinnedHeader,
+        pinnedPlaceholder,
+        thread("p", "pinned"),
         settledHeader,
         marker("settled-placeholder"),
         thread("s", "settled"),
       ];
-      const active = section === "active" ? "a" : "s";
-      const input = { items, settledOrder: ["s"], settledExpanded: true };
+      const active = section === "active" ? "a" : section === "pinned" ? "p" : "s";
+      const input = { items, settledOrder: ["s"], settledExpanded: true, snoozedThreadCount: 1 };
       const placeholderId = sidebarMarkerId(`${section}-placeholder`);
       const resting = preview(input, active, active);
       expect(resting.get(placeholderId)?.scaleY).toBe(0);
-      const leaving = preview(input, active, sidebarMarkerId("pinned-header"));
+      const leaving = preview(
+        input,
+        active,
+        section === "active" ? sidebarMarkerId("pinned-placeholder") : "a",
+      );
       expect(leaving.get(placeholderId)?.scaleY).toBe(1);
       const returning = preview(input, active, active);
       expect(returning.get(placeholderId)?.scaleY).toBe(0);
@@ -570,10 +425,10 @@ describe("sidebar drag projection", () => {
 
   it("uses shelf height for empty target sizing when card height differs from its default", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       marker("settled-placeholder"),
     ];
@@ -588,10 +443,10 @@ describe("sidebar drag projection", () => {
 
   it("keeps the route row visible after a settled drop pushes it beyond the page", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       thread("s", "settled"),
     ];
@@ -609,10 +464,10 @@ describe("sidebar drag projection", () => {
 
   it("reserves the next page row when a visible settled thread leaves", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       thread("s1", "settled"),
       thread("route", "settled"),
@@ -634,10 +489,10 @@ describe("sidebar drag projection", () => {
 
   it("keeps the dropped route thread visible in a collapsed settled shelf", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       marker("settled-placeholder"),
     ];
@@ -656,15 +511,16 @@ describe("sidebar drag projection", () => {
     expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(-46);
   });
 
-  it("moves the pinned projects shelf with the rows above Settled", () => {
+  it("moves the pinned projects shelf and the Pinned header with the rows above Settled", () => {
     const result = preview(
       {
         items: [
-          pinnedHeader,
-          divider,
           thread("a1", "active"),
           thread("a2", "active"),
           marker("pinned-projects"),
+          pinnedHeader,
+          pinnedPlaceholder,
+          thread("p", "pinned"),
           settledHeader,
           thread("s", "settled"),
         ],
@@ -675,16 +531,17 @@ describe("sidebar drag projection", () => {
       sidebarMarkerId("settled-header"),
     );
     expect(result.get(sidebarMarkerId("pinned-projects"))).toEqual({ ...stationary, y: -83 });
+    expect(result.get(sidebarMarkerId("pinned-header"))).toEqual({ ...stationary, y: -83 });
   });
 
   it("preserves hidden snoozed membership when the only rendered route row leaves", () => {
     const items = [
-      pinnedHeader,
-      thread("p", "pinned"),
-      divider,
       thread("a", "active"),
       marker("snoozed-header"),
       thread("z", "snoozed"),
+      pinnedHeader,
+      pinnedPlaceholder,
+      thread("p", "pinned"),
       settledHeader,
       thread("s", "settled"),
     ];
@@ -699,51 +556,6 @@ describe("sidebar drag projection", () => {
       "a",
     );
     expect(result.get(sidebarMarkerId("snoozed-header"))).toEqual({ ...stationary, y: 83 });
-    expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(46);
-  });
-});
-
-describe("lifted card clearance", () => {
-  const rect = (top: number, height: number) => ({
-    top,
-    bottom: top + height,
-    height,
-    left: 0,
-    right: 260,
-    width: 260,
-  });
-  const apply = (cardTop: number, cardHeight: number, y: number, listTop = 136, offset = 32) =>
-    restrictBelowSidebarLabel(
-      {
-        transform: { ...stationary, y },
-        containerNodeRect: rect(listTop, 500),
-        draggingNodeRect: rect(cardTop, cardHeight),
-        activatorEvent: null,
-        active: null,
-        activeNodeRect: null,
-        over: null,
-        overlayNodeRect: null,
-        scrollableAncestors: [],
-        scrollableAncestorRects: [],
-        windowRect: null,
-      },
-      offset,
-    );
-
-  it.each([36, 82])("keeps a %ipx row below empty Pins even past the top edge", (height) => {
-    for (const pointerY of [150, 136, 100, 0]) {
-      const transform = apply(511, height, pointerY - 529);
-      expect(511 + transform.y).toBe(168);
-    }
-  });
-
-  // regression: #10453 the label clamp must not swallow drags that are already below it
-  it("preserves pointer movement below the label", () => {
-    expect(apply(511, 36, -200).y).toBe(-200);
-  });
-
-  it("follows the list when it scrolls and includes content preceding Pins", () => {
-    expect(511 + apply(511, 36, -500, 96).y).toBe(128);
-    expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
+    expect(result.get(sidebarMarkerId("pinned-header"))?.y).toBe(46);
   });
 });
