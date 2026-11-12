@@ -243,6 +243,21 @@ export function threadHasUnseenCompletion(
   return completedAtMs > lastVisitedAtMs;
 }
 
+/** A pinned thread that needs you leaves the Pinned shelf for the active list until you look. */
+export function pinnedThreadNeedsYou(
+  thread: EnvironmentThreadShell,
+  options: { readonly now: string },
+): boolean {
+  const status = resolveThreadListV2Status(thread);
+  return (
+    status === "approval" ||
+    status === "input" ||
+    status === "request" ||
+    (status === "ready" && threadHasUnseenCompletion(thread)) ||
+    resolveThreadListV2WokeAt(thread, options) !== null
+  );
+}
+
 export function resolveThreadListV2WokeAt(
   thread: EnvironmentThreadShell,
   options: { readonly now: string },
@@ -371,6 +386,8 @@ export interface ThreadListV2Layout {
   readonly snoozedShelfHeaderIndex: number | null;
   readonly settledCount: number;
   readonly settledShelfHeaderIndex: number | null;
+  readonly pinnedCount: number;
+  readonly pinnedShelfHeaderIndex: number | null;
   /** Arm a timeout here to repartition at snooze expiry rather than the next minute tick. */
   readonly nextSnoozeWakeAt: string | null;
   /** Threads listed only because their messages match the search. */
@@ -424,7 +441,16 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+export interface ThreadListV2PinnedShelfListItem {
+  readonly type: "v2-pinned-shelf";
+  readonly key: "v2-pinned-shelf";
+  readonly count: number;
+  readonly expanded: boolean;
+  readonly disabled: boolean;
+}
+
 export type ThreadListV2ListItem =
+  | ThreadListV2PinnedShelfListItem
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
@@ -435,6 +461,7 @@ export function isThreadListV2ListItem(value: {
   readonly type: string;
 }): value is ThreadListV2ListItem {
   return (
+    value.type === "v2-pinned-shelf" ||
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
@@ -449,6 +476,13 @@ export function threadListV2ListItemsAreEqual(
   item: ThreadListV2ListItem,
 ): boolean {
   switch (item.type) {
+    case "v2-pinned-shelf":
+      return (
+        previous.type === "v2-pinned-shelf" &&
+        previous.count === item.count &&
+        previous.expanded === item.expanded &&
+        previous.disabled === item.disabled
+      );
     case "v2-thread":
       return (
         previous.type === "v2-thread" &&
@@ -521,6 +555,9 @@ function resolveThreadListV2ItemTimeLabel(
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly pinnedCount?: number;
+  readonly pinnedShelfExpanded?: boolean;
+  readonly pinnedShelfHeaderIndex?: number | null;
   readonly workingCount?: number;
   readonly workingShelfExpanded?: boolean;
   readonly workingShelfHeaderIndex?: number | null;
@@ -581,7 +618,10 @@ export function buildThreadListV2ListItems(input: {
   const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
   const settledCount = input.settledCount ?? 0;
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
-  const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
+  const pinnedCount = input.pinnedCount ?? 0;
+  const pinnedShelfHeaderIndex = input.pinnedShelfHeaderIndex ?? null;
+  const pinnedEnd = settledShelfHeaderIndex ?? threadItems.length;
+  const snoozedEnd = pinnedShelfHeaderIndex ?? pinnedEnd;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
   const result: ThreadListV2ListItem[] = [...pendingItems, ...threadItems.slice(0, activeEnd)];
@@ -605,6 +645,16 @@ export function buildThreadListV2ListItems(input: {
       disabled: shelfDisabled,
     });
     result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd));
+  }
+  if (pinnedShelfHeaderIndex !== null && pinnedCount > 0) {
+    result.push({
+      type: "v2-pinned-shelf",
+      key: "v2-pinned-shelf",
+      count: pinnedCount,
+      expanded: input.pinnedShelfExpanded !== false,
+      disabled: shelfDisabled,
+    });
+    result.push(...threadItems.slice(pinnedShelfHeaderIndex, pinnedEnd));
   }
   if (settledShelfHeaderIndex !== null && settledCount > 0) {
     result.push({
@@ -669,6 +719,7 @@ export function buildThreadListV2Items(input: {
   readonly inboxReturnAt?: (thread: EnvironmentThreadShell) => number | undefined;
   readonly snoozedShelfExpanded?: boolean;
   readonly settledShelfExpanded?: boolean;
+  readonly pinnedShelfExpanded?: boolean;
   readonly selectedThreadKey?: string | null;
   readonly queuedThreadKeys?: ReadonlySet<string>;
   /** Whether the shelf may list a settled row yet; older settled rows load in pages. */
@@ -750,7 +801,7 @@ export function buildThreadListV2Items(input: {
       queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (supportsSettlement && thread.settledOverride === "settled" && !hasQueuedMessages) {
       settled.push(thread);
-    } else if (thread.pinnedAt != null) {
+    } else if (thread.pinnedAt != null && !pinnedThreadNeedsYou(thread, { now })) {
       pinned.push(thread);
     } else if (workingShelfEnabled && (input.isWorking ?? isThreadWorking)(thread)) {
       working.push(thread);
@@ -794,6 +845,8 @@ export function buildThreadListV2Items(input: {
       snoozedShelfHeaderIndex: null,
       settledCount: 0,
       settledShelfHeaderIndex: null,
+      pinnedCount: 0,
+      pinnedShelfHeaderIndex: null,
       nextSnoozeWakeAt,
       contentOnlyThreadKeys,
     };
@@ -846,26 +899,12 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of applyPendingThreadOrder(
-    sortPinnedThreadsByOrderKey(pinned),
-    "pinned",
-    pending,
-  )) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: true,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
-  }
   for (const thread of orderedActive) {
     items.push({
       thread,
       variant: "card",
       snoozed: false,
-      pinned: false,
+      pinned: thread.pinnedAt != null,
       wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
@@ -889,6 +928,28 @@ export function buildThreadListV2Items(input: {
       snoozed: true,
       pinned: false,
       wokeAt: null,
+      isLast: false,
+    });
+  }
+  const orderedPinned = applyPendingThreadOrder(
+    sortPinnedThreadsByOrderKey(pinned),
+    "pinned",
+    pending,
+  );
+  const visiblePinned =
+    input.pinnedShelfExpanded === false
+      ? orderedPinned.filter(
+          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+        )
+      : orderedPinned;
+  const pinnedShelfHeaderIndex = orderedPinned.length > 0 ? items.length : null;
+  for (const thread of visiblePinned) {
+    items.push({
+      thread,
+      variant: "card",
+      snoozed: false,
+      pinned: true,
+      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
   }
@@ -917,6 +978,8 @@ export function buildThreadListV2Items(input: {
     snoozedShelfHeaderIndex,
     settledCount: settledTotal,
     settledShelfHeaderIndex,
+    pinnedCount: orderedPinned.length,
+    pinnedShelfHeaderIndex,
     nextSnoozeWakeAt,
     contentOnlyThreadKeys,
   };
