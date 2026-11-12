@@ -1739,9 +1739,10 @@ describe("Working section beta", () => {
     expect(ids(layout).slice(1)).toEqual(["finished-early", "finished-late", "asks-approval"]);
   });
 
-  it("places the shelf after queued tasks and before snoozed and settled threads", () => {
+  it("places the shelf after pinned threads and queued tasks, before snoozed and settled", () => {
     const layout = buildThreadListV2Items({
       threads: [
+        makeThread({ id: ThreadId.make("pinned"), title: "pinned", pinnedAt: NOW }),
         makeThread({ id: ThreadId.make("active"), title: "active" }),
         makeThread({ id: ThreadId.make("working"), title: "working", runtime: running }),
         makeThread({
@@ -1765,27 +1766,46 @@ describe("Working section beta", () => {
       workingShelfExpanded: true,
       snoozedShelfExpanded: true,
     });
-    const items = buildThreadListV2ListItems({
-      items: layout.items,
-      pendingTasks: [makePendingTask("queued")],
-      workingCount: layout.workingCount,
-      workingShelfExpanded: true,
-      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
-      snoozedCount: layout.snoozedCount,
-      snoozedShelfExpanded: true,
-      snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
-      settledCount: layout.settledCount,
-      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
-    });
-    expect(
-      items.map((item) =>
+    const listItems = (pendingTasks: ReadonlyArray<PendingNewTask>) =>
+      buildThreadListV2ListItems({
+        items: layout.items,
+        pendingTasks,
+        pinnedCount: layout.pinnedCount,
+        pinnedShelfEndIndex: layout.pinnedShelfEndIndex,
+        workingCount: layout.workingCount,
+        workingShelfExpanded: true,
+        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+        snoozedCount: layout.snoozedCount,
+        snoozedShelfExpanded: true,
+        snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
+        settledCount: layout.settledCount,
+        settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+      }).map((item) =>
         item.type === "v2-thread"
           ? item.item.thread.id
           : item.type === "v2-pending"
             ? item.pendingTask.title
             : item.type,
-      ),
-    ).toEqual([
+      );
+    // Without unsent tasks, a label marks where the unpinned threads start.
+    const collapsed = buildThreadListV2Items({
+      threads: layout.items.map((item) => item.thread),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+    });
+    expect(collapsed.pinnedCount).toBe(1);
+    expect(collapsed.items.some((item) => item.pinned)).toBe(false);
+    expect(listItems([]).slice(0, 4)).toEqual([
+      "v2-pinned-shelf",
+      "pinned",
+      "v2-active-label",
+      "active",
+    ]);
+    expect(listItems([makePendingTask("queued")])).toEqual([
+      "v2-pinned-shelf",
+      "pinned",
       "queued",
       "active",
       "v2-working-shelf",

@@ -64,6 +64,7 @@ export function useThreadListV2(input: {
   readonly workingShelfExpanded: boolean;
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
+  readonly pinnedShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
@@ -151,6 +152,7 @@ export function useThreadListV2(input: {
         isWorking: inbox.isWorking,
         snoozedShelfExpanded: input.snoozedShelfExpanded,
         settledShelfExpanded: input.settledShelfExpanded,
+        pinnedShelfExpanded: input.pinnedShelfExpanded,
         selectedThreadKey: input.selectedThreadKey,
         isListedSettled: isListed,
         unloadedSettledCount: unloadedCount(
@@ -183,6 +185,7 @@ export function useThreadListV2(input: {
       inbox.isWorking,
       input.snoozedShelfExpanded,
       input.settledShelfExpanded,
+      input.pinnedShelfExpanded,
       input.selectedThreadKey,
       isListed,
       unloadedCount,
@@ -214,6 +217,9 @@ export function useThreadListV2(input: {
       buildThreadListV2ListItems({
         items: layout.items,
         pendingTasks,
+        pinnedCount: layout.pinnedCount,
+        pinnedShelfExpanded: input.pinnedShelfExpanded,
+        pinnedShelfEndIndex: layout.pinnedShelfEndIndex,
         workingCount: layout.workingCount,
         workingShelfExpanded: input.workingShelfExpanded,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
@@ -232,6 +238,7 @@ export function useThreadListV2(input: {
     [
       layout,
       pendingTasks,
+      input.pinnedShelfExpanded,
       input.workingShelfExpanded,
       input.snoozedShelfExpanded,
       input.settledShelfExpanded,
