@@ -74,6 +74,7 @@ import {
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   layoutThreadListV2RowMenuActions,
+  type ThreadListV2PinnedProject,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
@@ -277,7 +278,12 @@ type ThreadListV2ShelfHeaderProps = {
   readonly pane?: "screen" | "sidebar";
 };
 
-const SHELF_LABEL = { working: "Working", snoozed: "Snoozed", settled: "Settled" } as const;
+const SHELF_LABEL = {
+  pinned: "Pinned",
+  working: "Working",
+  snoozed: "Snoozed",
+  settled: "Settled",
+} as const;
 
 function ThreadListV2ShelfHeader(
   props: ThreadListV2ShelfHeaderProps & { readonly kind: keyof typeof SHELF_LABEL },
@@ -299,6 +305,12 @@ function ThreadListV2ShelfHeader(
   );
 }
 
+export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShelfHeader(
+  props: ThreadListV2ShelfHeaderProps,
+) {
+  return <ThreadListV2ShelfHeader {...props} kind="pinned" />;
+});
+
 export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(
   props: ThreadListV2ShelfHeaderProps,
 ) {
@@ -315,6 +327,105 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
   props: ThreadListV2ShelfHeaderProps,
 ) {
   return <ThreadListV2ShelfHeader {...props} kind="settled" />;
+});
+
+export const ThreadListV2PinnedProjectsShelfHeader = memo(
+  function ThreadListV2PinnedProjectsShelfHeader(props: ThreadListV2ShelfHeaderProps) {
+    const label = "Pinned projects";
+    return (
+      <ThreadListV2Section
+        label={props.expanded ? label : `${label} (${props.count})`}
+        pane={props.pane}
+        disclosure={{
+          expanded: props.expanded,
+          disabled: props.disabled,
+          onToggle: props.onToggle,
+          accessibilityLabel: `${props.count} pinned ${props.count === 1 ? "project" : "projects"}`,
+          accessibilityHint: `${props.expanded ? "Collapses" : "Expands"} the pinned projects.`,
+        }}
+      />
+    );
+  },
+);
+
+export const ThreadListV2PinnedProjectRow = memo(function ThreadListV2PinnedProjectRow(props: {
+  readonly pane?: "screen" | "sidebar";
+  readonly pinnedProject: ThreadListV2PinnedProject;
+  readonly selected: boolean;
+  /** Filters the list to the project, or clears the filter when it is the selected one. */
+  readonly onSelectProject: (projectKey: string | null) => void;
+  readonly onNewThreadInProject: (project: EnvironmentProject) => void;
+}) {
+  const { fontScale } = useWindowDimensions();
+  const titleTypography = useScaledTextRole("body");
+  const projectIconSize = titleTypography.fontSize * 1.25 * fontScale;
+  const theme = useUniwindTheme();
+  const sidebarPane = props.pane === "sidebar";
+  const { pinnedProject, selected } = props;
+  const { project } = pinnedProject;
+  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
+  return (
+    <View style={rowAppearance.swipeContainerStyle}>
+      <RowPressable
+        interactionClassName={rowAppearance.interactionClassName}
+        interactionOpacity={rowAppearance.interactionOpacity}
+        accessibilityLabel={pinnedProject.title}
+        accessibilityHint={
+          selected ? "Shows threads from all projects." : "Shows only this project's threads."
+        }
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        className={rowAppearance.className}
+        onPress={() => props.onSelectProject(selected ? null : pinnedProject.key)}
+        style={rowAppearance.style}
+      >
+        <View
+          className={cn(
+            THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
+            "min-h-[44px] flex-row items-center gap-2 py-2",
+            sidebarPane && "px-3",
+          )}
+        >
+          <ProjectFavicon
+            environmentId={project.environmentId}
+            faviconPath={project.faviconPath}
+            projectIcon={project.projectIcon}
+            size={projectIconSize}
+            projectTitle={project.title}
+            workspaceRoot={project.workspaceRoot}
+          />
+          <Text
+            className={cn(
+              "min-w-0 flex-1 text-base",
+              selected
+                ? selectedThreadRowColors.foregroundClassName
+                : rowAppearance.foregroundClassName,
+            )}
+            numberOfLines={1}
+          >
+            {pinnedProject.title}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`New thread in ${pinnedProject.title}`}
+            hitSlop={8}
+            onPress={() => props.onNewThreadInProject(project)}
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <SymbolView
+              name="square.and.pencil"
+              size={16}
+              tintColorClassName={
+                selected
+                  ? selectedThreadRowColors.mutedIconTintClassName
+                  : rowAppearance.mutedIconTintClassName
+              }
+            />
+          </Pressable>
+        </View>
+      </RowPressable>
+    </View>
+  );
 });
 
 export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(props: {

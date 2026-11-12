@@ -105,7 +105,10 @@ function RefLabel({ reference, emphasized }: { reference: GitExplorerRef; emphas
       className={cn(
         "inline-flex h-4.5 min-w-0 max-w-36 flex-auto items-center gap-1 rounded px-1 text-xs leading-none",
         emphasized && "font-semibold",
-        "bg-muted text-foreground ring-1 ring-border ring-inset",
+        "ring-1 ring-inset",
+        reference.kind === "tag"
+          ? "bg-warning/16 font-medium text-warning-foreground ring-warning/45"
+          : "bg-muted text-foreground ring-border",
       )}
       label={`${reference.shortName} · ${reference.kind === "local" ? formatGitExplorerSync(reference) : reference.kind === "tag" ? "tag" : "remote-tracking branch"}`}
     >
@@ -252,7 +255,7 @@ function GitExplorerHistoryList({
   const revealIndex = revealRequest
     ? history.commits.findIndex((commit) => commit.hash === revealRequest.revision)
     : -1;
-  const canReveal = revealRequest && filters.historyScope === "all" && !filters.search;
+  const canReveal = revealRequest && filters.historyScope !== "current" && !filters.search;
   if (
     canReveal &&
     revealIndex < 0 &&

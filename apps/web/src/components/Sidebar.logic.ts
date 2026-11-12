@@ -26,6 +26,7 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import type { AsyncResult } from "effect/reactivity";
 import {
   effectiveSnoozed,
+  threadWokeAt,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -187,13 +188,13 @@ export function resolveSidebarThreadSection(input: {
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
-  | "pinned-header"
   | "active-placeholder"
+  | "pinned-placeholder"
   | "settled-placeholder"
-  | "pinned-divider"
   | "working-header"
   | "snoozed-header"
   | "pinned-projects"
+  | "pinned-header"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
@@ -209,11 +210,11 @@ export function sidebarListItemId(item: SidebarListItem): string {
 }
 
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
-  let section: SidebarSection = "pinned";
+  let section: SidebarSection = "active";
   for (let i = 0; i < index && i < items.length; i += 1) {
     const item = items[i]!;
     if (item.kind !== "marker") continue;
-    if (item.marker === "pinned-divider") section = "active";
+    if (item.marker === "pinned-header") section = "pinned";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -241,19 +242,15 @@ export function resolveSidebarDropTarget(
   if (section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
-  let currentSection: SidebarSection = "pinned";
+  let currentSection: SidebarSection = "active";
   for (const item of moved) {
     if (item.kind === "marker") {
-      if (item.marker === "pinned-divider") currentSection = "active";
-      else if (
-        item.marker === "working-header" ||
-        item.marker === "snoozed-header" ||
-        item.marker === "pinned-projects" ||
-        item.marker === "settled-header"
-      )
-        break;
+      if (item.marker === "settled-header") break;
+      if (item.marker === "pinned-header") currentSection = "pinned";
+      else if (item.marker === "working-header") currentSection = "working";
+      else if (item.marker === "snoozed-header") currentSection = "snoozed";
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
-    else activeOrder.push(item.key);
+    else if (currentSection === "active") activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
 }
@@ -439,7 +436,8 @@ export function planSidebarThreadDrop(input: {
         kind: "move-active",
         order,
         assignments,
-        unpin: activePinned,
+        // A pinned thread that needs you already sits in Active; reordering it keeps the pin.
+        unpin: activePinned && activeSection !== "active",
         unsettle: activeSettled,
         unsnooze: activeSection === "snoozed",
       };
@@ -706,6 +704,20 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
   return completedAt > lastVisitedAt;
+}
+
+/** A pinned thread that needs you joins the active list until you open it. */
+export function pinnedThreadNeedsYou(
+  thread: ThreadStatusInput & ThreadSnoozeShell,
+  options: { readonly now: string },
+): boolean {
+  const pill = resolveThreadStatusPill({ thread });
+  if (pill !== null && !pill.pulse && pill.label !== "Waiting") return true;
+  // Older servers cannot persist an acknowledgement.
+  if (thread.lastVisitedAt === undefined) return false;
+  const wokeAtMs = Date.parse(threadWokeAt(thread, options) ?? "");
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt ?? "");
+  return !Number.isNaN(wokeAtMs) && (Number.isNaN(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs);
 }
 
 /** Unopened threads' failures still count as unseen, unlike completions. */

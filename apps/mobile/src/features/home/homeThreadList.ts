@@ -18,6 +18,7 @@ import * as Order from "effect/Order";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import type { ThreadListV2PinnedProject } from "../threads/threadListV2";
 
 export type HomeProjectSortOrder = Exclude<SidebarProjectSortOrder, "manual">;
 
@@ -68,6 +69,15 @@ export function buildHomeProjectScopes(input: {
       archived: group.archived,
     };
   });
+}
+
+/** Pinned, unarchived scopes for the thread list's Pinned projects section. */
+export function pinnedHomeProjectScopes(
+  scopes: ReadonlyArray<HomeProjectScope>,
+): ReadonlyArray<ThreadListV2PinnedProject> {
+  return scopes
+    .filter((scope) => scope.pinned && !scope.archived)
+    .map((scope) => ({ key: scope.key, title: scope.title, project: scope.representative }));
 }
 
 export function findHomeProjectScope(

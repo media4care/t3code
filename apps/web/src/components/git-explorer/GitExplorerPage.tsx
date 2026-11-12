@@ -205,6 +205,12 @@ function RepositoryExplorer({
     searchField: "message",
     search: "",
   });
+  // A deleted or renamed branch falls back to all branches instead of an empty history.
+  const visibleHistoryFilters =
+    historyFilters.historyScope.startsWith("refs/") &&
+    !overview?.refs.some((ref) => ref.name === historyFilters.historyScope)
+      ? { ...historyFilters, historyScope: "all" as const }
+      : historyFilters;
   const [showReview, setShowReview] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -398,7 +404,8 @@ function RepositoryExplorer({
         ) : null}
         {overview ? (
           <GitExplorerHistoryFilters
-            filters={historyFilters}
+            filters={visibleHistoryFilters}
+            refs={overview.refs}
             onChange={(filters) => {
               setHistoryReveal(null);
               setHistoryFilters(filters);
@@ -541,11 +548,19 @@ function RepositoryExplorer({
                   if (revision && overview.refs.some((reference) => reference.hash === revision)) {
                     setHistoryFilters((filters) => ({
                       ...filters,
-                      historyScope: "all",
+                      historyScope:
+                        overview.refs.find((reference) => reference.name === filters.historyScope)
+                          ?.hash === revision
+                          ? filters.historyScope
+                          : "all",
                       search: "",
                     }));
                     setHistoryReveal({ revision });
                   }
+                }}
+                onShowHistory={(reference) => {
+                  setHistoryReveal(null);
+                  setHistoryFilters((filters) => ({ ...filters, historyScope: reference.name }));
                 }}
                 active={split || showBranches}
                 onOpenSubmodule={(path) =>
@@ -644,7 +659,7 @@ function RepositoryExplorer({
                   onSelect={selectRevision}
                   refresh={refresh}
                   refreshRevision={refreshRevision}
-                  filters={historyFilters}
+                  filters={visibleHistoryFilters}
                 />
               </section>
               {split && selectedRevision !== undefined ? (
