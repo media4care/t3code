@@ -219,7 +219,7 @@ export function useThreadListV2(input: {
         pendingTasks,
         pinnedCount: layout.pinnedCount,
         pinnedShelfExpanded: input.pinnedShelfExpanded,
-        pinnedShelfEndIndex: layout.pinnedShelfEndIndex,
+        pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
         workingCount: layout.workingCount,
         workingShelfExpanded: input.workingShelfExpanded,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,

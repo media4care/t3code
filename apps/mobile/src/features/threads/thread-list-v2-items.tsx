@@ -310,12 +310,6 @@ export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShe
   return <ThreadListV2ShelfHeader {...props} kind="pinned" />;
 });
 
-export const ThreadListV2ActiveLabel = memo(function ThreadListV2ActiveLabel(props: {
-  readonly pane?: "screen" | "sidebar";
-}) {
-  return <ThreadListV2Section label="Active" pane={props.pane} />;
-});
-
 export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(
   props: ThreadListV2ShelfHeaderProps,
 ) {

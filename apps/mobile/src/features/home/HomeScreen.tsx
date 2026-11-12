@@ -64,7 +64,6 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
-  ThreadListV2ActiveLabel,
   ThreadListV2PinnedShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
@@ -557,9 +556,6 @@ export function HomeScreen(props: HomeScreenProps) {
           onToggle={togglePinnedShelf}
         />
       );
-    }
-    if (item.type === "v2-active-label") {
-      return <ThreadListV2ActiveLabel />;
     }
     if (item.type === "v2-working-shelf") {
       return (
