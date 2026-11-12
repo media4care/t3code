@@ -267,6 +267,7 @@ import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
+import { SidebarPinnedProjects } from "./sidebar/SidebarPinnedProjects";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -330,6 +331,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const PINNED_PROJECTS_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-projects-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -991,6 +993,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const [pinnedProjectsExpanded, setPinnedProjectsExpanded] = useLocalStorage(
+    PINNED_PROJECTS_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1237,6 +1244,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (isMobile) setOpenMobile(false);
     void handleNewThread(scopeProjectRef(group.environmentId, group.id));
   });
+  // Boring mode already gives pinned projects the top folders.
+  const pinnedProjects = boringSidebarEnabled ? [] : scopeGroups.filter((group) => group.pinned);
+  const selectPinnedProject = useStableCallback((group: SidebarProjectSnapshot) =>
+    setProjectScopeKeys(
+      projectScopeKeys.length === 1 && projectScopeKeys[0] === group.projectKey
+        ? []
+        : [group.projectKey],
+    ),
+  );
   const handleProjectFolderContextMenu = useStableCallback(
     (group: SidebarProjectSnapshot, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -3216,6 +3232,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          {!isSearchingThreads && pinnedProjects.length > 0 ? (
+            <SidebarPinnedProjects
+              projects={pinnedProjects}
+              scopedProjectKeys={projectScopeKeys}
+              expanded={pinnedProjectsExpanded}
+              onToggle={() => setPinnedProjectsExpanded((value) => !value)}
+              onSelect={selectPinnedProject}
+              onNewThread={startThreadInProjectFolder}
+              onContextMenu={handleProjectFolderContextMenu}
+            />
+          ) : null}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
