@@ -656,6 +656,27 @@ describe("sidebar drag projection", () => {
     expect(result.get(sidebarMarkerId("settled-header"))?.y).toBe(-46);
   });
 
+  it("moves the pinned projects shelf with the rows above Settled", () => {
+    const result = preview(
+      {
+        items: [
+          pinnedHeader,
+          divider,
+          thread("a1", "active"),
+          thread("a2", "active"),
+          marker("pinned-projects"),
+          settledHeader,
+          thread("s", "settled"),
+        ],
+        settledOrder: ["a1", "s"],
+        settledExpanded: true,
+      },
+      "a1",
+      sidebarMarkerId("settled-header"),
+    );
+    expect(result.get(sidebarMarkerId("pinned-projects"))).toEqual({ ...stationary, y: -83 });
+  });
+
   it("preserves hidden snoozed membership when the only rendered route row leaves", () => {
     const items = [
       pinnedHeader,
