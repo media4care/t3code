@@ -17,6 +17,7 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
   (item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
+    item.marker === "pinned-projects" ||
     item.marker === "settled-header");
 
 export function restrictBelowSidebarLabel(
@@ -56,7 +57,9 @@ export function createSidebarCollisionDetection(
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
         if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
         else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
-        const nextHeader = (["working-header", "snoozed-header", "settled-header"] as const)
+        const nextHeader = (
+          ["working-header", "snoozed-header", "pinned-projects", "settled-header"] as const
+        )
           .map((marker) =>
             args.droppableContainers.find((container) => container.id === sidebarMarkerId(marker)),
           )
@@ -126,7 +129,8 @@ export function createSidebarSortingStrategy(input: {
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
-        if (isShelfHeader(item)) {
+        // The pinned projects shelf holds its rows, so its height is not a header's.
+        if (isShelfHeader(item) && item.marker !== "pinned-projects") {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
@@ -187,6 +191,9 @@ export function createSidebarSortingStrategy(input: {
     ) {
       marker("snoozed-header");
       projected.push(...groups.snoozed);
+    }
+    if (items.some((item) => item.kind === "marker" && item.marker === "pinned-projects")) {
+      marker("pinned-projects");
     }
     marker("settled-header");
     section("settled");
