@@ -267,6 +267,7 @@ import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
+import { SidebarPinnedProjects } from "./sidebar/SidebarPinnedProjects";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -330,6 +331,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const PINNED_PROJECTS_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-projects-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -991,6 +993,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const [pinnedProjectsExpanded, setPinnedProjectsExpanded] = useLocalStorage(
+    PINNED_PROJECTS_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1237,6 +1244,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (isMobile) setOpenMobile(false);
     void handleNewThread(scopeProjectRef(group.environmentId, group.id));
   });
+  // Boring mode already gives pinned projects the top folders.
+  const pinnedProjects = boringSidebarEnabled ? [] : scopeGroups.filter((group) => group.pinned);
+  const selectPinnedProject = useStableCallback((group: SidebarProjectSnapshot) =>
+    setProjectScopeKeys(
+      projectScopeKeys.length === 1 && projectScopeKeys[0] === group.projectKey
+        ? []
+        : [group.projectKey],
+    ),
+  );
   const handleProjectFolderContextMenu = useStableCallback(
     (group: SidebarProjectSnapshot, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -1924,6 +1940,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         activeThreads.length +
         workingThreads.length +
         snoozedThreads.length +
+        pinnedProjects.length +
         settledCount ===
         0
     ) {
@@ -1944,6 +1961,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       items.push({ kind: "marker", marker: "snoozed-header" });
       items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
     }
+    if (pinnedProjects.length > 0) items.push({ kind: "marker", marker: "pinned-projects" });
     items.push({ kind: "marker", marker: "settled-header" });
     const settledRows = rowsOf(renderedSettledThreads, "settled");
     items.push({ kind: "marker", marker: "settled-placeholder" });
@@ -1980,14 +1998,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       .join("\n") ?? "",
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
+    pinnedProjects.map((group) => group.projectKey).join("\n"),
   ].join("\0");
   const listMotionAnimate =
     dragState === null && sidebarListItems.length + visibleDraftSessionCount > 0;
   // Cache on both fields so layout-key changes trigger the effect even when animate is unchanged.
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
-  const shelfExpansionKey = [workingShelfExpanded, snoozedShelfExpanded, settledShelfExpanded].join(
-    ":",
-  );
+  const shelfExpansionKey = [
+    workingShelfExpanded,
+    snoozedShelfExpanded,
+    pinnedProjectsExpanded,
+    settledShelfExpanded,
+  ].join(":");
   const previousShelfExpansionKeyRef = useRef(shelfExpansionKey);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the list motion controller to animate or not after each layout-affecting commit
   useLayoutEffect(() => {
@@ -3561,13 +3583,33 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               />,
                             );
                             break;
+                          case "pinned-projects":
+                            items.push(
+                              <SidebarPinnedProjects
+                                key="pinned-projects"
+                                className={cn(
+                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
+                                )}
+                                projects={pinnedProjects}
+                                scopedProjectKeys={projectScopeKeys}
+                                expanded={pinnedProjectsExpanded}
+                                onToggle={() => setPinnedProjectsExpanded((value) => !value)}
+                                onSelect={selectPinnedProject}
+                                onNewThread={startThreadInProjectFolder}
+                                onContextMenu={handleProjectFolderContextMenu}
+                              />,
+                            );
+                            break;
                           case "settled-header":
                             items.push(
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
                                 className={cn(
-                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
+                                  workingThreads.length +
+                                    snoozedThreads.length +
+                                    pinnedProjects.length ===
+                                    0 && "mt-auto",
                                 )}
                                 label="Settled"
                                 count={settledCount}

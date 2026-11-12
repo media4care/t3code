@@ -193,6 +193,7 @@ export type SidebarListMarker =
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"
+  | "pinned-projects"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
@@ -247,6 +248,7 @@ export function resolveSidebarDropTarget(
       else if (
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
+        item.marker === "pinned-projects" ||
         item.marker === "settled-header"
       )
         break;
