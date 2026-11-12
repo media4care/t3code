@@ -42,7 +42,7 @@ import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenuItems } from "../home/home-list-filter-menu";
-import { buildHomeProjectScopes } from "../home/homeThreadList";
+import { buildHomeProjectScopes, pinnedHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -54,6 +54,8 @@ import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2PinnedShelfHeader,
+  ThreadListV2PinnedProjectRow,
+  ThreadListV2PinnedProjectsShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -182,6 +184,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode],
   );
+  const pinnedProjects = useMemo(() => pinnedHomeProjectScopes(projectScopes), [projectScopes]);
   const projectFilterOptions = pickableProjectGroups(projectScopes).map((scope) => ({
     key: scope.key,
     label: scope.title,
@@ -245,6 +248,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     toggleWorkingShelf,
     pinnedShelfExpanded,
     togglePinnedShelf,
+    pinnedProjectsExpanded,
+    togglePinnedProjects,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
@@ -289,6 +294,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     settledShelfExpanded,
     pinnedShelfExpanded,
     selectedThreadKey: props.selectedThreadKey ?? null,
+    pinnedProjects,
+    pinnedProjectsExpanded,
+    selectedProjectKey,
   });
   const listItems: readonly SidebarListItem[] =
     settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0
@@ -511,6 +519,26 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             expanded={item.expanded}
             onToggle={toggleSnoozedShelf}
             pane="sidebar"
+          />
+        );
+      case "v2-pinned-projects-shelf":
+        return (
+          <ThreadListV2PinnedProjectsShelfHeader
+            count={item.count}
+            disabled={item.disabled}
+            expanded={item.expanded}
+            onToggle={togglePinnedProjects}
+            pane="sidebar"
+          />
+        );
+      case "v2-pinned-project":
+        return (
+          <ThreadListV2PinnedProjectRow
+            pane="sidebar"
+            pinnedProject={item.pinnedProject}
+            selected={item.selected}
+            onSelectProject={setSelectedProjectKey}
+            onNewThreadInProject={props.onNewThreadInProject}
           />
         );
       case "v2-settled-shelf":

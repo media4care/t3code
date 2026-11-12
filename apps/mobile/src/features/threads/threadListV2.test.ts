@@ -1739,7 +1739,7 @@ describe("Working section beta", () => {
     expect(ids(layout).slice(0, 3)).toEqual(["finished-early", "finished-late", "asks-approval"]);
   });
 
-  it("places the shelves in order: Working, Snoozed, Pinned, Settled", () => {
+  it("places the shelves in order: Working, Snoozed, pinned projects, Pinned, Settled", () => {
     const layout = buildThreadListV2Items({
       threads: [
         makeThread({ id: ThreadId.make("pinned"), title: "pinned", pinnedAt: NOW }),
@@ -1773,29 +1773,48 @@ describe("Working section beta", () => {
       workingShelfExpanded: true,
       snoozedShelfExpanded: true,
     });
-    const items = buildThreadListV2ListItems({
-      items: layout.items,
-      pendingTasks: [makePendingTask("queued")],
-      pinnedCount: layout.pinnedCount,
-      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
-      workingCount: layout.workingCount,
-      workingShelfExpanded: true,
-      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
-      snoozedCount: layout.snoozedCount,
-      snoozedShelfExpanded: true,
-      snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
-      settledCount: layout.settledCount,
-      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
-    });
-    expect(
-      items.map((item) =>
+    const pinnedProjects = ["alpha", "beta"].map((key) => ({
+      key,
+      title: key,
+      project: {
+        environmentId,
+        id: ProjectId.make(key),
+        title: key,
+        workspaceRoot: `/workspaces/${key}`,
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    }));
+    const listItems = (pinnedProjectsExpanded: boolean) =>
+      buildThreadListV2ListItems({
+        items: layout.items,
+        pendingTasks: [makePendingTask("queued")],
+        pinnedCount: layout.pinnedCount,
+        pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
+        workingCount: layout.workingCount,
+        workingShelfExpanded: true,
+        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+        snoozedCount: layout.snoozedCount,
+        snoozedShelfExpanded: true,
+        snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
+        pinnedProjects,
+        pinnedProjectsExpanded,
+        selectedProjectKey: "beta",
+        settledCount: layout.settledCount,
+        settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+      }).map((item) =>
         item.type === "v2-thread"
           ? item.item.thread.id
           : item.type === "v2-pending"
             ? item.pendingTask.title
-            : item.type,
-      ),
-    ).toEqual([
+            : item.type === "v2-pinned-project"
+              ? `${item.pinnedProject.key}${item.selected ? " (selected)" : ""}`
+              : item.type,
+      );
+    expect(listItems(true)).toEqual([
       "queued",
       "active",
       "pinned-asks",
@@ -1803,10 +1822,19 @@ describe("Working section beta", () => {
       "working",
       "v2-snoozed-shelf",
       "snoozed",
+      "v2-pinned-projects-shelf",
+      "alpha",
+      "beta (selected)",
       "v2-pinned-shelf",
       "pinned",
       "v2-settled-shelf",
       "settled",
+    ]);
+    // Collapsed, the section keeps the project the list is filtered to.
+    expect(listItems(false).slice(7, 10)).toEqual([
+      "v2-pinned-projects-shelf",
+      "beta (selected)",
+      "v2-pinned-shelf",
     ]);
     const collapsed = buildThreadListV2Items({
       threads: layout.items.map((item) => item.thread),

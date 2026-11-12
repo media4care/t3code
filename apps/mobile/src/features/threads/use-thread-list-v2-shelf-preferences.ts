@@ -17,6 +17,8 @@ export function useThreadListV2ShelfPreferences() {
   // Open by default, and while preferences load, so pinned threads never flash away.
   const pinnedShelfExpanded =
     !loaded || preferencesResult.value.threadListPinnedShelfExpanded !== false;
+  const pinnedProjectsExpanded =
+    loaded && preferencesResult.value.threadListPinnedProjectsExpanded === true;
 
   // Transforms read optimistic state so same-frame presses toggle twice.
   const toggleSnoozedShelf = () => {
@@ -53,9 +55,19 @@ export function useThreadListV2ShelfPreferences() {
     });
   };
 
+  const togglePinnedProjects = () => {
+    if (!loaded) return;
+    savePreferences({
+      transform: (current) => ({
+        threadListPinnedProjectsExpanded: current.threadListPinnedProjectsExpanded !== true,
+      }),
+    });
+  };
+
   return {
     loaded,
     pinnedShelfExpanded,
+    pinnedProjectsExpanded,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -64,5 +76,6 @@ export function useThreadListV2ShelfPreferences() {
     toggleSnoozedShelf,
     toggleWorkingShelf,
     togglePinnedShelf,
+    togglePinnedProjects,
   } as const;
 }

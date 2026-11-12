@@ -10,6 +10,7 @@ import {
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
   threadListInboxReturns,
+  type ThreadListV2PinnedProject,
   threadListV2LayoutTime,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
@@ -66,6 +67,9 @@ export function useThreadListV2(input: {
   readonly settledShelfExpanded: boolean;
   readonly pinnedShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
+  readonly pinnedProjects: ReadonlyArray<ThreadListV2PinnedProject>;
+  readonly pinnedProjectsExpanded: boolean;
+  readonly selectedProjectKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
   const layoutTime = useMemo(
@@ -229,6 +233,10 @@ export function useThreadListV2(input: {
         settledCount: layout.settledCount,
         settledShelfExpanded: input.settledShelfExpanded,
         settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+        // A search lists matches only, as the web sidebar does.
+        pinnedProjects: input.searchQuery.trim().length === 0 ? input.pinnedProjects : [],
+        pinnedProjectsExpanded: input.pinnedProjectsExpanded,
+        selectedProjectKey: input.selectedProjectKey,
         snoozeLabelNow: `${input.now.slice(0, 16)}:00.000Z`,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
@@ -242,6 +250,10 @@ export function useThreadListV2(input: {
       input.workingShelfExpanded,
       input.snoozedShelfExpanded,
       input.settledShelfExpanded,
+      input.searchQuery,
+      input.pinnedProjects,
+      input.pinnedProjectsExpanded,
+      input.selectedProjectKey,
       input.now,
       input.snoozeEnvironmentIds,
       input.queuedThreadKeys,
