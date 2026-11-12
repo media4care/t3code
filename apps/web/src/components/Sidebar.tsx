@@ -21,7 +21,6 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
-  type Modifier,
 } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
@@ -191,6 +190,7 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  pinnedThreadNeedsYou,
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
@@ -214,11 +214,7 @@ import {
   type SidebarSection,
   resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
-import {
-  createSidebarCollisionDetection,
-  createSidebarSortingStrategy,
-  restrictBelowSidebarLabel,
-} from "./Sidebar.drag";
+import { createSidebarCollisionDetection, createSidebarSortingStrategy } from "./Sidebar.drag";
 import { SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import {
@@ -269,9 +265,9 @@ import {
 } from "./sidebar/SidebarProjectFolderHeader";
 import { SidebarPinnedProjects } from "./sidebar/SidebarPinnedProjects";
 import {
-  SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
+  SortableSidebarMarker,
 } from "./sidebar/SidebarListMarkers";
 
 function sameSidebarProviderEntries(
@@ -331,6 +327,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
 const PINNED_PROJECTS_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-projects-expanded";
 
 const inboxReturns = createInboxReturnTracker();
@@ -464,6 +461,11 @@ function useSidebarThreads(input: {
     false,
     Schema.Boolean,
   );
+  const [pinnedShelfExpanded, setPinnedShelfExpanded] = useLocalStorage(
+    PINNED_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
@@ -523,6 +525,9 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  const visiblePinnedThreads = pinnedShelfExpanded
+    ? pinnedThreads
+    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -544,12 +549,12 @@ function useSidebarThreads(input: {
           };
         });
   const orderedThreads = [
-    ...pinnedThreads,
     ...(projectFolders === null
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
+    ...visiblePinnedThreads,
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
@@ -588,6 +593,8 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
+    pinnedShelfExpanded,
+    togglePinnedShelf: () => setPinnedShelfExpanded((value) => !value),
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
@@ -596,6 +603,7 @@ function useSidebarThreads(input: {
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
+    visiblePinnedThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
@@ -670,7 +678,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         ? snoozed
         : section === "settled"
           ? settled
-          : section === "pinned"
+          : section === "pinned" && !pinnedThreadNeedsYou(thread, { now: preciseNow })
             ? pinned
             : inbox(thread)
       ).push(thread);
@@ -883,8 +891,6 @@ const SIDEBAR_DRAG_DISTANCE = 6;
 // dnd-kit's 20% edge zone at full speed runs the list away while the pointer rests near the bottom.
 const SIDEBAR_AUTO_SCROLL: AutoScrollOptions = { threshold: { x: 0, y: 0.05 }, acceleration: 3 };
 
-const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
-
 const threadSearchResultId = (index: number) => `sidebar-thread-search-result-${index}`;
 
 // Continuations that outlive a render read the open thread from the router.
@@ -1051,13 +1057,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const threadListRef = useRef<HTMLUListElement | null>(null);
   const searchResultsListRef = useRef<HTMLUListElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
-  const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const [dragState, setDragState] = useState<{
     readonly activeKey: string;
     readonly activeSection: SidebarSection;
     readonly occurredAt: string;
-    readonly activationY: number | null;
     readonly targetSection: SidebarSection | null;
     readonly contextDrag: boolean;
   } | null>(null);
@@ -1317,11 +1321,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleSnoozedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
+    pinnedShelfExpanded,
+    togglePinnedShelf,
     projectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
+    visiblePinnedThreads,
     orderedThreadKeys,
     threadByKey,
     settledThreadKeys,
@@ -1681,13 +1688,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
-  const restrictBelowPins: Modifier = (args) =>
-    restrictBelowSidebarLabel(args, dragLabelOffsetRef.current);
-  const dndModifiers = [
-    restrictToVerticalAxis,
-    restrictBelowPins,
-    restrictToFirstScrollableAncestor,
-  ];
+  const dndModifiers = [restrictToVerticalAxis, restrictToFirstScrollableAncestor];
   const attachListMotionRef = (node: HTMLUListElement) => {
     threadListRef.current = node;
     const motion = createSidebarListMotion(node);
@@ -1904,23 +1905,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const list = threadListRef.current;
     const viewport = list?.closest('[data-slot="scroll-area-viewport"]');
     dragScrollRef.current = viewport ? { viewport, top: viewport.scrollTop } : null;
-    const header = list?.querySelector<HTMLElement>('[data-testid="sidebar-pinned-header"]');
-    if (list && header) {
-      const listRect = list.getBoundingClientRect();
-      const scale = list.offsetWidth > 0 ? listRect.width / list.offsetWidth : 1;
-      dragLabelOffsetRef.current =
-        header.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
-    } else {
-      dragLabelOffsetRef.current = 0;
-    }
     setDragState({
       activeKey,
       activeSection,
       targetSection: activeSection,
       contextDrag: false,
       occurredAt: new Date().toISOString(),
-      activationY:
-        event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
     });
   };
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
@@ -1946,13 +1936,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) {
       return [];
     }
-    const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
-    const pinnedRows = rowsOf(pinnedThreads, "pinned");
-    items.push(...pinnedRows);
-    items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
-    items.push({ kind: "marker", marker: "active-placeholder" });
-    items.push(...activeRows);
+    const items: SidebarListItem[] = [{ kind: "marker", marker: "active-placeholder" }];
+    items.push(...rowsOf(activeThreads, "active"));
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
       items.push(...rowsOf(visibleWorkingThreads, "working"));
@@ -1962,6 +1947,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
     }
     if (pinnedProjects.length > 0) items.push({ kind: "marker", marker: "pinned-projects" });
+    // Kept without pins so a drag can still drop a thread into the empty shelf.
+    items.push({ kind: "marker", marker: "pinned-header" });
+    items.push({ kind: "marker", marker: "pinned-placeholder" });
+    items.push(...rowsOf(visiblePinnedThreads, "pinned"));
     items.push({ kind: "marker", marker: "settled-header" });
     const settledRows = rowsOf(renderedSettledThreads, "settled");
     items.push({ kind: "marker", marker: "settled-placeholder" });
@@ -2008,6 +1997,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     workingShelfExpanded,
     snoozedShelfExpanded,
     pinnedProjectsExpanded,
+    pinnedShelfExpanded,
     settledShelfExpanded,
   ].join(":");
   const previousShelfExpansionKeyRef = useRef(shelfExpansionKey);
@@ -2043,7 +2033,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
     enabled: !isContextDrag,
-    boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
     settledExpanded: settledShelfExpanded,
@@ -2053,39 +2042,32 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
-  const dragActivationY = dragState?.activationY;
   const dndCollisionDetection = (() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
       return createSidebarCollisionDetection(() => true);
     const source = threadByKey.get(draggedThreadKey);
     if (source === undefined) return createSidebarCollisionDetection(() => false);
-    return createSidebarCollisionDetection(
-      (id) => {
-        const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
-        if (target === null) return false;
-        return (
-          planSidebarThreadDrop({
-            activeKey: draggedThreadKey,
-            activeSection: draggedFromSection,
-            activePinned: source.pinnedAt != null,
-            activeSettled: source.settledOverride === "settled",
-            supportsSettlement: serverConfigs.has(source.environmentId),
-            target,
-            pinnedOrder: pinnedKeys,
-            pinnedKeysById,
-            reorderableKeys: draggableThreadKeys,
-            activeOrder: activeKeys,
-            activeKeysById,
-            activeReorderableKeys: activeReorderableThreadKeys,
-            activeTimeOrdered: workingShelfEnabled,
-          }).kind !== "none"
-        );
-      },
-      {
-        items: sidebarListItems,
-        activationY: dragActivationY ?? null,
-      },
-    );
+    return createSidebarCollisionDetection((id) => {
+      const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
+      if (target === null) return false;
+      return (
+        planSidebarThreadDrop({
+          activeKey: draggedThreadKey,
+          activeSection: draggedFromSection,
+          activePinned: source.pinnedAt != null,
+          activeSettled: source.settledOverride === "settled",
+          supportsSettlement: serverConfigs.has(source.environmentId),
+          target,
+          pinnedOrder: pinnedKeys,
+          pinnedKeysById,
+          reorderableKeys: draggableThreadKeys,
+          activeOrder: activeKeys,
+          activeKeysById,
+          activeReorderableKeys: activeReorderableThreadKeys,
+          activeTimeOrdered: workingShelfEnabled,
+        }).kind !== "none"
+      );
+    });
   })();
   const handleThreadDragEnd = (event: DragEndEvent) => {
     if (projectFolders !== null) return;
@@ -3383,6 +3365,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               folderRow ??
                               (section === "working" ||
                               section === "snoozed" ||
+                              section === "pinned" ||
                               section === "settled"
                                 ? `shelf:${section}`
                                 : undefined)
@@ -3513,28 +3496,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         switch (item.marker) {
-                          case "pinned-header":
-                            items.push(
-                              <SidebarDragBoundary
-                                key="pinned-header"
-                                marker="pinned-header"
-                                label="Pinned"
-                                visible={from !== null}
-                                isDropTarget={dragTargetSection === "pinned"}
-                              />,
-                            );
-                            break;
-                          case "pinned-divider":
-                            items.push(
-                              <SidebarDragBoundary
-                                key="pinned-divider"
-                                marker="pinned-divider"
-                                label="Active"
-                                visible={from !== null}
-                                isDropTarget={dragTargetSection === "active"}
-                              />,
-                            );
-                            break;
                           case "active-placeholder":
                             items.push(
                               <SidebarSectionPlaceholder
@@ -3600,17 +3561,60 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               />,
                             );
                             break;
+                          case "pinned-header": {
+                            const bottomAnchor =
+                              workingThreads.length +
+                                snoozedThreads.length +
+                                pinnedProjects.length ===
+                                0 && "mt-auto";
+                            items.push(
+                              pinnedThreads.length > 0 ? (
+                                <SidebarSectionHeader
+                                  key="pinned-shelf-header"
+                                  marker="pinned-header"
+                                  className={cn(bottomAnchor)}
+                                  label="Pinned"
+                                  count={pinnedThreads.length}
+                                  dragging={from !== null}
+                                  isDropTarget={dragTargetSection === "pinned"}
+                                  toggle={{
+                                    expanded: pinnedShelfExpanded,
+                                    onToggle: togglePinnedShelf,
+                                  }}
+                                />
+                              ) : (
+                                <SortableSidebarMarker
+                                  key="pinned-shelf-header"
+                                  marker="pinned-header"
+                                  className={cn("-mb-px h-0", bottomAnchor)}
+                                />
+                              ),
+                            );
+                            break;
+                          }
+                          case "pinned-placeholder":
+                            items.push(
+                              <SidebarSectionPlaceholder
+                                key="pinned-placeholder"
+                                marker="pinned-placeholder"
+                                label="Pinned"
+                                showHint={
+                                  from !== null &&
+                                  (visiblePinnedThreads.length === 0 ||
+                                    (from === "pinned" &&
+                                      visiblePinnedThreads.length === 1 &&
+                                      dragTargetSection !== null &&
+                                      dragTargetSection !== "pinned"))
+                                }
+                                isDropTarget={dragTargetSection === "pinned"}
+                              />,
+                            );
+                            break;
                           case "settled-header":
                             items.push(
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                className={cn(
-                                  workingThreads.length +
-                                    snoozedThreads.length +
-                                    pinnedProjects.length ===
-                                    0 && "mt-auto",
-                                )}
                                 label="Settled"
                                 count={settledCount}
                                 dragging={from !== null}
