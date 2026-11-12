@@ -64,6 +64,8 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2PinnedProjectRow,
+  ThreadListV2PinnedProjectsShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -83,6 +85,7 @@ import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
+  pinnedHomeProjectScopes,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
@@ -379,6 +382,7 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [projects, selectedEnvironmentId, projectGroupingMode],
   );
+  const pinnedProjects = useMemo(() => pinnedHomeProjectScopes(projectScopes), [projectScopes]);
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
@@ -441,6 +445,8 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    pinnedProjectsExpanded,
+    togglePinnedProjects,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(props.threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
@@ -484,6 +490,9 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+    pinnedProjects,
+    pinnedProjectsExpanded,
+    selectedProjectKey: v2ScopedProjectGroup?.key ?? null,
   });
   // Called as `props.onSelectThread(...)`, the compiler would cache this handler on the whole
   // props object, which is new on every render of Home's parent.
@@ -560,6 +569,27 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleSnoozedShelf}
+        />
+      );
+    }
+    if (item.type === "v2-pinned-projects-shelf") {
+      return (
+        <ThreadListV2PinnedProjectsShelfHeader
+          count={item.count}
+          disabled={item.disabled}
+          expanded={item.expanded}
+          onToggle={togglePinnedProjects}
+        />
+      );
+    }
+    if (item.type === "v2-pinned-project") {
+      return (
+        <ThreadListV2PinnedProjectRow
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          pinnedProject={item.pinnedProject}
+          selected={item.selected}
+          onSelectProject={props.onProjectChange}
+          onNewThreadInProject={props.onNewThreadInProject}
         />
       );
     }

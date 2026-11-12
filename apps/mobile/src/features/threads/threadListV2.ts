@@ -9,7 +9,10 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import {
   threadSearchMatchKey,
@@ -424,11 +427,35 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+export interface ThreadListV2PinnedProjectsShelfListItem {
+  readonly type: "v2-pinned-projects-shelf";
+  readonly key: "v2-pinned-projects-shelf";
+  readonly count: number;
+  readonly expanded: boolean;
+  readonly disabled: boolean;
+}
+
+export interface ThreadListV2PinnedProject {
+  /** The project filter's scope key. */
+  readonly key: string;
+  readonly title: string;
+  readonly project: EnvironmentProject;
+}
+
+export interface ThreadListV2PinnedProjectListItem {
+  readonly type: "v2-pinned-project";
+  readonly key: string;
+  readonly pinnedProject: ThreadListV2PinnedProject;
+  readonly selected: boolean;
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
+  | ThreadListV2PinnedProjectsShelfListItem
+  | ThreadListV2PinnedProjectListItem
   | ThreadListV2SettledShelfListItem;
 
 export function isThreadListV2ListItem(value: {
@@ -439,6 +466,8 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
+    value.type === "v2-pinned-projects-shelf" ||
+    value.type === "v2-pinned-project" ||
     value.type === "v2-settled-shelf"
   );
 }
@@ -488,6 +517,21 @@ export function threadListV2ListItemsAreEqual(
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
       );
+    case "v2-pinned-projects-shelf":
+      return (
+        previous.type === "v2-pinned-projects-shelf" &&
+        previous.count === item.count &&
+        previous.expanded === item.expanded &&
+        previous.disabled === item.disabled
+      );
+    case "v2-pinned-project":
+      return (
+        previous.type === "v2-pinned-project" &&
+        previous.key === item.key &&
+        previous.pinnedProject.title === item.pinnedProject.title &&
+        previous.pinnedProject.project === item.pinnedProject.project &&
+        previous.selected === item.selected
+      );
     case "v2-settled-shelf":
       return (
         previous.type === "v2-settled-shelf" &&
@@ -530,6 +574,10 @@ export function buildThreadListV2ListItems(input: {
   readonly settledCount?: number;
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
+  /** Listed between Snoozed and Settled; a collapsed section keeps the filtered project. */
+  readonly pinnedProjects?: ReadonlyArray<ThreadListV2PinnedProject>;
+  readonly pinnedProjectsExpanded?: boolean;
+  readonly selectedProjectKey?: string | null;
   readonly snoozeLabelNow?: string;
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly queuedThreadKeys?: ReadonlySet<string>;
@@ -605,6 +653,28 @@ export function buildThreadListV2ListItems(input: {
       disabled: shelfDisabled,
     });
     result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd));
+  }
+  const pinnedProjects = input.pinnedProjects ?? [];
+  if (pinnedProjects.length > 0) {
+    const pinnedProjectsExpanded = input.pinnedProjectsExpanded === true;
+    const selectedProjectKey = input.selectedProjectKey ?? null;
+    result.push({
+      type: "v2-pinned-projects-shelf",
+      key: "v2-pinned-projects-shelf",
+      count: pinnedProjects.length,
+      expanded: pinnedProjectsExpanded,
+      disabled: shelfDisabled,
+    });
+    for (const pinnedProject of pinnedProjects) {
+      const selected = pinnedProject.key === selectedProjectKey;
+      if (!pinnedProjectsExpanded && !selected) continue;
+      result.push({
+        type: "v2-pinned-project",
+        key: `v2-pinned-project:${pinnedProject.key}`,
+        pinnedProject,
+        selected,
+      });
+    }
   }
   if (settledShelfHeaderIndex !== null && settledCount > 0) {
     result.push({
