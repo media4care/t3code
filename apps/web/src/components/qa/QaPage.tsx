@@ -249,7 +249,10 @@ function ProjectQa({
       {!snapshot && query.isPending ? (
         <p className="text-sm text-muted-foreground">Loading QA…</p>
       ) : null}
-      {snapshot && !snapshot.configurationError && snapshot.suites.length === 0 ? (
+      {snapshot &&
+      !snapshot.configurationError &&
+      snapshot.checkout?.commit !== null &&
+      snapshot.suites.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-6">
           <h3 className="text-lg font-semibold">Add your first suite</h3>
           <p className="mt-2 text-sm text-muted-foreground">

@@ -1,6 +1,6 @@
-import { ProjectId, type QaRun, type QaSuite } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, type QaRun, type QaSuite } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
-import { groupQaSuites, qaDashboard } from "./qa.ts";
+import { groupQaSuites, qaDashboard, qaProjects, qaRepositories } from "./qa.ts";
 
 const suites: QaSuite[] = [
   { id: "backend", name: "API", command: "vp test run", component: "Backend", kind: "integration" },
@@ -72,4 +72,58 @@ it("combines case-insensitive search terms, result filters, and component or typ
   expect(groups[0]?.entries.map((e) => e.suite.id)).toEqual(["web"]);
   expect(groupQaSuites(entries, "component", "Web", "passed")).toEqual([]);
   expect(groupQaSuites([], "component", "", "all")).toEqual([]);
+});
+
+it("lists each repository once per environment that runs QA, by a fork's origin, without scratch projects", () => {
+  const studio = EnvironmentId.make("studio");
+  const laptop = EnvironmentId.make("laptop");
+  const app = {
+    canonicalKey: "github.com/acme/app",
+    locator: {
+      source: "git-remote" as const,
+      remoteName: "origin",
+      remoteUrl: "git@github.com:acme/app.git",
+    },
+    displayName: "acme/app",
+  };
+  const projects = [
+    { environmentId: studio, id: "app2", title: "app2", repositoryIdentity: app },
+    { environmentId: studio, id: "app3", title: "app3", repositoryIdentity: app },
+    { environmentId: studio, id: "local", title: "local", repositoryIdentity: null },
+    { environmentId: studio, id: "scratch", title: "No project", isScratch: true as const },
+    { environmentId: laptop, id: "app", title: "app", repositoryIdentity: app },
+    {
+      environmentId: studio,
+      id: "fork",
+      title: "fork",
+      repositoryIdentity: {
+        canonicalKey: "github.com/upstream/app",
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "upstream",
+          remoteUrl: "https://github.com/upstream/app.git",
+        },
+        displayName: "upstream/app",
+        origin: {
+          canonicalKey: "github.com/acme/app",
+          remoteUrl: "git@github.com:acme/app.git",
+          displayName: "acme/app",
+        },
+      },
+    },
+  ];
+  const environments = [
+    { environmentId: studio, serverConfig: { settings: { qaEnabled: true } } },
+    { environmentId: laptop, serverConfig: { settings: { qaEnabled: false } } },
+  ];
+
+  expect(
+    qaRepositories(qaProjects(projects, environments)).map(({ title, project }) => [
+      title,
+      project.id,
+    ]),
+  ).toEqual([
+    ["acme/app", "app2"],
+    ["local", "local"],
+  ]);
 });

@@ -68,7 +68,8 @@ A project on several machines must have every machine connected to pin or archiv
 
 Open **QA** and choose a repository to run its test suites and inspect previous runs.
 Clones and worktrees of one remote share their QA, so a repository appears once per
-environment.
+environment. For a fork, that is its `origin`, not the upstream it tracks. Only
+environments with **Run QA here** on list their repositories.
 On mobile, QA is available in the navigation overflow; use **Settings → Navigation**
 to move it into the tab bar. Web and desktop also offer **Open QA** in the command
 palette and the configurable `qa.open` keyboard command.
