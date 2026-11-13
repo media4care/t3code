@@ -3,7 +3,9 @@ import {
   GitCommandError,
   gitExplorerReleaseSourceKind,
   ProviderInstanceId,
+  type GitExplorerReleaseEvent,
   type GitExplorerReleasePlanResult,
+  type GitExplorerReleaseStep,
   type GitExplorerRef,
   type GitExplorerBranchStatus,
   type GitExplorerSubmodule,
@@ -452,22 +454,29 @@ export function gitExplorerReleaseText(text: GitExplorerReleaseText) {
 export function describeGitExplorerRelease(plan: GitExplorerReleasePlanResult) {
   const branch = { branch: plan.releaseBranch };
   const tag = { tag: plan.tag };
-  const steps: { title: GitExplorerReleaseText; detail: string | null }[] = [];
+  const steps: {
+    step: "merge" | "tag" | "push";
+    title: GitExplorerReleaseText;
+    detail: string | null;
+  }[] = [];
   if (plan.merge)
     steps.push({
+      step: "merge",
       title: ["Merge ", { branch: plan.source }, " into ", branch],
       detail: `Brings ${plural(plan.merge.total, "commit")} that ${plan.merge.total === 1 ? "isn't" : "aren't"} on ${plan.releaseBranch} yet`,
     });
   steps.push(
     plan.merge
-      ? { title: ["Tag the merge commit ", tag], detail: null }
+      ? { step: "tag", title: ["Tag the merge commit ", tag], detail: null }
       : {
+          step: "tag",
           title: ["Tag ", branch, ` at ${plan.tagCommit?.slice(0, 7) ?? ""} `, tag],
           detail:
             plan.unpublished > 0 ? `${plural(plan.unpublished, "commit")} not on origin yet` : null,
         },
   );
   steps.push({
+    step: "push",
     title: ["Push ", branch, " and ", tag, ` to ${GIT_EXPLORER_RELEASE_REMOTE}`],
     detail: [
       `Pushed together, so CI builds it and deploys it to ${plan.channel === "production" ? "production" : "stage"}`,
@@ -484,6 +493,56 @@ export function describeGitExplorerRelease(plan: GitExplorerReleasePlanResult) {
       ? `If ${plan.source} conflicts with ${plan.releaseBranch}, the merge stays in progress and an agent resolves it in a new thread. Nothing is tagged or pushed; release again from the ${plan.releaseBranch} tip afterwards.`
       : `If ${plan.source} conflicts with ${plan.releaseBranch}, nothing changes. Check out ${plan.releaseBranch} and release again to resolve the conflicts with an agent.`;
   return { steps, conflicts };
+}
+
+export type GitExplorerReleaseProgressEvent = Exclude<GitExplorerReleaseEvent, { _tag: "done" }>;
+export type GitExplorerReleaseProgress = {
+  readonly step: GitExplorerReleaseStep;
+  readonly startedAt: number;
+  readonly hook: string | null;
+  readonly output: string | null;
+};
+
+const RELEASE_STEPS: readonly GitExplorerReleaseStep[] = ["fetch", "merge", "tag", "push"];
+export const gitExplorerReleaseStepLabels: Record<GitExplorerReleaseStep, string> = {
+  fetch: "Checking origin…",
+  merge: "Merging…",
+  tag: "Tagging…",
+  push: "Pushing…",
+};
+
+export function applyGitExplorerReleaseProgress(
+  current: GitExplorerReleaseProgress | null,
+  event: GitExplorerReleaseProgressEvent,
+  now: number,
+): GitExplorerReleaseProgress | null {
+  if (event._tag === "step") return { step: event.step, startedAt: now, hook: null, output: null };
+  if (!current) return current;
+  return event._tag === "hook"
+    ? { ...current, hook: event.hookName }
+    : { ...current, output: event.text };
+}
+
+export function gitExplorerReleaseStepState(
+  progress: GitExplorerReleaseProgress | null,
+  step: GitExplorerReleaseStep,
+): "pending" | "active" | "done" {
+  const at = progress ? RELEASE_STEPS.indexOf(progress.step) : -1;
+  const order = RELEASE_STEPS.indexOf(step);
+  return at > order ? "done" : at === order ? "active" : "pending";
+}
+
+/** Elapsed time as `m:ss`. */
+export function formatGitExplorerReleaseElapsed(startedAt: number, now: number) {
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** The changes heading, such as "8 changes since 26.10.37". */
+export function describeGitExplorerReleaseChanges(plan: GitExplorerReleasePlanResult) {
+  if (!plan.changes || plan.changes.total === 0) return null;
+  const { total } = plan.changes;
+  return `${total} ${total === 1 ? "change" : "changes"} since ${plan.previousRelease?.tag ?? "the last release"}`;
 }
 
 /** The line under a release's version: which beta it is and the release it follows. */

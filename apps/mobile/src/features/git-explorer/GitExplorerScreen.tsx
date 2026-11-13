@@ -32,6 +32,7 @@ import { GitExplorerRepositoryMenu, gitExplorerHomeProject } from "./GitExplorer
 import { GitExplorerGraph } from "./GitExplorerGraph";
 import { GitExplorerChanges } from "./GitExplorerChanges";
 import { useGitExplorerCommitMenu } from "./GitExplorerCommitMenu";
+import { GitExplorerReleaseSheet } from "./GitExplorerReleaseSheet";
 import { GitExplorerTagDialog } from "./GitExplorerTagDialog";
 import { useActiveGitQuery, useAppForeground } from "./useActiveGitQuery";
 import { gitExplorerTarget, useGitExplorer, type GitExplorerParams } from "./useGitExplorer";
@@ -652,6 +653,9 @@ function GitExplorerRepository(props: {
                   onRefresh={explorer.refresh}
                   onClose={commitMenu.closeTagDialog}
                 />
+              ) : null}
+              {commitMenu.releaseSheet ? (
+                <GitExplorerReleaseSheet params={params} {...commitMenu.releaseSheet} />
               ) : null}
             </>
           ) : null}

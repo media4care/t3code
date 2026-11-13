@@ -1,10 +1,11 @@
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
-import { followStreamInEnvironment } from "./environmentStreams.ts";
+import { followStreamInEnvironment, runStreamInEnvironment } from "./environmentStreams.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
 export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
 import {
   type ClientGuardedRpcTag,
+  type EnvironmentAuthorizationError,
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
 } from "@t3tools/contracts";
@@ -25,12 +26,14 @@ import {
   type EnvironmentRpcFailure,
   type EnvironmentRpcStreamFailure,
   type EnvironmentRpcStreamValue,
+  type EnvironmentStreamCommandRpcTag,
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
   request,
   requestGuarded,
   RpcPermissionGuard,
+  runStreamGuarded,
   subscribe,
 } from "../rpc/client.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
@@ -1036,6 +1039,66 @@ export function createEnvironmentRpcCommand<
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },
+  });
+  return {
+    ...command,
+    requiredScopes: permissions.requiredScopes,
+    permissionAtom: permissions.permissionAtom,
+  };
+}
+
+/** A permission-aware command over a streaming RPC; `consume` folds its events into a result. */
+export function createEnvironmentRpcStreamCommand<
+  R,
+  ER,
+  TTag extends EnvironmentStreamCommandRpcTag,
+  W extends {
+    readonly environmentId: EnvironmentIdType;
+    readonly input: EnvironmentRpcInput<TTag>;
+  },
+  A,
+  E,
+>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  options: {
+    readonly label: string;
+    readonly tag: TTag;
+    readonly scheduler?: AtomCommandScheduler;
+    readonly concurrency?: AtomCommandConcurrency<W>;
+    readonly consume: (
+      target: W,
+      stream: Stream.Stream<
+        EnvironmentRpcStreamValue<TTag>,
+        | EnvironmentRpcStreamFailure<TTag>
+        | EnvironmentRpcUnavailableError
+        | EnvironmentAuthorizationError
+        | EnvironmentRegistry.EnvironmentNotRegisteredError,
+        EnvironmentRegistry.EnvironmentRegistry
+      >,
+    ) => Effect.Effect<A, E, EnvironmentRegistry.EnvironmentRegistry>;
+  },
+) {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  const command = createRuntimeCommand(runtime, {
+    label: options.label,
+    ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+    execute: (target: W, registry) =>
+      permissions.authorize(registry, target.environmentId, target.input).pipe(
+        Effect.andThen(() =>
+          options.consume(
+            target,
+            runStreamInEnvironment(
+              target.environmentId,
+              runStreamGuarded(options.tag, target.input),
+            ),
+          ),
+        ),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
+      ),
   });
   return {
     ...command,

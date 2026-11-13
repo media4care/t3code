@@ -218,6 +218,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.gitExplorerDeleteBranch]: "git",
   [WS_METHODS.gitExplorerRunAction]: "git",
   [WS_METHODS.gitExplorerReleasePlan]: "git",
+  [WS_METHODS.gitExplorerRelease]: "git",
 
   [WS_METHODS.gitPreparePullRequestThread]: "git",
   [WS_METHODS.vcsListRefs]: "vcs",

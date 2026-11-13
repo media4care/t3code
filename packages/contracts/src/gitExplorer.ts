@@ -235,6 +235,13 @@ export const GitExplorerReleasePlanResult = Schema.Struct({
       inWorktree: Schema.Boolean,
     }),
   ),
+  // Commits the release ships since the previous release, newest first and capped; null for a first release.
+  changes: Schema.NullOr(
+    Schema.Struct({
+      commits: Schema.Array(Schema.Struct({ hash: GitExplorerHash, subject: Schema.String })),
+      total: NonNegativeInt,
+    }),
+  ),
   // The commit tagged when nothing is merged.
   tagCommit: Schema.NullOr(GitExplorerHash),
   // Commits the push publishes to the release branch besides a merge it creates.
@@ -243,6 +250,28 @@ export const GitExplorerReleasePlanResult = Schema.Struct({
   blocked: Schema.NullOr(Schema.String),
 });
 export type GitExplorerReleasePlanResult = typeof GitExplorerReleasePlanResult.Type;
+// Releases `mergeRef` at `revision` as the reviewed plan's `tagName`, built on `releaseBase`.
+export const GitExplorerReleaseInput = Schema.Struct({
+  ...GitExplorerScope,
+  expectedHead: Schema.NullOr(GitExplorerHash),
+  expectedBranch: Schema.NullOr(Schema.String),
+  mergeRef: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024)),
+  revision: GitExplorerHash,
+  releaseChannel: GitExplorerReleaseChannel,
+  tagName: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024)),
+  releaseBase: GitExplorerHash,
+});
+export type GitExplorerReleaseInput = typeof GitExplorerReleaseInput.Type;
+export const GitExplorerReleaseStep = Schema.Literals(["fetch", "merge", "tag", "push"]);
+export type GitExplorerReleaseStep = typeof GitExplorerReleaseStep.Type;
+export const GitExplorerReleaseEvent = Schema.Union([
+  Schema.TaggedStruct("step", { step: GitExplorerReleaseStep }),
+  // A local Git hook started, or null once it finished.
+  Schema.TaggedStruct("hook", { hookName: Schema.NullOr(Schema.String) }),
+  Schema.TaggedStruct("output", { text: Schema.String }),
+  Schema.TaggedStruct("done", { result: GitExplorerRunActionResult }),
+]);
+export type GitExplorerReleaseEvent = typeof GitExplorerReleaseEvent.Type;
 export const GitExplorerHistoryInput = Schema.Struct({
   ...GitExplorerScope,
   snapshotId: Schema.String,

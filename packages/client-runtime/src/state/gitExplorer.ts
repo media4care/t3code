@@ -3,17 +3,30 @@ import {
   type GitExplorerDetailsInput,
   type GitExplorerOverviewInput,
   type GitExplorerPatchInput,
+  type GitExplorerReleaseInput,
+  type GitExplorerRunActionResult,
   WS_METHODS,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import type { GitExplorerReleaseProgressEvent } from "../gitExplorer.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentRpcStreamCommand,
+} from "./runtime.ts";
 import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 
 type ExplorerTarget<Input = GitExplorerOverviewInput> = {
   readonly environmentId: EnvironmentId;
   readonly input: Input;
+};
+
+type ReleaseTarget = ExplorerTarget<GitExplorerReleaseInput> & {
+  readonly onProgress: (event: GitExplorerReleaseProgressEvent) => void;
 };
 
 export function createGitExplorerEnvironmentAtoms<R, E>(
@@ -75,6 +88,32 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
     refreshTrigger,
   });
 
+  const release = createEnvironmentRpcStreamCommand(runtime, {
+    label: "environment-data:git-explorer:release",
+    tag: WS_METHODS.gitExplorerRelease,
+    scheduler: vcsCommandScheduler,
+    concurrency: {
+      mode: "serial",
+      key: ({ environmentId, input }: ReleaseTarget) =>
+        JSON.stringify([environmentId, input.projectId]),
+    },
+    consume: (target: ReleaseTarget, stream) =>
+      Effect.suspend(() => {
+        let result: GitExplorerRunActionResult | null = null;
+        return stream.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              if (event._tag === "done") result = event.result;
+              else target.onProgress(event);
+            }),
+          ),
+          Effect.flatMap(() =>
+            result ? Effect.succeed(result) : Effect.die("The release ended without a result."),
+          ),
+        );
+      }),
+  });
+
   return {
     overview,
     history,
@@ -102,6 +141,7 @@ export function createGitExplorerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
       },
     }),
+    release,
     readReleasePlan: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:git-explorer:read-release-plan",
       tag: WS_METHODS.gitExplorerReleasePlan,

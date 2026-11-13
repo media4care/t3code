@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -1327,7 +1328,7 @@ it.layer(layer)("GitExplorer", (it) => {
 
   it.effect("releases main into the newest release branch and tags it on origin", () =>
     Effect.gen(function* () {
-      const { explorer, git, write, root, fs, path } = yield* fixture;
+      const { explorer, git, write, root, fs, path, cwd } = yield* fixture;
       const remote = yield* fs.makeTempDirectoryScoped({ prefix: "t3-explorer-release-" });
       const origin = (args: readonly string[]) => git(["--git-dir", remote, ...args]);
       yield* git(["init", "--bare", remote]);
@@ -1352,6 +1353,7 @@ it.layer(layer)("GitExplorer", (it) => {
         blocked: null,
       });
       assert.equal(plan.previousRelease?.tag, "26.10.4");
+      assert.deepEqual(plan.changes, { commits: [{ hash: main, subject: "feature" }], total: 1 });
       assert.deepEqual(plan.merge, {
         commits: [{ hash: main, subject: "feature" }],
         total: 1,
@@ -1430,7 +1432,23 @@ it.layer(layer)("GitExplorer", (it) => {
       assert.isTrue(yield* explorer.runAction(fromBranch).pipe(Effect.isFailure));
       assert.equal(yield* git(["tag", "-l", "26.10.6*"]), "");
       yield* fs.remove(hook);
-      yield* explorer.runAction(fromBranch);
+      // The stream reports each step and what a slow pre-push hook prints.
+      yield* git(["config", "core.hooksPath", ".git/hooks"]);
+      yield* fs.makeDirectory(path.join(cwd, ".git", "hooks"), { recursive: true });
+      const prePush = path.join(cwd, ".git", "hooks", "pre-push");
+      yield* fs.writeFileString(
+        prePush,
+        "#!/bin/sh\nprintf '\\033[32mchecking release\\033[0m\\n'\n",
+      );
+      yield* fs.chmod(prePush, 0o755);
+      const events = Array.from(yield* Stream.runCollect(explorer.release(fromBranch)));
+      assert.deepEqual(
+        events.flatMap((event) => (event._tag === "step" ? [event.step] : [])),
+        ["fetch", "tag", "push"],
+      );
+      assert.deepInclude(events, { _tag: "hook", hookName: "pre-push" });
+      assert.deepInclude(events, { _tag: "output", text: "checking release" });
+      assert.equal(events.at(-1)?._tag, "done");
       assert.equal(
         yield* origin(["rev-parse", "refs/heads/v26.10", "refs/tags/26.10.6-beta"]),
         `${fix}\n${fix}`,
@@ -1442,6 +1460,10 @@ it.layer(layer)("GitExplorer", (it) => {
         channel: "production",
       });
       assert.deepInclude(published, { tag: "26.10.6", tagCommit: fix });
+      assert.deepEqual(published.changes, {
+        commits: [{ hash: fix, subject: "release fix" }],
+        total: 1,
+      });
       assert.match(published.blocked ?? "", /^v26\.10 is already on origin at this commit\./);
     }),
   );

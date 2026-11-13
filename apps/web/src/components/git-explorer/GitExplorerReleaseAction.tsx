@@ -1,6 +1,12 @@
 import {
+  applyGitExplorerReleaseProgress,
   describeGitExplorerRelease,
+  describeGitExplorerReleaseChanges,
   describeGitExplorerReleaseVersion,
+  formatGitExplorerReleaseElapsed,
+  type GitExplorerReleaseProgress,
+  gitExplorerReleaseStepLabels,
+  gitExplorerReleaseStepState,
   describeGitFailure,
   gitExplorerMergeConflictTask,
   gitExplorerReleaseText,
@@ -18,7 +24,9 @@ import type {
   GitExplorerReleaseChannel,
   GitExplorerReleasePlanResult,
 } from "@t3tools/contracts";
+import { CheckIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { tickTextContent } from "~/lib/tickTextContent";
 import { gitExplorerEnvironment } from "~/state/git-explorer";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -59,6 +67,35 @@ function ReleaseText({ text }: { text: GitExplorerReleaseText }) {
   );
 }
 
+function Elapsed({ since }: { since: number }) {
+  return (
+    <span
+      className="tabular-nums"
+      ref={tickTextContent((now) => formatGitExplorerReleaseElapsed(since, now), true)}
+    />
+  );
+}
+
+function StepMarker({ state, index }: { state: "pending" | "active" | "done"; index: number }) {
+  if (state === "done")
+    return (
+      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-success/16 text-success-foreground">
+        <CheckIcon className="size-3" aria-label="Done" />
+      </span>
+    );
+  if (state === "active")
+    return (
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        <Spinner size="sm" tone="muted" aria-label="In progress" />
+      </span>
+    );
+  return (
+    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border text-xs text-muted-foreground">
+      {index + 1}
+    </span>
+  );
+}
+
 export function GitExplorerReleaseAction(
   props: GitExplorerReleaseRequest & {
     environmentId: EnvironmentId;
@@ -80,7 +117,9 @@ export function GitExplorerReleaseAction(
   const [plan, setPlan] = useState<GitExplorerReleasePlanResult | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const launchAgent = useGitExplorerConflictAgent({ environmentId, scope: input });
-  const { execute, pending, allowed, failureMessage } = useGitExplorerAction({
+  const release = useAtomCommand(gitExplorerEnvironment.release, { reportFailure: false });
+  const [progress, setProgress] = useState<GitExplorerReleaseProgress | null>(null);
+  const { perform, pending, allowed, failureMessage } = useGitExplorerAction({
     ...props,
     overview,
     onSuccess: (result) => {
@@ -122,6 +161,7 @@ export function GitExplorerReleaseAction(
 
   const production = channel === "production";
   const description = plan ? describeGitExplorerRelease(plan) : null;
+  const changesHeading = plan ? describeGitExplorerReleaseChanges(plan) : null;
   const ready = allowed && !pending && plan !== null && plan.blocked === null;
   return (
     <Dialog
@@ -135,16 +175,29 @@ export function GitExplorerReleaseAction(
           onSubmit={(event) => {
             event.preventDefault();
             if (!ready || !plan) return;
-            void execute({
-              action: "release",
-              mergeRef: reference.name,
-              revision: reference.hash,
-              releaseChannel: channel,
-              tagName: plan.tag,
-              releaseBase: plan.base,
-            }).then((success) => {
+            setProgress(null);
+            void perform(() =>
+              release({
+                environmentId,
+                input: {
+                  ...input,
+                  expectedHead: overview.headHash,
+                  expectedBranch: overview.headBranch,
+                  mergeRef: reference.name,
+                  revision: reference.hash,
+                  releaseChannel: channel,
+                  tagName: plan.tag,
+                  releaseBase: plan.base,
+                },
+                onProgress: (event) =>
+                  setProgress((current) =>
+                    applyGitExplorerReleaseProgress(current, event, Date.now()),
+                  ),
+              }),
+            ).then((success) => {
               if (success) props.onClose();
               else {
+                setProgress(null);
                 setPlan(null);
                 setPlanRequest((request) => ({ ...request }));
               }
@@ -198,42 +251,72 @@ export function GitExplorerReleaseAction(
                     <AlertDescription>{plan.blocked}</AlertDescription>
                   </Alert>
                 ) : (
-                  <ol className="space-y-3">
-                    {description.steps.map((step, index) => (
-                      <li key={gitExplorerReleaseText(step.title)} className="flex gap-3">
-                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full border text-xs text-muted-foreground">
-                          {index + 1}
-                        </span>
-                        <div className="min-w-0 space-y-1">
-                          <div>
-                            <ReleaseText text={step.title} />
-                          </div>
-                          {step.detail ? (
-                            <div className="text-xs text-muted-foreground">{step.detail}</div>
+                  <>
+                    {plan.changes && changesHeading ? (
+                      <section className="space-y-1.5">
+                        <h3 className="text-xs font-medium text-muted-foreground">
+                          {changesHeading}
+                        </h3>
+                        <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded-md bg-foreground/4 px-2.5 py-2 text-xs">
+                          {plan.changes.commits.map((commit) => (
+                            <li key={commit.hash} className="flex gap-2.5">
+                              <span className="shrink-0 font-mono text-muted-foreground">
+                                {commit.hash.slice(0, 7)}
+                              </span>
+                              <span className="truncate">{commit.subject}</span>
+                            </li>
+                          ))}
+                          {plan.changes.total > plan.changes.commits.length ? (
+                            <li className="text-muted-foreground">
+                              +{plan.changes.total - plan.changes.commits.length} older
+                            </li>
                           ) : null}
-                          {index === 0 && plan.merge && plan.merge.commits.length > 0 ? (
-                            <ul className="space-y-0.5 rounded-md bg-foreground/4 px-2.5 py-2 text-xs">
-                              {plan.merge.commits.map((commit) => (
-                                <li key={commit.hash} className="flex gap-2.5">
-                                  <span className="shrink-0 font-mono text-muted-foreground">
-                                    {commit.hash.slice(0, 7)}
+                        </ul>
+                      </section>
+                    ) : null}
+                    <ol className="space-y-3">
+                      {description.steps.map((step, index) => {
+                        const state = gitExplorerReleaseStepState(progress, step.step);
+                        return (
+                          <li key={gitExplorerReleaseText(step.title)} className="flex gap-3">
+                            <StepMarker state={state} index={index} />
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex items-baseline justify-between gap-2">
+                                <span>
+                                  <ReleaseText text={step.title} />
+                                </span>
+                                {state === "active" && progress ? (
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    <Elapsed since={progress.startedAt} />
                                   </span>
-                                  <span className="truncate">{commit.subject}</span>
-                                </li>
-                              ))}
-                              {plan.merge.total > plan.merge.commits.length ? (
-                                <li className="text-muted-foreground">
-                                  +{plan.merge.total - plan.merge.commits.length} more
-                                </li>
+                                ) : null}
+                              </div>
+                              {step.detail ? (
+                                <div className="text-xs text-muted-foreground">{step.detail}</div>
                               ) : null}
-                            </ul>
-                          ) : null}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
+                              {state === "active" && progress?.hook ? (
+                                <div className="text-xs text-muted-foreground">
+                                  Running the local {progress.hook} hook
+                                </div>
+                              ) : null}
+                              {state === "active" && progress?.output ? (
+                                <div className="truncate rounded bg-foreground/4 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                                  {progress.output}
+                                </div>
+                              ) : null}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </>
                 )}
-                {!plan.blocked && description.conflicts ? (
+                {pending ? (
+                  <p className="text-xs text-muted-foreground">
+                    Closing this doesn't stop the release. You'll get a notification when it
+                    finishes.
+                  </p>
+                ) : !plan.blocked && description.conflicts ? (
                   <p className="text-xs text-muted-foreground">{description.conflicts}</p>
                 ) : null}
               </>
@@ -253,7 +336,13 @@ export function GitExplorerReleaseAction(
               variant={production ? "destructive" : "default"}
               disabled={!ready}
             >
-              {pending ? "Releasing…" : plan ? `Release ${plan.tag}` : "Release"}
+              {pending
+                ? progress
+                  ? gitExplorerReleaseStepLabels[progress.step]
+                  : "Releasing…"
+                : plan
+                  ? `Release ${plan.tag}`
+                  : "Release"}
             </Button>
           </DialogFooter>
         </form>
