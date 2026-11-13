@@ -1,5 +1,6 @@
 import {
   QaCiReport,
+  qaRemoteOf,
   type EnvironmentId,
   type QaCheckout,
   type RepositoryIdentity,
@@ -48,7 +49,9 @@ export function qaRunSource(run: QaRun) {
 }
 
 /** Projects on environments that run QA; one whose settings are unknown yet still counts. */
-export function qaProjects<Project extends { readonly environmentId: EnvironmentId }>(
+export function qaProjects<
+  Project extends { readonly environmentId: EnvironmentId; readonly isScratch?: true },
+>(
   projects: ReadonlyArray<Project>,
   environments: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -60,7 +63,7 @@ export function qaProjects<Project extends { readonly environmentId: Environment
       .filter((environment) => environment.serverConfig?.settings.qaEnabled === false)
       .map((environment) => environment.environmentId),
   );
-  return projects.filter((project) => !off.has(project.environmentId));
+  return projects.filter((project) => !project.isScratch && !off.has(project.environmentId));
 }
 
 /**
@@ -77,14 +80,10 @@ export function qaRepositories<
 >(projects: ReadonlyArray<Project>) {
   const entries = new Map<string, { key: string; title: string; project: Project }>();
   for (const project of projects) {
-    const identity = project.repositoryIdentity;
-    const key = `${project.environmentId}:${identity ? `repository:${identity.canonicalKey}` : project.id}`;
+    const remote = project.repositoryIdentity ? qaRemoteOf(project.repositoryIdentity) : null;
+    const key = `${project.environmentId}:${remote ? `repository:${remote.key}` : project.id}`;
     if (!entries.has(key))
-      entries.set(key, {
-        key,
-        title: identity?.displayName ?? identity?.name ?? project.title,
-        project,
-      });
+      entries.set(key, { key, title: remote?.title ?? project.title, project });
   }
   return [...entries.values()];
 }
