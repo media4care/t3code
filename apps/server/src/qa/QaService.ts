@@ -1,5 +1,6 @@
 import {
   QaError,
+  qaRemoteOf,
   QaConfiguration,
   QaRun,
   QaRunDevice,
@@ -243,15 +244,16 @@ const make = Effect.gen(function* () {
       .realPath(project.value.workspaceRoot)
       .pipe(Effect.mapError((cause) => new QaError({ reason: "workspace", cause })));
     const identity = yield* identities.resolve(projectRoot);
-    return { projectRoot, identity, key: identity?.canonicalKey ?? `project:${projectId}` };
+    const remote = identity ? qaRemoteOf(identity) : null;
+    return { projectRoot, remote, key: remote?.key ?? `project:${projectId}` };
   }, Effect.mapError(storageError));
 
   const scopeOf = Effect.fn("QaService.scope")(function* (input: {
     readonly projectId: ProjectId;
     readonly ref?: string | undefined;
   }) {
-    const { projectRoot, identity, key } = yield* repositoryOf(input.projectId);
-    if (!identity)
+    const { projectRoot, remote, key } = yield* repositoryOf(input.projectId);
+    if (!remote)
       return {
         key,
         projectId: input.projectId,
@@ -261,7 +263,7 @@ const make = Effect.gen(function* () {
         remoteUrl: null,
       } satisfies QaScope;
     const defaultRef = yield* checkouts
-      .defaultBranch(key, projectRoot, identity.locator.remoteName)
+      .defaultBranch(key, projectRoot, remote.remoteName)
       .pipe(Effect.mapError(storageError));
     return {
       key,
@@ -269,7 +271,7 @@ const make = Effect.gen(function* () {
       projectRoot,
       ref: input.ref ?? defaultRef,
       defaultRef,
-      remoteUrl: identity.locator.remoteUrl,
+      remoteUrl: remote.remoteUrl,
     } satisfies QaScope;
   });
 
@@ -301,10 +303,10 @@ const make = Effect.gen(function* () {
       const projectId = ProjectId.make(project_id);
       const repository = yield* repositoryOf(projectId).pipe(Effect.option);
       if (Option.isNone(repository)) continue;
-      const { key, identity } = repository.value;
+      const { key, remote } = repository.value;
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          if (identity)
+          if (remote)
             yield* sql`UPDATE qa_runs SET qa_key = ${key},
               ref = COALESCE(json_extract(run_json, '$.branch'), '')
               WHERE project_id = ${projectId} AND qa_key IS NULL`;
@@ -315,7 +317,7 @@ const make = Effect.gen(function* () {
             FROM qa_schedules WHERE project_id = ${projectId}`;
           for (const row of schedules) {
             const schedule = yield* decodeSchedule(row.schedule_json);
-            const ref = identity ? schedule.configuration.branch : "";
+            const ref = remote ? schedule.configuration.branch : "";
             yield* sql`INSERT OR IGNORE INTO qa_ref_schedules
               VALUES (${key}, ${ref}, ${projectId}, ${row.schedule_json})`;
           }

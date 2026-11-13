@@ -2,7 +2,25 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { DeviceFormFactor, DevicePlatform, DevicePoolKey } from "./device.ts";
+import type { RepositoryIdentity } from "./environment.ts";
 import { RecurringSchedule } from "./scheduledTask.ts";
+
+/** QA tests the remote a checkout pushes to: a fork's origin, not the upstream it tracks. */
+export function qaRemoteOf(identity: RepositoryIdentity) {
+  return identity.origin?.remoteUrl
+    ? {
+        key: identity.origin.canonicalKey,
+        remoteName: "origin",
+        remoteUrl: identity.origin.remoteUrl,
+        title: identity.origin.displayName,
+      }
+    : {
+        key: identity.canonicalKey,
+        remoteName: identity.locator.remoteName,
+        remoteUrl: identity.locator.remoteUrl,
+        title: identity.displayName ?? identity.name,
+      };
+}
 
 const ShortText = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
 const InputPath = TrimmedNonEmptyString.check(

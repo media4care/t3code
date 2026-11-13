@@ -210,8 +210,14 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
       Effect.succeed(
         remote
           ? {
-              canonicalKey: "example.test/qa",
-              locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: remote },
+              // A fork: identity names the upstream, but QA tests the origin it pushes to.
+              canonicalKey: "example.test/upstream",
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "upstream",
+                remoteUrl: `${remote}-upstream-missing`,
+              },
+              origin: { canonicalKey: "example.test/qa", remoteUrl: remote },
             }
           : null,
       ),
