@@ -27,6 +27,10 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../state/entities", () => ({
+  readProject: () => null,
+  readProjects: () => [],
+  readThreadShell: () => null,
+  useQuietThreadShell: () => null,
   useProjects: () => [
     { id: "alpha", environmentId: "laptop", title: "Alpha" },
     { id: "beta", environmentId: "remote", title: "Beta" },
