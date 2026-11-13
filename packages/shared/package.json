@@ -11,6 +11,10 @@
       "types": "./src/agentNotification.ts",
       "import": "./src/agentNotification.ts"
     },
+    "./pullRequestAnchor": {
+      "types": "./src/pullRequestAnchor.ts",
+      "import": "./src/pullRequestAnchor.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

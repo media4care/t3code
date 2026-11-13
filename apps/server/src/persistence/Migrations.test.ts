@@ -9,19 +9,21 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import Insights from "./Migrations/081_Insights.ts";
-import QaRuns from "./Migrations/082_QaRuns.ts";
-import QaInputs from "./Migrations/083_QaInputs.ts";
-import QaAutomation from "./Migrations/084_QaAutomation.ts";
+import Insights from "./Migrations/082_Insights.ts";
+import QaRuns from "./Migrations/083_QaRuns.ts";
+import QaInputs from "./Migrations/084_QaInputs.ts";
+import QaAutomation from "./Migrations/085_QaAutomation.ts";
+import QaRepositories from "./Migrations/086_QaRepositories.ts";
 
 const explorerMigrations = [
   ["Insights", Insights],
   ["QaRuns", QaRuns],
   ["QaInputs", QaInputs],
   ["QaAutomation", QaAutomation],
+  ["QaRepositories", QaRepositories],
 ] as const;
 
-// Explorer builds recorded their migrations right after upstream's 72, then after its 76, then after its 79.
+// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, and 80.
 const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, count: number) {
   yield* runMigrations({ toMigrationInclusive: base - 1 });
   yield* Migrator.make({})({
@@ -56,7 +58,7 @@ const v2TableCount = Effect.gen(function* () {
 
 describe("runMigrations", () => {
   it.effect.each(
-    [73, 77, 80].flatMap((base) => [1, 2, 3, 4].map((count) => [base, count] as const)),
+    [73, 77, 80, 81].flatMap((base) => [1, 2, 3, 4, 5].map((count) => [base, count] as const)),
   )("preserves Explorer data when upgrading %s-based migrations through %s", ([base, count]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -73,15 +75,18 @@ describe("runMigrations", () => {
         ...(count >= 3 ? ["qa_run_inputs"] : []),
         ...(count >= 4 ? ["qa_schedules"] : []),
       ];
-      const before = yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`);
+      // Later Explorer migrations add columns, so compare the columns that were saved.
+      const saved = Effect.forEach(tables, (table) =>
+        table === "qa_runs"
+          ? sql`SELECT id, project_id, suite_id, started_at, status, run_json, output FROM qa_runs`
+          : sql`SELECT * FROM ${sql(table)}`,
+      );
+      const before = yield* saved;
       yield* runMigrations();
       assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* saved, before);
       assert.deepStrictEqual(
-        yield* Effect.forEach(tables, (table) => sql`SELECT * FROM ${sql(table)}`),
-        before,
-      );
-      assert.deepStrictEqual(
-        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 81`,
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 82`,
         [{ created_at: "2026-10-30 00:00:00" }],
       );
       const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
@@ -94,10 +99,11 @@ describe("runMigrations", () => {
     [73, "ProjectionProjectsPinArchive"],
     [77, "DelegatedRecoveryIndexes"],
     [80, "ScheduledTaskThreadMode"],
+    [81, "ProjectionMessageSearchText"],
   ] as const)("rolls back a %s-based Explorer upgrade if %s fails", ([base, failing]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* seedExplorer(base, 4);
+      yield* seedExplorer(base, 5);
       const before = yield* history;
       yield* sql.unsafe(
         `CREATE TRIGGER fail_explorer_upgrade BEFORE INSERT ON effect_sql_migrations WHEN NEW.name = '${failing}' BEGIN SELECT RAISE(FAIL, 'injected failure'); END`,
@@ -111,15 +117,15 @@ describe("runMigrations", () => {
   );
 
   it.effect.each(
-    [73, 77, 80].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+    [73, 77, 80, 81].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
   )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* seedExplorer(base, 4);
+      yield* seedExplorer(base, 5);
       if (problem === "gap") {
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${base + 1}`;
       } else {
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 4}, 'UnknownMigration')`;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 5}, 'UnknownMigration')`;
       }
       const before = yield* history;
       const exit = yield* Effect.exit(runMigrations());
