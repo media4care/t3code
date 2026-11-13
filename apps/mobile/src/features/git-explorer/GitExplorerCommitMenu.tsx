@@ -188,5 +188,6 @@ export function useGitExplorerCommitMenu(props: {
     tagRequest,
     unavailable,
     closeTagDialog: () => setTagRequest(null),
+    releaseSheet: release.releaseSheet,
   };
 }

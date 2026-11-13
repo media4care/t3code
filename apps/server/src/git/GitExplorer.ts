@@ -21,6 +21,8 @@ import {
   type GitExplorerPatchInput,
   type GitExplorerPatchResult,
   type GitExplorerRef,
+  type GitExplorerReleaseEvent,
+  type GitExplorerReleaseInput,
   type GitExplorerReleasePlanInput,
   type GitExplorerReleasePlanResult,
   type GitExplorerStash,
@@ -28,6 +30,7 @@ import {
   type GitExplorerWorktree,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodeUtil from "node:util";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -37,10 +40,20 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { latestReleaseBranch, nextReleaseTag } from "./gitExplorerRelease.ts";
+
+const MAX_RELEASE_CHANGES = 200;
+/** Where a running release reports its steps; silent unless `release` streams them. */
+class ReleaseProgress extends Context.Reference<
+  (event: GitExplorerReleaseEvent) => Effect.Effect<void>
+>("@t3tools/server/git/GitExplorer/ReleaseProgress", {
+  defaultValue: () => () => Effect.void,
+}) {}
 
 export class GitExplorer extends Context.Service<
   GitExplorer,
@@ -60,6 +73,10 @@ export class GitExplorer extends Context.Service<
     readonly releasePlan: (
       input: GitExplorerReleasePlanInput,
     ) => Effect.Effect<GitExplorerReleasePlanResult, GitExplorerError | GitCommandError>;
+    /** Runs the reviewed release, reporting each step until a final `done` event. */
+    readonly release: (
+      input: GitExplorerReleaseInput,
+    ) => Stream.Stream<GitExplorerReleaseEvent, GitExplorerError | GitCommandError>;
     readonly history: (
       input: GitExplorerHistoryInput,
     ) => Effect.Effect<GitExplorerHistoryResult, GitExplorerError>;
@@ -1548,6 +1565,26 @@ const make = Effect.gen(function* () {
       run(cwd, ["rev-list", "--count", ...flags, range, "--"]).pipe(
         Effect.map((result) => Number(result.stdout.trim())),
       );
+    const commitsIn = (limit: number, revisions: readonly string[]) =>
+      run(cwd, [
+        "log",
+        "--no-merges",
+        "-n",
+        String(limit),
+        "--format=%H%x1f%s",
+        ...revisions,
+        "--",
+      ]).pipe(
+        Effect.map((result) =>
+          result.stdout
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const [hash, subject = ""] = line.split("\x1f");
+              return { hash: hash!, subject };
+            }),
+        ),
+      );
 
     // The source is not fetched: the release is of the commit that was reviewed.
     yield* fetch(["+refs/heads/v*:refs/remotes/origin/v*"]).pipe(
@@ -1611,22 +1648,11 @@ const make = Effect.gen(function* () {
           blocked = `${releaseBranch} already contains ${source}. ${onOrigin}`;
       } else {
         const range = `${base}..${input.revision}`;
-        const commits = (yield* run(cwd, [
-          "log",
-          "--no-merges",
-          "-n",
-          "5",
-          "--format=%H%x1f%s",
-          range,
-          "--",
-        ])).stdout
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => {
-            const [hash, subject = ""] = line.split("\x1f");
-            return { hash: hash!, subject };
-          });
-        merge = { commits, total: yield* count(range, "--no-merges"), inWorktree };
+        merge = {
+          commits: yield* commitsIn(5, [range]),
+          total: yield* count(range, "--no-merges"),
+          inWorktree,
+        };
         if (!blocked && elsewhere)
           blocked = `${releaseBranch} is checked out in another worktree. Release from that worktree.`;
         else if (!blocked && inWorktree && (yield* mergeInProgress(cwd)))
@@ -1647,6 +1673,23 @@ const make = Effect.gen(function* () {
       input.channel,
     )!;
     const previousDate = tags.find(([name]) => name === next.previous)?.[1];
+    const shipped = merge ? [base, input.revision] : [tagCommit!];
+    const since = next.previous ? [`^refs/tags/${next.previous}`] : [];
+    const changes = next.previous
+      ? {
+          commits: yield* commitsIn(MAX_RELEASE_CHANGES, [...shipped, ...since]),
+          total: Number(
+            (yield* run(cwd, [
+              "rev-list",
+              "--count",
+              "--no-merges",
+              ...shipped,
+              ...since,
+              "--",
+            ])).stdout.trim(),
+          ),
+        }
+      : null;
     const plan: GitExplorerReleasePlanResult = {
       channel: input.channel,
       source,
@@ -1656,6 +1699,7 @@ const make = Effect.gen(function* () {
       previousRelease:
         next.previous && previousDate ? { tag: next.previous, createdAt: previousDate } : null,
       merge,
+      changes,
       tagCommit,
       unpublished: tracked ? yield* count(`${tracked}..${tagCommit ?? base}`) : 0,
       blocked,
@@ -1783,6 +1827,8 @@ const make = Effect.gen(function* () {
                 operation: "release",
                 reason: "invalid-revision",
               });
+            const report = yield* ReleaseProgress;
+            yield* report({ _tag: "step", step: "fetch" });
             const { plan, local } = yield* planRelease(cwd, worktrees, {
               channel: releaseChannel,
               sourceRef: mergeRef,
@@ -1795,6 +1841,7 @@ const make = Effect.gen(function* () {
               });
             const branch = plan.releaseBranch;
             let commit = plan.tagCommit;
+            if (plan.merge) yield* report({ _tag: "step", step: "merge" });
             if (plan.merge?.inWorktree) {
               const conflictedPaths = yield* mergeIntoHead(
                 cwd,
@@ -1856,11 +1903,17 @@ const make = Effect.gen(function* () {
                 reason: "release-changed",
               });
             const tagRef = `refs/tags/${plan.tag}`;
+            yield* report({ _tag: "step", step: "tag" });
             yield* git.execute({
               operation: "GitExplorer.releaseTag",
               cwd,
               args: ["tag", "--no-sign", "--", plan.tag, commit],
             });
+            yield* report({ _tag: "step", step: "push" });
+            const output = (line: string) => {
+              const text = NodeUtil.stripVTControlCharacters(line).trim().slice(0, 500);
+              return text ? report({ _tag: "output", text }) : Effect.void;
+            };
             yield* git
               .execute({
                 operation: "GitExplorer.releasePush",
@@ -1877,6 +1930,13 @@ const make = Effect.gen(function* () {
                 ],
                 env: { GIT_TERMINAL_PROMPT: "0" },
                 timeoutMs: null,
+                // A pre-push hook can run for minutes; its output is the only sign of life.
+                progress: {
+                  onStdoutLine: output,
+                  onStderrLine: output,
+                  onHookStarted: (hookName) => report({ _tag: "hook", hookName }),
+                  onHookFinished: () => report({ _tag: "hook", hookName: null }),
+                },
               })
               .pipe(
                 // Without the tag, releasing again works out the same version.
@@ -2313,6 +2373,19 @@ const make = Effect.gen(function* () {
       );
     },
   );
+  const release: GitExplorer["Service"]["release"] = (input) =>
+    Stream.callback<GitExplorerReleaseEvent, GitExplorerError | GitCommandError>((queue) =>
+      runAction({ ...input, action: "release" }).pipe(
+        Effect.provideService(ReleaseProgress, (event) =>
+          Queue.offer(queue, event).pipe(Effect.asVoid),
+        ),
+        Effect.matchCauseEffect({
+          onFailure: (cause) => Queue.failCause(queue, cause),
+          onSuccess: (result) =>
+            Queue.offer(queue, { _tag: "done", result }).pipe(Effect.andThen(Queue.end(queue))),
+        }),
+      ),
+    );
   const releasePlan: GitExplorer["Service"]["releasePlan"] = Effect.fn("GitExplorer.releasePlan")(
     function* (input) {
       const { cwd, commonDirectory, worktrees } = yield* resolve(input);
@@ -2670,6 +2743,7 @@ const make = Effect.gen(function* () {
     branchStatuses,
     deleteBranch,
     runAction,
+    release,
     releasePlan,
   });
 });

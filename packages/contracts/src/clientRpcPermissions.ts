@@ -70,6 +70,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.gitExplorerRunAction]: AuthSourceControlWriteScope,
   // Planning fetches the release refs from origin.
   [WS_METHODS.gitExplorerReleasePlan]: AuthSourceControlWriteScope,
+  [WS_METHODS.gitExplorerRelease]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsCreateWorktree]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsRemoveWorktree]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsCreateRef]: AuthSourceControlWriteScope,

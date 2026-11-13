@@ -205,5 +205,6 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
     confirmMerge: merge.confirmMerge,
     releaseUnavailable: release.releaseUnavailable || busyBranch !== null,
     confirmRelease: release.confirmRelease,
+    releaseSheet: release.releaseSheet,
   };
 }

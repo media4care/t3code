@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
@@ -39,12 +40,9 @@ export function useGitExplorerAction({
   const [pending, setPending] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
-  const execute = async (
-    action: Omit<
-      GitExplorerRunActionInput,
-      "projectId" | "worktreePath" | "expectedHead" | "expectedBranch"
-    >,
-    expected = overview,
+  /** Runs one Git command with the shared busy state, toasts and refresh. */
+  const perform = async (
+    request: () => Promise<AtomCommandResult<GitExplorerRunActionResult, unknown>>,
   ) => {
     if (!allowed || inFlight.current) return false;
     inFlight.current = true;
@@ -52,15 +50,7 @@ export function useGitExplorerAction({
     setFailureMessage(null);
     setFailure(null);
     onBusyChange(true);
-    return run({
-      environmentId,
-      input: {
-        ...input,
-        ...action,
-        expectedHead: expected.headHash,
-        expectedBranch: expected.headBranch,
-      },
-    })
+    return request()
       .then((result) => {
         if (result._tag === "Success") {
           toastManager.add({
@@ -91,5 +81,23 @@ export function useGitExplorerAction({
         onBusyChange(false);
       });
   };
-  return { execute, pending, allowed, failureMessage, failure };
+  const execute = (
+    action: Omit<
+      GitExplorerRunActionInput,
+      "projectId" | "worktreePath" | "expectedHead" | "expectedBranch"
+    >,
+    expected = overview,
+  ) =>
+    perform(() =>
+      run({
+        environmentId,
+        input: {
+          ...input,
+          ...action,
+          expectedHead: expected.headHash,
+          expectedBranch: expected.headBranch,
+        },
+      }),
+    );
+  return { execute, perform, pending, allowed, failureMessage, failure };
 }

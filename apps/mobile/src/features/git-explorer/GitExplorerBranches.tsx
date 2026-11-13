@@ -25,6 +25,7 @@ import {
 } from "../threads/thread-list-v2-row-appearance";
 import { GitExplorerBranchRow } from "./GitExplorerBranchRow";
 import { GitExplorerBranchDeletion } from "./GitExplorerBranchDeletion";
+import { GitExplorerReleaseSheet } from "./GitExplorerReleaseSheet";
 import type { GitExplorerParams } from "./useGitExplorer";
 import { useGitExplorerBranchActions } from "./useGitExplorerBranchActions";
 
@@ -539,6 +540,9 @@ export function GitExplorerBranches(props: {
           );
         }}
       />
+      {actions.releaseSheet ? (
+        <GitExplorerReleaseSheet params={props.params} {...actions.releaseSheet} />
+      ) : null}
     </View>
   );
 }
