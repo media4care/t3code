@@ -294,7 +294,7 @@ function ProjectQa({
         />
       ) : null}
       {!connected ? null : simlock ? (
-        <QaSimlockNote environmentLabel={environmentLabel} />
+        <QaSimlockNote environmentId={environmentId} environmentLabel={environmentLabel} />
       ) : (
         <QaDevicePool environmentId={environmentId} environmentLabel={environmentLabel} />
       )}

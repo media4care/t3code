@@ -5,6 +5,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 
@@ -39,6 +40,11 @@ export function createDeviceEnvironmentAtoms<R, E>(
     state: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:device:state",
       tag: WS_METHODS.subscribeDeviceState,
+    }),
+    simlockInventory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:device:simlock-inventory",
+      tag: WS_METHODS.deviceSimlockInventory,
+      idleTtlMs: 0,
     }),
     pool: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:device:pool",
