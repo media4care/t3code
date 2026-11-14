@@ -511,6 +511,7 @@ const layerPreview = Layer.empty.pipe(
 );
 
 const layerDevice = DevicePool.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
   Layer.provideMerge(
     DeviceService.layer.pipe(
       Layer.provide(layerServerSettings),

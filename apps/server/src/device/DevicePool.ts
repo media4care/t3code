@@ -5,6 +5,7 @@ import {
   type DeviceForgetInput,
   type DevicePool as DevicePoolSnapshot,
   type DevicePoolQaRun,
+  type DeviceSimlockInventory,
   type DeviceServiceState,
   type DeviceSummary,
 } from "@t3tools/contracts";
@@ -23,9 +24,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerConfig from "../config.ts";
 import type * as DeviceHost from "./DeviceHost.ts";
 import * as DeviceService from "./DeviceService.ts";
+import { readSimlockInventory } from "./simlockInventory.ts";
 
 const POOL_FILE_NAME = "device-pool.json";
 const MAX_REMEMBERED_DEVICES = 100;
@@ -67,6 +70,7 @@ export class DevicePool extends Context.Service<
     readonly stream: Stream.Stream<DevicePoolSnapshot>;
     /** Lists devices again and returns the pool as of that listing. */
     readonly refresh: Effect.Effect<DevicePoolSnapshot>;
+    readonly simlockInventory: Effect.Effect<DeviceSimlockInventory>;
     /**
      * Starts a pool device when it is not running and waits until it can take commands. Returns
      * the device as listed then: an Android emulator is listed by its serial once it runs.
@@ -189,6 +193,7 @@ const snapshot = (
 };
 
 const make = Effect.gen(function* () {
+  const runner = yield* ProcessRunner.ProcessRunner;
   const deviceService = yield* DeviceService.DeviceService;
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -410,6 +415,9 @@ const make = Effect.gen(function* () {
   return DevicePool.of({
     stream: SubscriptionRef.changes(pool),
     refresh,
+    simlockInventory: readSimlockInventory.pipe(
+      Effect.provideService(ProcessRunner.ProcessRunner, runner),
+    ),
     prepare,
     claim,
     forget,

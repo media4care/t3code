@@ -357,6 +357,7 @@ import {
   DevicePoolError,
   DeviceEasAccountInput,
   DeviceSimlockIdentity,
+  DeviceSimlockInventory,
   DeviceSimlockIdentityError,
   DeviceSimlockIdentityInput,
   DeviceHostSummary,
@@ -560,6 +561,7 @@ export const WS_METHODS = {
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
+  deviceSimlockInventory: "device.simlockInventory",
   deviceOpen: "device.open",
   deviceClose: "device.close",
   deviceShutdown: "device.shutdown",
@@ -1866,6 +1868,12 @@ const WsDeviceSimlockIdentityRpc = Rpc.make(WS_METHODS.deviceSimlockIdentity, {
   error: Schema.Union([DeviceSimlockIdentityError, EnvironmentAuthorizationError]),
 });
 
+const WsDeviceSimlockInventoryRpc = Rpc.make(WS_METHODS.deviceSimlockInventory, {
+  payload: Schema.Struct({}),
+  success: DeviceSimlockInventory,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsDeviceListRpc = Rpc.make(WS_METHODS.deviceList, {
   payload: DeviceListInput,
   success: DeviceServiceState,
@@ -2569,6 +2577,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,
+  WsDeviceSimlockInventoryRpc,
   WsDeviceOpenRpc,
   WsDeviceCloseRpc,
   WsDeviceShutdownRpc,

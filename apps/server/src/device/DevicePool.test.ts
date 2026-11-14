@@ -20,6 +20,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerConfig from "../config.ts";
 import * as DevicePool from "./DevicePool.ts";
 import * as DeviceService from "./DeviceService.ts";
@@ -118,6 +119,7 @@ const fixture = Effect.fn("fixture")(function* () {
   const start = Layer.build(
     DevicePool.layer.pipe(
       Layer.provide(deviceService),
+      Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
       Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
     ),
   ).pipe(Effect.map((context) => Context.get(context, DevicePool.DevicePool)));
