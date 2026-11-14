@@ -1,3 +1,4 @@
+import { makeCanonicalTempDirectoryScoped } from "../testUtils/tempDirectory.ts";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -268,10 +269,7 @@ describe("Git output collection", () => {
 const makeTmpDir = (
   prefix = "git-vcs-driver-test-",
 ): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem.makeTempDirectoryScoped({ prefix });
-  });
+  makeCanonicalTempDirectoryScoped({ prefix });
 
 const writeTextFile = (
   cwd: string,

@@ -1,3 +1,9 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
+
+process.env.GIT_CONFIG_GLOBAL =
+  HostProcess.Platform.defaultValue() === "win32" ? "NUL" : "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
 // Override inherited autocrlf, signing and init-branch settings through env so every git child gets stable fixtures.
 const entries: ReadonlyArray<readonly [key: string, value: string]> = [
   ["core.autocrlf", "false"],
