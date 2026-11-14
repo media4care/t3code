@@ -267,6 +267,13 @@ example `xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET"`. The device pool and per-
 device choices do not apply in this mode. If Simlock is missing or cannot lease a
 device, the run is recorded as not run with Simlock's reason.
 
+On web and desktop, QA's device inventory shows the selected machine's enrolled
+devices and Android connections, including unauthorized and offline devices.
+Unlock an unauthorized device and accept its USB debugging prompt; a connected
+device must also be enrolled before Simlock can lease it. Refresh after fixing a
+connection. The collapsed model catalogue describes simulators and emulators
+that can be created; it is separate from device instances and deleted history.
+
 **Run affected suites** rechecks freshness and runs changed, expired, unknown,
 untested, and unsuccessful suites sequentially on the selected environment.
 Closing the client leaves the queue running. **Stop queued run** cancels the active

@@ -380,22 +380,4 @@ function DeviceStateBadge({ entry }: { entry: DevicePoolEntry }) {
   }
 }
 
-/** Shown in place of the pool when QA leases its devices from this machine's Simlock. */
-export function QaSimlockNote({ environmentLabel }: { environmentLabel: string }) {
-  return (
-    <section
-      aria-label="Device pool"
-      className="min-w-0 rounded-xl border border-border bg-card p-5"
-    >
-      <div className="flex items-center gap-2">
-        <MonitorSmartphoneIcon className="size-5 text-primary" />
-        <h3 className="font-semibold">Devices from Simlock</h3>
-      </div>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Each run leases fresh simulators and emulators from the Simlock worker on {environmentLabel}{" "}
-        and returns them when it ends. A run that cannot get one is recorded as not run with
-        Simlock’s reason. Change this in Settings → Devices → QA.
-      </p>
-    </section>
-  );
-}
+export { QaSimlockNote } from "./QaSimlockInventory";

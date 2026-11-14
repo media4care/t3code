@@ -229,6 +229,36 @@ export type DevicePoolEntry = typeof DevicePoolEntry.Type;
 export const DevicePool = Schema.Struct({ entries: Schema.Array(DevicePoolEntry) });
 export type DevicePool = typeof DevicePool.Type;
 
+/** Read-only inventory from the QA environment's local Simlock worker and Android bridge. */
+export const DeviceSimlockInventory = Schema.Struct({
+  scannedAt: IsoDateTime,
+  devices: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      platform: Schema.Literals(["ios", "android"]),
+      version: Schema.String,
+      physical: Schema.Boolean,
+      /** null means Simlock could not be queried, so enrollment is unknown. */
+      enrolled: Schema.NullOr(Schema.Boolean),
+      simlockState: Schema.NullOr(Schema.String),
+      state: Schema.String,
+      detail: Schema.String,
+    }),
+  ),
+  models: Schema.Array(
+    Schema.Struct({
+      platform: Schema.Literals(["ios", "android"]),
+      name: Schema.String,
+      formFactor: Schema.String,
+      runtimes: Schema.Array(Schema.String),
+    }),
+  ),
+  hiddenDeletedCount: Schema.Number,
+  issues: Schema.Array(Schema.String),
+});
+export type DeviceSimlockInventory = typeof DeviceSimlockInventory.Type;
+
 export const DeviceForgetInput = Schema.Struct({ key: DevicePoolKey });
 export type DeviceForgetInput = typeof DeviceForgetInput.Type;
 
