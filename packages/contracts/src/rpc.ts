@@ -8,6 +8,7 @@ import {
   QaRunInput,
   QaRun,
   QaRunDetails,
+  QaRunProgress,
   QaTestsInput,
   QaTestResults,
   QaSnapshot,
@@ -620,6 +621,7 @@ export const WS_METHODS = {
   qaCancelAffected: "qa.cancelAffected",
   qaCancel: "qa.cancel",
   qaDetails: "qa.details",
+  qaWatch: "qa.watch",
   qaTests: "qa.tests",
   qaSetSchedule: "qa.setSchedule",
   qaSetDevice: "qa.setDevice",
@@ -2191,6 +2193,12 @@ const WsQaDetailsRpc = Rpc.make(WS_METHODS.qaDetails, {
   success: QaRunDetails,
   error: Schema.Union([QaError, EnvironmentAuthorizationError]),
 });
+const WsQaWatchRpc = Rpc.make(WS_METHODS.qaWatch, {
+  payload: QaRunInput,
+  success: QaRunProgress,
+  error: Schema.Union([QaError, EnvironmentAuthorizationError]),
+  stream: true,
+});
 const WsQaTestsRpc = Rpc.make(WS_METHODS.qaTests, {
   payload: QaTestsInput,
   success: QaTestResults,
@@ -2423,6 +2431,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsQaCancelAffectedRpc,
   WsQaCancelRpc,
   WsQaDetailsRpc,
+  WsQaWatchRpc,
   WsQaTestsRpc,
   WsReleasesSubscribeRpc,
   WsReleasesRefreshRpc,

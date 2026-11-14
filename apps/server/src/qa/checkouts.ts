@@ -57,6 +57,16 @@ export interface QaCheckoutTarget {
   readonly projectRoot: string;
 }
 
+/** What a sync reports as it goes; `setup` lines belong to the ref's setup script. */
+export interface QaCheckoutListener {
+  readonly onProgress: (line: string, step: "checkout" | "setup") => Effect.Effect<void>;
+  readonly onSetupOutput: (text: string) => void;
+}
+const SILENT: QaCheckoutListener = {
+  onProgress: () => Effect.void,
+  onSetupOutput: () => undefined,
+};
+
 const tail = (text: string) =>
   NodeUtil.stripVTControlCharacters(text.slice(-QA_OUTPUT_TAIL_LIMIT)).trim();
 
@@ -162,24 +172,35 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
       return notify(key);
     });
 
-  const runSetup = Effect.fn("QaCheckouts.runSetup")(function* (
-    target: QaCheckoutTarget,
-    directory: string,
-  ) {
+  const setupScript = Effect.fn("QaCheckouts.setupScript")(function* (directory: string) {
     const contents = yield* fs
       .readFileString(path.join(directory, "t3.json"))
       .pipe(Effect.orElseSucceed(() => "{}"));
     const scripts = (yield* decodeProjectScripts(contents).pipe(
       Effect.orElseSucceed(() => ({ scripts: [] })),
     )).scripts;
-    const setup = scripts?.find((script) => script.runOnWorktreeCreate);
-    if (!setup) return;
+    return scripts?.find((script) => script.runOnWorktreeCreate);
+  });
+
+  const runSetup = Effect.fn("QaCheckouts.runSetup")(function* (
+    target: QaCheckoutTarget,
+    directory: string,
+    command: string,
+    onOutput: (text: string) => void,
+  ) {
+    // One decoder per stream, so a character split across chunks survives.
+    const forward = () => {
+      const decoder = new TextDecoder();
+      return (chunk: Uint8Array) => onOutput(decoder.decode(chunk, { stream: true }));
+    };
     yield* run({
       command: platform === "win32" ? "cmd.exe" : environment.SHELL || "/bin/sh",
-      args: platform === "win32" ? ["/d", "/s", "/c", setup.command] : ["-lc", setup.command],
+      args: platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command],
       cwd: directory,
       timeout: "30 minutes",
       env: { T3CODE_PROJECT_ROOT: target.projectRoot, T3CODE_WORKTREE_PATH: directory },
+      onStdoutChunk: forward(),
+      onStderrChunk: forward(),
     });
   });
 
@@ -200,9 +221,16 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
   const sync = Effect.fn("QaCheckouts.sync")(function* (
     target: QaCheckoutTarget,
     canSync: () => boolean,
-    onProgress: (line: string) => Effect.Effect<void> = () => Effect.void,
+    { onProgress, onSetupOutput }: QaCheckoutListener = SILENT,
   ) {
     const { key, ref } = target;
+    // Git work on a repository is serialized, so a sync of another ref holds this one up.
+    if (
+      [...live].some(
+        ([entry, { state }]) => entry.startsWith(liveKey(key, "")) && state !== "failed",
+      )
+    )
+      yield* onProgress("Waiting for another checkout of this repository to finish…", "checkout");
     return yield* lockFor(key).withPermit(
       Effect.gen(function* () {
         if (!canSync()) return yield* new QaError({ reason: "busy" });
@@ -213,7 +241,7 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
         const work = Effect.gen(function* () {
           yield* fs.makeDirectory(path.join(root, "refs"), { recursive: true });
           if (!(yield* fs.exists(repository))) {
-            yield* onProgress(`Cloning ${target.remoteUrl}…`);
+            yield* onProgress(`Cloning ${target.remoteUrl}…`, "checkout");
             yield* git(
               root,
               ["clone", "--bare", "--quiet", target.remoteUrl, repository],
@@ -222,7 +250,7 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
             // Bare clones map remote branches onto local ones only at clone time.
             yield* git(repository, ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"]);
           }
-          yield* onProgress(`Fetching ${target.remoteUrl}…`);
+          yield* onProgress(`Fetching ${target.remoteUrl}…`, "checkout");
           yield* git(
             repository,
             ["fetch", "--quiet", "--prune", "--prune-tags", "--tags", "--force", "origin"],
@@ -234,7 +262,7 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
           const registry = yield* readRegistry(key);
           const previous = registry.find((entry) => entry.ref === ref);
           const exists = yield* fs.exists(directory);
-          yield* onProgress(`Checking out ${ref} at ${commit.slice(0, 8)}…`);
+          yield* onProgress(`Checking out ${ref} at ${commit.slice(0, 8)}…`, "checkout");
           if (!exists) {
             yield* git(repository, ["worktree", "prune"]);
             yield* git(
@@ -257,9 +285,12 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
           const others = registry.filter((entry) => entry.ref !== ref);
           yield* writeRegistry(key, [...others, { ref, commit, syncedAt, ready }]);
           if (!ready) {
-            yield* setState(key, ref, "setup");
-            yield* onProgress("Running the setup script from t3.json…");
-            yield* runSetup(target, directory);
+            const setup = yield* setupScript(directory);
+            if (setup) {
+              yield* setState(key, ref, "setup");
+              yield* onProgress(`Running the setup script from t3.json: ${setup.command}`, "setup");
+              yield* runSetup(target, directory, setup.command, onSetupOutput);
+            }
             yield* writeRegistry(key, [...others, { ref, commit, syncedAt, ready: true }]);
           }
           const cutoff = Date.parse(syncedAt) - Duration.toMillis(UNUSED_CHECKOUT_TTL);
@@ -309,7 +340,11 @@ export const makeQaCheckouts = Effect.fn("QaCheckouts.make")(function* (
       path: yield* checkoutPath(key, ref),
       commit: entry?.commit ?? null,
       syncedAt: entry?.syncedAt ?? null,
-      error: current?.error ?? (entry && !entry.ready ? "The setup script did not finish." : null),
+      error: current
+        ? current.error
+        : entry && !entry.ready
+          ? "The setup script did not finish."
+          : null,
     } satisfies QaCheckout;
   });
 

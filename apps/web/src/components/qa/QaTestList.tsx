@@ -47,7 +47,7 @@ export function QaTestList({
   );
   const data = query.data;
   return (
-    <section aria-label="Individual tests" className="mt-5 space-y-3">
+    <section aria-label="Individual tests" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Tests</h3>
         <span className="text-xs text-muted-foreground">Results from this run</span>

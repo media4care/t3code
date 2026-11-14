@@ -16,6 +16,10 @@ import {
   type QaStartInput,
   type QaRunInput,
   type QaRunDetails,
+  type QaRunProgress,
+  type QaRunStep,
+  type QaRunStepId,
+  type QaSuite,
   type QaRefSummary,
   type QaSnapshot,
   type QaTestsInput,
@@ -44,6 +48,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -64,7 +69,7 @@ import {
   changedInputs,
   SHARED_RESULTS_DIRECTORY,
 } from "./inputs.ts";
-import { makeQaCheckouts, type QaCheckoutTarget } from "./checkouts.ts";
+import { makeQaCheckouts, type QaCheckoutListener, type QaCheckoutTarget } from "./checkouts.ts";
 import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import { leaseFromSimlock } from "./simlockLease.ts";
@@ -83,6 +88,8 @@ const DEVICE_WAIT = Duration.minutes(30);
 const DEVICE_RECHECK = Duration.seconds(30);
 // Opening QA fetches the shown ref at most this often.
 const BACKGROUND_SYNC_INTERVAL_MS = 60_000;
+// A watched run sends what changed at most this often, however noisy its command is.
+const WATCH_INTERVAL = Duration.millis(250);
 
 /**
  * What QA history belongs to: a repository with a remote, tested at `ref` in QA's own checkout,
@@ -134,6 +141,17 @@ function deviceEnvironment(suite: QaRun["suite"], devices: ReadonlyArray<QaRunDe
   };
 }
 
+/** The steps a run of `suite` goes through; `checkout` when it runs in QA's own checkout. */
+function stepsOf(suite: QaSuite, checkout: boolean): ReadonlyArray<QaRunStep> {
+  const ids: ReadonlyArray<QaRunStepId> = [
+    ...(checkout ? (["checkout", "setup"] as const) : []),
+    ...(suite.devices?.length ? (["devices"] as const) : []),
+    "command",
+    ...(suite.report === "junit" ? (["report"] as const) : []),
+  ];
+  return ids.map((id) => ({ id, status: "pending", startedAt: null, finishedAt: null }));
+}
+
 function withOutputTail(run: QaRun, output: string): QaRun {
   if (run.status !== "failed" && run.status !== "incomplete") return run;
   const outputTail = NodeUtil.stripVTControlCharacters(output.slice(-QA_OUTPUT_TAIL_LIMIT)).trim();
@@ -150,6 +168,8 @@ export class QaService extends Context.Service<
     readonly cancelAffected: (input: QaProjectInput) => Effect.Effect<void, QaError>;
     readonly cancel: (input: QaRunInput) => Effect.Effect<void, QaError>;
     readonly details: (input: QaRunInput) => Effect.Effect<QaRunDetails, QaError>;
+    /** A run's state and output as they change; ends once the run has. */
+    readonly watch: (input: QaRunInput) => Stream.Stream<QaRunProgress, QaError>;
     readonly tests: (input: QaTestsInput) => Effect.Effect<QaTestResults, QaError>;
     readonly setSchedule: (input: QaSetScheduleInput) => Effect.Effect<void, QaError>;
     readonly setDevice: (input: QaSetDeviceInput) => Effect.Effect<void, QaError>;
@@ -214,6 +234,9 @@ const make = Effect.gen(function* () {
     root: string;
     evidence: InputEvidence;
     shareResult: boolean;
+    /** Every character the run has written, including those `details.output` no longer keeps. */
+    outputTotal: number;
+    watchers: Set<Queue.Queue<void>>;
     fiber?: Fiber.Fiber<void, QaError>;
   }
   const active = new Map<string, ActiveRun>();
@@ -572,6 +595,56 @@ const make = Effect.gen(function* () {
     };
   }, Effect.mapError(storageError));
 
+  const watch = (input: QaRunInput) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const stored = yield* details(input);
+        const entry = active.get(input.runId);
+        if (!entry)
+          return Stream.make<[QaRunProgress]>({
+            run: stored.run,
+            output: stored.output,
+            reset: true,
+            outputTruncated: stored.outputTruncated,
+          });
+        // One slot per watcher: a signal means "look again", so a second one adds nothing.
+        const signal = yield* Queue.sliding<void>(1);
+        yield* Effect.acquireRelease(
+          Effect.sync(() => entry.watchers.add(signal)),
+          () => Effect.sync(() => entry.watchers.delete(signal)),
+        );
+        let sent: number | null = null;
+        let last: QaRun | null = null;
+        const next = Effect.sync(() => {
+          const { run, output, outputTruncated } = entry.details;
+          const kept = entry.outputTotal - output.length;
+          const reset = sent === null || sent < kept;
+          const finished = active.get(run.id) !== entry;
+          const event: QaRunProgress | null =
+            !reset && sent === entry.outputTotal && run === last
+              ? null
+              : {
+                  run,
+                  output: reset ? output : output.slice((sent ?? 0) - kept),
+                  reset,
+                  outputTruncated,
+                };
+          sent = entry.outputTotal;
+          last = run;
+          return { event, finished };
+        });
+        return Stream.concat(
+          Stream.fromEffect(next),
+          Stream.fromQueue(signal).pipe(
+            Stream.mapEffect(() => Effect.andThen(Effect.sleep(WATCH_INTERVAL), next)),
+          ),
+        ).pipe(
+          Stream.takeUntil(({ finished }) => finished),
+          Stream.flatMap(({ event }) => (event ? Stream.make(event) : Stream.empty)),
+        );
+      }),
+    );
+
   const tests = Effect.fn("QaService.tests")(function* (input: QaTestsInput) {
     const { run, reportXml } = yield* details(input);
     const offset = input.offset ?? 0;
@@ -648,14 +721,51 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => null),
   );
 
+  const notifyWatchers = (entry: ActiveRun) => {
+    for (const watcher of entry.watchers) Queue.offerUnsafe(watcher, undefined);
+  };
+
   const appendOutput = (entry: ActiveRun, text: string) => {
     const output = entry.details.output + text;
+    entry.outputTotal += text.length;
     entry.details = {
       ...entry.details,
       output: output.slice(-MAX_OUTPUT),
       outputTruncated: entry.details.outputTruncated || output.length > MAX_OUTPUT,
     };
+    notifyWatchers(entry);
   };
+
+  /**
+   * Ends the running step as `ended` and starts `id`, skipping the steps before it that never
+   * ran. A null `id` only ends the running step.
+   */
+  const moveToStep = Effect.fn("QaService.moveToStep")(function* (
+    entry: ActiveRun,
+    id: QaRunStepId | null,
+    ended: "done" | "failed" = "done",
+  ) {
+    const steps = entry.details.run.steps ?? [];
+    const target = steps.findIndex((step) => step.id === id);
+    if (steps[target]?.status === "running") return;
+    const at = yield* now;
+    entry.details = {
+      ...entry.details,
+      run: {
+        ...entry.details.run,
+        steps: steps.map((step, index) =>
+          index === target
+            ? { ...step, status: "running", startedAt: at }
+            : step.status === "running"
+              ? { ...step, status: ended, finishedAt: at }
+              : step.status === "pending" && index < target
+                ? { ...step, status: "skipped" }
+                : step,
+        ),
+      },
+    };
+    notifyWatchers(entry);
+  });
 
   /** Leases each device from this machine's Simlock worker; Simlock keeps runs off each other's. */
   const leaseDevices = Effect.fn("QaService.leaseDevices")(function* (
@@ -695,6 +805,7 @@ const make = Effect.gen(function* () {
   const prepareDevices = Effect.fn("QaService.prepareDevices")(function* (entry: ActiveRun) {
     const suite = entry.details.run.suite;
     if (!suite.devices?.length) return {};
+    yield* moveToStep(entry, "devices");
     const stop = (note: string) => {
       appendOutput(entry, `[T3 QA] ${note}\n`);
       entry.details = {
@@ -780,13 +891,14 @@ const make = Effect.gen(function* () {
       };
       return false;
     };
-    const synced = yield* checkouts
-      .sync(
-        targetOf(scope),
-        () => true,
-        (line) => Effect.sync(() => appendOutput(entry, `[T3 QA] ${line}\n`)),
-      )
-      .pipe(Effect.result);
+    const listener: QaCheckoutListener = {
+      onProgress: (line, step) =>
+        moveToStep(entry, step).pipe(
+          Effect.andThen(Effect.sync(() => appendOutput(entry, `[T3 QA] ${line}\n`))),
+        ),
+      onSetupOutput: (text) => appendOutput(entry, text),
+    };
+    const synced = yield* checkouts.sync(targetOf(scope), () => true, listener).pipe(Effect.result);
     if (synced._tag === "Failure") {
       const status = yield* checkouts.status(scope.key, scope.ref).pipe(Effect.option);
       const detail = Option.getOrUndefined(status)?.error;
@@ -821,6 +933,13 @@ const make = Effect.gen(function* () {
         commit,
         branch: isTag ? null : scope.ref,
         dirty: changes === null ? null : changes.length > 0,
+        // The ref's own suite decides what is left to do.
+        steps: [
+          ...(entry.details.run.steps ?? []).filter(
+            (step) => step.id === "checkout" || step.id === "setup",
+          ),
+          ...stepsOf(suite, false),
+        ],
       },
     };
     return true;
@@ -836,6 +955,7 @@ const make = Effect.gen(function* () {
       }
       const devices = yield* prepareDevices(entry);
       if (!devices) return;
+      yield* moveToStep(entry, "command");
       const run = entry.details.run;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-qa-" });
       const reportPath = path.join(directory, "report.xml");
@@ -867,6 +987,11 @@ const make = Effect.gen(function* () {
       let summary: QaRun["summary"] = null;
       let note: string | null = null;
       let reportXml: string | null = null;
+      yield* moveToStep(
+        entry,
+        run.suite.report === "junit" ? "report" : null,
+        exitCode === 0 ? "done" : "failed",
+      );
       if (run.suite.report === "junit") {
         const report = yield* Effect.gen(function* () {
           const info = yield* fs.stat(reportPath);
@@ -891,11 +1016,12 @@ const make = Effect.gen(function* () {
           note =
             "No valid JUnit report was produced. Write the report to T3_QA_REPORT_PATH (maximum 2 MiB).";
         }
+        yield* moveToStep(entry, null, report._tag === "Success" ? "done" : "failed");
       }
       entry.details = {
         ...entry.details,
         reportXml,
-        run: { ...run, exitCode, status, summary, note },
+        run: { ...entry.details.run, exitCode, status, summary, note },
       };
       const config = yield* catalog(entry.root).pipe(
         Effect.orElseSucceed(() => ({ suites: [], sharedResults: false })),
@@ -943,6 +1069,8 @@ const make = Effect.gen(function* () {
                 },
               };
             }
+            // A step still running is the one the run stopped in.
+            yield* moveToStep(entry, null, "failed");
             entry.details = {
               ...entry.details,
               run: { ...entry.details.run, finishedAt: yield* now },
@@ -974,7 +1102,12 @@ const make = Effect.gen(function* () {
                 }),
               )
               .pipe(
-                Effect.ensuring(Effect.sync(() => active.delete(entry.details.run.id))),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    active.delete(entry.details.run.id);
+                    notifyWatchers(entry);
+                  }),
+                ),
                 Effect.ensuring(PubSub.publish(updates, entry.scope.key)),
               );
           }),
@@ -1030,6 +1163,7 @@ const make = Effect.gen(function* () {
       summary: null,
       note: null,
       ...(options.scheduled ? { source: { type: "schedule" as const } } : {}),
+      steps: stepsOf(suite, scope.ref !== null && options.synced !== true),
     };
     if (options.expectedBranch && branch !== options.expectedBranch)
       return yield* new QaError({ reason: "branch" });
@@ -1050,6 +1184,8 @@ const make = Effect.gen(function* () {
       evidence,
       // Summaries belong in a checkout people commit from, not in QA's own.
       shareResult: config.sharedResults === true && scope.ref === null,
+      outputTotal: 0,
+      watchers: new Set(),
     };
     active.set(run.id, entry);
     entry.fiber = yield* execute(entry).pipe(
@@ -1488,6 +1624,7 @@ const make = Effect.gen(function* () {
     cancelAffected,
     cancel,
     details,
+    watch,
     tests,
     setSchedule,
     setDevice,

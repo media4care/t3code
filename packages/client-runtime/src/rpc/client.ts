@@ -60,6 +60,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
   | typeof WS_METHODS.qaSubscribe
+  | typeof WS_METHODS.qaWatch
   | typeof WS_METHODS.releasesSubscribe
   | typeof WS_METHODS.releasesRejections
   | typeof WS_METHODS.insightsSubscribe

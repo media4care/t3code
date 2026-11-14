@@ -40,6 +40,7 @@ import {
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
+import { applyQaRunProgress, type QaLiveRun } from "../qa.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import {
@@ -1363,6 +1364,19 @@ export function createServerEnvironmentAtoms<R, E>(
               ),
               () => null,
             )?.recentRuns.find((run) => run.id === input.runId)?.status,
+        ),
+    }),
+    // One running run's steps and output. Mounted only where the run is shown, so a run nobody
+    // looks at streams nothing.
+    qaRun: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:qa:run",
+      tag: WS_METHODS.qaWatch,
+      idleTtlMs: 0,
+      completeWhen: (view: QaLiveRun) => view.run.finishedAt !== null,
+      transform: (events) =>
+        events.pipe(
+          Stream.scan((): QaLiveRun | null => null, applyQaRunProgress),
+          Stream.filter((view): view is QaLiveRun => view !== null),
         ),
     }),
     qaTests: createEnvironmentRpcQueryAtomFamily(runtime, {

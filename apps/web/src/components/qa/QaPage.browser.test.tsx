@@ -10,7 +10,7 @@ import {
   type QaTestCase,
   type QaTestStatus,
 } from "@t3tools/contracts";
-import { QA_CI_REPORT_EXAMPLE } from "@t3tools/client-runtime/qa";
+import { QA_CI_REPORT_EXAMPLE, type QaLiveRun } from "@t3tools/client-runtime/qa";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import "~/index.css";
@@ -21,6 +21,7 @@ import { QaPage } from "./QaPage";
 const state = vi.hoisted(() => ({
   snapshots: {} as Record<string, QaSnapshot>,
   runs: {} as Record<string, QaRun>,
+  live: {} as Record<string, QaLiveRun>,
   tests: {} as Record<string, QaTestCase[]>,
   pool: [] as DevicePoolEntry[],
   allowed: true,
@@ -50,6 +51,7 @@ vi.mock("../../state/server", async () => {
     serverEnvironment: {
       qaLive: (input: unknown) => ({ kind: "snapshot", target: input }),
       qaDetails: (input: unknown) => ({ kind: "details", target: input }),
+      qaRun: (input: unknown) => ({ kind: "live", target: input }),
       qaTests: (input: unknown) => ({ kind: "tests", target: input }),
       setQaSchedule: { kind: "setSchedule", permissionAtom: () => Atom.make(state.allowed) },
       importQaReport: { kind: "import", permissionAtom: () => Atom.make(state.allowed) },
@@ -66,18 +68,28 @@ vi.mock("../../state/device", () => ({
   deviceEnvironment: { pool: (input: unknown) => ({ kind: "pool", target: input }) },
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (query: {
-    kind: string;
-    target: {
-      input: {
-        projectId: string;
-        runId?: string;
-        search?: string;
-        offset?: number;
-        status?: QaTestStatus;
+  useEnvironmentQuery: (
+    query: {
+      kind: string;
+      target: {
+        input: {
+          projectId: string;
+          runId?: string;
+          search?: string;
+          offset?: number;
+          status?: QaTestStatus;
+        };
       };
-    };
-  }) => {
+    } | null,
+  ) => {
+    if (!query) return { data: null, error: null, isPending: false, refresh: () => {} };
+    if (query.kind === "live")
+      return {
+        data: state.live[query.target.input.runId ?? ""] ?? null,
+        error: null,
+        isPending: false,
+        refresh: () => {},
+      };
     const run = state.runs[query.target.input.runId ?? ""];
     const allTests = state.tests[query.target.input.runId ?? ""];
     const terms = (query.target.input.search ?? "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -220,6 +232,7 @@ vi.mock("../../state/use-atom-command", () => ({
 function setup() {
   state.allowed = true;
   state.runs = {};
+  state.live = {};
   state.tests = {};
   state.pool = [];
   state.snapshots = Object.fromEntries(
@@ -249,10 +262,14 @@ it("keeps runs scoped to the selected project and environment when switching the
     { router: "/qa" },
   );
   await screen.getByRole("button", { name: "Run", exact: true }).click();
-  await screen.getByText("Run output", { exact: true }).click();
+  // Starting a suite leaves the page where it is; its run opens when asked for.
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "View run", exact: true }).click();
+  await page.getByText("Run output", { exact: true }).click();
   await expect
-    .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
+    .element(page.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await screen.getByRole("combobox", { name: "QA repository" }).click();
   await page.getByRole("option", { name: "Beta · Remote" }).click();
   await expect.element(screen.getByRole("heading", { name: "beta tests" })).toBeVisible();
@@ -260,10 +277,85 @@ it("keeps runs scoped to the selected project and environment when switching the
     .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .not.toBeInTheDocument();
   await screen.getByRole("button", { name: "Run", exact: true }).click();
-  await screen.getByText("Run output", { exact: true }).click();
+  await screen.getByRole("button", { name: "View run", exact: true }).click();
+  await page.getByText("Run output", { exact: true }).click();
   await expect
-    .element(screen.getByText("remote:beta: beta tests: captured output", { exact: true }))
+    .element(page.getByText("remote:beta: beta tests: captured output", { exact: true }))
     .toBeVisible();
+});
+
+it("shows a running suite's steps and newest output in its card, and all of it in the run", async () => {
+  dashboardFixture();
+  const started: QaRun = {
+    ...state.runs.api!,
+    status: "running",
+    finishedAt: null,
+    exitCode: null,
+    summary: null,
+    steps: [
+      { id: "checkout", status: "pending", startedAt: null, finishedAt: null },
+      { id: "setup", status: "pending", startedAt: null, finishedAt: null },
+      { id: "command", status: "pending", startedAt: null, finishedAt: null },
+    ],
+  };
+  state.runs.api = started;
+  state.snapshots.alpha = {
+    ...state.snapshots.alpha!,
+    latestRuns: state.snapshots.alpha!.latestRuns.map((item) =>
+      item.id === started.id ? started : item,
+    ),
+  };
+  // The snapshot only says the run started; what it is doing arrives on its own stream.
+  state.live.api = {
+    run: {
+      ...started,
+      steps: [
+        {
+          id: "checkout",
+          status: "done",
+          startedAt: "2026-10-30T10:00:00.000Z",
+          finishedAt: "2026-10-30T10:00:04.000Z",
+        },
+        { id: "setup", status: "skipped", startedAt: null, finishedAt: null },
+        {
+          id: "command",
+          status: "running",
+          startedAt: "2026-10-30T10:00:04.000Z",
+          finishedAt: null,
+        },
+      ],
+    },
+    output: `${Array.from({ length: 30 }, (_, line) => `line ${line}`).join("\n")}\nnewest line\n`,
+    outputTruncated: false,
+  };
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  const suite = screen.getByRole("region", { name: started.suite.name, exact: true });
+  await expect
+    .element(suite.getByRole("listitem", { name: "Update checkout: done", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(suite.getByRole("listitem", { name: "Run setup script: skipped", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(suite.getByRole("listitem", { name: "Run tests: running", exact: true }))
+    .toHaveAttribute("aria-current", "step");
+  const lines = Array.from({ length: 30 }, (_, line) => `line ${line}`);
+  await expect
+    .element(suite.getByRole("log"))
+    .toHaveTextContent(`${lines.slice(-11).join(" ")} newest line`);
+  await suite.getByRole("button", { name: "View run", exact: true }).click();
+  const details = page.getByRole("dialog", { name: started.suite.name, exact: true });
+  await expect
+    .element(details.getByRole("listitem", { name: "Run tests: running", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(details.getByRole("log"))
+    .toHaveTextContent(`${lines.join(" ")} newest line`);
 });
 
 it("opens failed run output without a report and lets it be collapsed", async () => {
@@ -291,7 +383,7 @@ it("opens failed run output without a report and lets it be collapsed", async ()
   const suite = screen.getByRole("region", { name: run.suite.name, exact: true });
   await expect.element(suite.getByText(failure.outputTail!, { exact: true })).toBeVisible();
   await suite.getByRole("button", { name: "View run", exact: true }).click();
-  const details = screen.getByRole("region", { name: "Run details", exact: true });
+  const details = page.getByRole("dialog", { name: run.suite.name, exact: true });
   const output = details.getByText(`${run.id}: ${run.suite.name}: captured output`, {
     exact: true,
   });
@@ -596,7 +688,7 @@ it("lists individual results with paging, search, result filters, and failure de
     { router: "/qa" },
   );
   await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
-  const results = screen.getByRole("region", { name: "Individual tests", exact: true });
+  const results = page.getByRole("region", { name: "Individual tests", exact: true });
   await expect.element(results.getByText("1–50 of 123 tests", { exact: true })).toBeVisible();
   await expect
     .element(results.getByText("signs in with valid credentials", { exact: true }))
@@ -641,7 +733,7 @@ it("lists individual results with paging, search, result filters, and failure de
     .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
     .toBeEnabled();
   await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
-  await expect.element(screen.getByRole("table", { name: "Test results" })).toBeVisible();
+  await expect.element(page.getByRole("table", { name: "Test results" })).toBeVisible();
   state.snapshots.alpha = { ...state.snapshots.alpha!, testResultsAvailable: false };
   await screen.rerender(
     <SidebarProvider key="old-server">
@@ -651,12 +743,12 @@ it("lists individual results with paging, search, result filters, and failure de
   await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
   await expect
     .element(
-      screen.getByText("Update this environment’s server to view individual test results.", {
+      page.getByText("Update this environment’s server to view individual test results.", {
         exact: true,
       }),
     )
     .toBeVisible();
-  await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
+  await expect.element(page.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
   const shared: QaRun = { ...run, repositoryFile: "t3.qa-results/api.json" };
   state.runs.api = shared;
   state.tests = {};
@@ -676,8 +768,8 @@ it("lists individual results with paging, search, result filters, and failure de
     .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
     .not.toBeInTheDocument();
   await screen.getByRole("button", { name: "View run", exact: true }).click();
-  await expect.element(screen.getByText("t3.qa-results/api.json", { exact: true })).toBeVisible();
-  await expect.element(screen.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
+  await expect.element(page.getByText("t3.qa-results/api.json", { exact: true })).toBeVisible();
+  await expect.element(page.getByRole("table", { name: "Test results" })).not.toBeInTheDocument();
 });
 
 it("picks a device for each suite, lets people choose another, waits for busy ones, and blocks suites without one", async () => {

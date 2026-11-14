@@ -121,7 +121,9 @@ keeps its history, and checkouts unused for 14 days are removed automatically.
 A project without a remote is tested in its current checkout, including uncommitted
 changes. Prepare the test database, browser, or installed app as your command
 requires. One suite runs at a time per repository; closing QA or disconnecting the
-client does not stop it. Cancel stops the command and its
+client does not stop it. While a suite runs, its card lists the run's steps, with
+the current one marked, and follows the newest output, setup script included;
+**View run** shows the whole log. Cancel stops the command and its
 child processes. A server interruption is recorded separately from test failure.
 
 When several machines share your projects, pick the one that runs QA. On each other
