@@ -26,6 +26,7 @@ export interface ProcessRunInput {
   readonly stdin?: string | undefined;
   /** Receives every stdout chunk, including bytes beyond the buffered output limit. */
   readonly onStdoutChunk?: ((chunk: Uint8Array) => void) | undefined;
+  readonly onStderrChunk?: ((chunk: Uint8Array) => void) | undefined;
   readonly maxOutputBytes?: number | undefined;
   readonly outputMode?: "error" | "truncate" | undefined;
   readonly truncatedMarker?: string | undefined;
@@ -312,6 +313,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
 
   const stdin = input.stdin;
   const onStdoutChunk = input.onStdoutChunk;
+  const onStderrChunk = input.onStderrChunk;
   const writeStdin =
     stdin === undefined
       ? Effect.void
@@ -350,7 +352,9 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         cwd: input.cwd,
         spawnCwd: input.spawnCwd,
         streamName: "stderr",
-        stream: child.stderr,
+        stream: onStderrChunk
+          ? child.stderr.pipe(Stream.tap((chunk) => Effect.sync(() => onStderrChunk(chunk))))
+          : child.stderr,
         maxOutputBytes,
         outputMode,
         truncatedMarker,

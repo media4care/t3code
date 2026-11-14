@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState, type ComponentRef, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -16,11 +16,11 @@ import {
   QA_SHARED_RESULTS_NOTICE,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
-import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { Chip } from "../../components/ui/Chip";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { Sheet } from "../../components/ui/Sheet";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -29,6 +29,7 @@ import { serverEnvironment } from "../../state/server";
 import { QaDashboard } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaCheckoutLine, QaRefComparison, QaRefMenu } from "./QaRefs";
+import { QaOutput, QaRunSteps, useQaLiveRun } from "./QaRunProgress";
 import { QaTestList } from "./QaTestList";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
@@ -120,11 +121,6 @@ function ProjectQa({
   );
   const [busy, setBusy] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const viewRun = (id: string) => {
-    setSelectedRun(id);
-    scroll.current?.scrollTo({ y: 0, animated: false });
-  };
   const insets = useSafeAreaInsets();
   const workspace = useWorkspaceTabs();
   const { themeAppearance } = useAppearancePreferences();
@@ -139,8 +135,7 @@ function ProjectQa({
   const [showHistory, setShowHistory] = useState(false);
   const runSuite = async (suiteId: string) => {
     setBusy(true);
-    const result = await start({ environmentId, input: { ...scope, suiteId } });
-    if (result._tag === "Success") viewRun(result.value.id);
+    await start({ environmentId, input: { ...scope, suiteId } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -150,7 +145,6 @@ function ProjectQa({
   };
   return (
     <ScrollView
-      ref={scroll}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
         paddingHorizontal: 16,
@@ -253,7 +247,7 @@ function ProjectQa({
           gitRef={snapshot.ref ?? null}
           snapshot={snapshot}
           connected={connected}
-          onView={viewRun}
+          onView={setSelectedRun}
         />
       ) : null}
       {snapshot?.freshness && counts.total > 0 ? (
@@ -309,6 +303,8 @@ function ProjectQa({
       ) : null}
       {counts.total > 0 ? (
         <QaDashboard
+          environmentId={environmentId}
+          projectId={projectId}
           entries={entries}
           counts={counts}
           canRun={connected && permission && !busy && !running && !snapshot?.batchRunning}
@@ -319,7 +315,7 @@ function ProjectQa({
           onCancel={(runId) => {
             void cancelRun(runId);
           }}
-          onView={viewRun}
+          onView={setSelectedRun}
         />
       ) : null}
       {snapshot?.recentRuns.length ? (
@@ -338,7 +334,7 @@ function ProjectQa({
               key={run.id}
               accessibilityRole="button"
               accessibilityLabel={`View ${run.suite.name} run`}
-              onPress={() => viewRun(run.id)}
+              onPress={() => setSelectedRun(run.id)}
               className="gap-2 rounded-xl border border-border-subtle p-4"
             >
               <Text className="font-t3-semibold">
@@ -375,6 +371,7 @@ function RunDetails({
   supportsTests: boolean;
   onClose: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const query = useEnvironmentQuery(
     serverEnvironment.qaDetails({
       environmentId,
@@ -385,123 +382,121 @@ function RunDetails({
   const [showCommand, setShowCommand] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState<boolean | null>(null);
   const data = query.data;
-  const running = data?.run.status === "running";
+  // A run in progress is followed live; its saved details arrive once it ends.
+  const live = useQaLiveRun(environmentId, projectId, data?.run);
+  const run = live?.run ?? data?.run;
+  const output = live ?? data;
+  const running = run?.status === "running";
   const showOutput =
     outputExpanded ??
     (running ||
-      data?.run.status === "failed" ||
-      data?.run.status === "incomplete" ||
-      data?.run.status === "interrupted");
+      run?.status === "failed" ||
+      run?.status === "incomplete" ||
+      run?.status === "interrupted");
   return (
-    <View
-      className={`gap-3 rounded-2xl border p-4 ${running ? "border-primary bg-update" : "border-border-subtle"}`}
-    >
-      <Text className="text-lg font-t3-semibold">{data?.run.suite.name ?? "Run details"}</Text>
-      {query.error ? <Text accessibilityRole="alert">{query.error}</Text> : null}
-      {data ? (
-        <>
-          {running ? (
-            <View className="flex-row items-center gap-2">
-              <AppActivityIndicator colorClassName="accent-update-foreground" />
-              <Text className="font-t3-semibold text-update-foreground">
-                Running since {new Date(data.run.startedAt).toLocaleTimeString()}
-              </Text>
-            </View>
-          ) : (
+    <Sheet title={run?.suite.name ?? "Run details"} onClose={onClose}>
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingTop: 12,
+          paddingBottom: Math.max(20, insets.bottom),
+          gap: 12,
+        }}
+      >
+        {query.error ? <Text accessibilityRole="alert">{query.error}</Text> : null}
+        {run && output ? (
+          <>
             <Text>
-              {qaStatusLabel(data.run)} · {qaRunSummary(data.run)} · {qaRunDuration(data.run)}
+              {qaStatusLabel(run)} · {qaRunSummary(run)} · {qaRunDuration(run)}
             </Text>
-          )}
-          <Text className="text-xs text-foreground-muted">
-            {qaRunSource(data.run)} · {data.run.ref ?? data.run.branch ?? "No branch"} ·{" "}
-            {data.run.commit?.slice(0, 8) ?? "Unknown revision"}
-            {data.run.dirty ? " + changes" : ""}
-            {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
-          </Text>
-          <View className="flex-row flex-wrap gap-2">
-            <Button
-              label={showOutput ? "Hide output" : "Output"}
-              icon="terminal"
-              tone="text"
-              onPress={() => setOutputExpanded(!showOutput)}
-            />
-            <Button
-              label={showCommand ? "Hide command" : "Command"}
-              icon="chevron.left.forwardslash.chevron.right"
-              tone="text"
-              onPress={() => setShowCommand(!showCommand)}
-            />
-          </View>
-          {showCommand ? (
-            <Text selectable className="font-mono text-xs text-foreground-muted">
-              {data.run.repositoryFile
-                ? data.run.repositoryFile
-                : data.run.source?.type === "ci"
-                  ? (data.run.source.url ?? "CI result")
-                  : `${data.run.cwd}\n${data.run.suite.command}`}
+            <Text className="text-xs text-foreground-muted">
+              {qaRunSource(run)} · {run.ref ?? run.branch ?? "No branch"} ·{" "}
+              {run.commit?.slice(0, 8) ?? "Unknown revision"}
+              {run.dirty ? " + changes" : ""}
+              {run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
             </Text>
-          ) : null}
-          {showOutput ? (
-            <>
-              {data.outputTruncated ? (
-                <Text className="text-sm text-foreground-muted">
-                  Output truncated; showing the most recent output.
-                </Text>
+            <QaRunSteps run={run} />
+            <View className="flex-row flex-wrap gap-2">
+              <Button
+                label={showOutput ? "Hide output" : "Output"}
+                icon="terminal"
+                tone="text"
+                onPress={() => setOutputExpanded(!showOutput)}
+              />
+              <Button
+                label={showCommand ? "Hide command" : "Command"}
+                icon="chevron.left.forwardslash.chevron.right"
+                tone="text"
+                onPress={() => setShowCommand(!showCommand)}
+              />
+              {/* A server from before runs were streamed sends output only when asked. */}
+              {running && !live ? (
+                <Button
+                  label="Refresh progress"
+                  icon="arrow.clockwise"
+                  tone="text"
+                  onPress={query.refresh}
+                />
               ) : null}
+            </View>
+            {showCommand ? (
+              <Text selectable className="font-mono text-xs text-foreground-muted">
+                {run.repositoryFile
+                  ? run.repositoryFile
+                  : run.source?.type === "ci"
+                    ? (run.source.url ?? "CI result")
+                    : `${run.cwd}\n${run.suite.command}`}
+              </Text>
+            ) : null}
+            {showOutput ? (
+              <>
+                {output.outputTruncated ? (
+                  <Text className="text-sm text-foreground-muted">
+                    Output truncated; showing the most recent output.
+                  </Text>
+                ) : null}
+                <QaOutput
+                  text={output.output}
+                  placeholder={running ? "Waiting for output…" : "No output captured."}
+                />
+              </>
+            ) : null}
+            {run.note ? <Text>{run.note}</Text> : null}
+            {running || !run.summary ? null : supportsTests ? (
+              <QaTestList
+                environmentId={environmentId}
+                projectId={projectId}
+                gitRef={gitRef}
+                runId={runId}
+              />
+            ) : (
+              <Text className="text-sm text-foreground-muted">
+                Update this environment’s server to view individual test results.
+              </Text>
+            )}
+            {data?.reportXml ? (
+              <Button
+                label={showReport ? "Hide JUnit report" : "View JUnit report"}
+                icon="doc.text"
+                tone="text"
+                onPress={() => setShowReport(!showReport)}
+              />
+            ) : null}
+            {showReport && data?.reportXml ? (
               <View className="max-h-80">
                 <ScrollView nestedScrollEnabled>
                   <Text selectable className="font-mono text-xs">
-                    {data.output ||
-                      (running
-                        ? "No output captured yet. Refresh to see progress."
-                        : "No output captured.")}
+                    {data.reportXml}
                   </Text>
                 </ScrollView>
               </View>
-            </>
-          ) : null}
-          {data.run.note ? <Text>{data.run.note}</Text> : null}
-          {running || !data.run.summary ? null : supportsTests ? (
-            <QaTestList
-              environmentId={environmentId}
-              projectId={projectId}
-              gitRef={gitRef}
-              runId={runId}
-            />
-          ) : (
-            <Text className="text-sm text-foreground-muted">
-              Update this environment’s server to view individual test results.
-            </Text>
-          )}
-          {data.reportXml ? (
-            <Button
-              label={showReport ? "Hide JUnit report" : "View JUnit report"}
-              icon="doc.text"
-              tone="text"
-              onPress={() => setShowReport(!showReport)}
-            />
-          ) : null}
-          {showReport && data.reportXml ? (
-            <View className="max-h-80">
-              <ScrollView nestedScrollEnabled>
-                <Text selectable className="font-mono text-xs">
-                  {data.reportXml}
-                </Text>
-              </ScrollView>
-            </View>
-          ) : null}
-        </>
-      ) : (
-        <Text>Loading run…</Text>
-      )}
-      <View className="flex-row flex-wrap gap-2">
-        <Button
-          label={running ? "Refresh progress" : "Refresh"}
-          icon="arrow.clockwise"
-          onPress={query.refresh}
-        />
-        <Button label="Close" icon="xmark" tone="text" onPress={onClose} />
-      </View>
-    </View>
+            ) : null}
+          </>
+        ) : (
+          <Text>Loading run…</Text>
+        )}
+      </ScrollView>
+    </Sheet>
   );
 }

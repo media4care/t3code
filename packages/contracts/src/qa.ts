@@ -150,6 +150,17 @@ export const QaRunDevice = Schema.Struct({
 });
 export type QaRunDevice = typeof QaRunDevice.Type;
 
+/** What a run does, in order; a run lists only the steps it has. */
+export const QaRunStepId = Schema.Literals(["checkout", "setup", "devices", "command", "report"]);
+export type QaRunStepId = typeof QaRunStepId.Type;
+export const QaRunStep = Schema.Struct({
+  id: QaRunStepId,
+  status: Schema.Literals(["pending", "running", "done", "failed", "skipped"]),
+  startedAt: Schema.NullOr(IsoDateTime),
+  finishedAt: Schema.NullOr(IsoDateTime),
+});
+export type QaRunStep = typeof QaRunStep.Type;
+
 export const QaRun = Schema.Struct({
   id: ShortText,
   projectId: ProjectId,
@@ -172,6 +183,7 @@ export const QaRun = Schema.Struct({
   ),
   repositoryFile: Schema.optionalKey(InputPath),
   devices: Schema.optionalKey(Schema.Array(QaRunDevice)),
+  steps: Schema.optionalKey(Schema.Array(QaRunStep)),
 });
 export type QaRun = typeof QaRun.Type;
 
@@ -182,6 +194,16 @@ export const QaRunDetails = Schema.Struct({
   reportXml: Schema.NullOr(Schema.String),
 });
 export type QaRunDetails = typeof QaRunDetails.Type;
+
+/** One event of a watched run: its state, and the output since the previous event. */
+export const QaRunProgress = Schema.Struct({
+  run: QaRun,
+  output: Schema.String,
+  /** `output` replaces what came before instead of following it. */
+  reset: Schema.Boolean,
+  outputTruncated: Schema.Boolean,
+});
+export type QaRunProgress = typeof QaRunProgress.Type;
 
 /** Without `ref`, a repository with a remote uses its default branch. */
 export const QaProjectInput = Schema.Struct({

@@ -6,7 +6,10 @@ import {
   type RepositoryIdentity,
   type QaFreshness,
   type QaRun,
+  type QaRunProgress,
   type QaRunStatus,
+  type QaRunStep,
+  type QaRunStepId,
   type QaSuite,
   type QaTestKind,
   type QaScheduleConfiguration,
@@ -273,13 +276,83 @@ export function qaStatusLabel(run: QaRun | undefined) {
   return QA_RUN_STATUS_LABELS[run.status];
 }
 
+function formatSeconds(milliseconds: number) {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 export function qaRunDuration(run: QaRun) {
   if (!run.finishedAt) return "In progress";
-  const seconds = Math.max(
-    0,
-    Math.round((Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000),
-  );
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return formatSeconds(Date.parse(run.finishedAt) - Date.parse(run.startedAt));
+}
+
+export const QA_STEP_LABELS: Record<QaRunStepId, string> = {
+  checkout: "Update checkout",
+  setup: "Run setup script",
+  devices: "Prepare devices",
+  command: "Run tests",
+  report: "Read test report",
+};
+
+export const QA_STEP_STATUS_LABELS: Record<QaRunStep["status"], string> = {
+  pending: "not started",
+  running: "running",
+  done: "done",
+  failed: "failed",
+  skipped: "skipped",
+};
+
+/** A run's steps; one left running by a run that ended is where that run stopped. */
+export function qaRunSteps(run: QaRun): ReadonlyArray<QaRunStep> {
+  const steps = run.steps ?? [];
+  return run.status === "running"
+    ? steps
+    : steps.map((step) =>
+        step.status === "running"
+          ? { ...step, status: "failed", finishedAt: run.finishedAt }
+          : step,
+      );
+}
+
+/** How long a step took, or has taken by `now` while it runs. */
+export function qaStepDuration(step: QaRunStep, now: number) {
+  if (!step.startedAt || step.status === "pending" || step.status === "skipped") return null;
+  const elapsed =
+    (step.finishedAt ? Date.parse(step.finishedAt) : now) - Date.parse(step.startedAt);
+  return Number.isFinite(elapsed) ? formatSeconds(elapsed) : null;
+}
+
+/** A run being watched: its state and the output received so far. */
+export interface QaLiveRun {
+  readonly run: QaRun;
+  readonly output: string;
+  readonly outputTruncated: boolean;
+}
+
+const QA_LIVE_OUTPUT_LIMIT = 128 * 1024;
+
+export function applyQaRunProgress(view: QaLiveRun | null, event: QaRunProgress): QaLiveRun {
+  const output = event.reset || !view ? event.output : view.output + event.output;
+  return {
+    run: event.run,
+    output: output.slice(-QA_LIVE_OUTPUT_LIMIT),
+    outputTruncated: event.outputTruncated || output.length > QA_LIVE_OUTPUT_LIMIT,
+  };
+}
+
+/**
+ * The last lines of a run's output as a terminal would leave them: colors removed, and a line
+ * redrawn with carriage returns shown as its final text.
+ */
+export function qaOutputTail(output: string, lines = 12) {
+  return output
+    .slice(-lines * 400)
+    .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.slice(line.lastIndexOf("\r") + 1).trimEnd())
+    .filter((line, index, all) => line || index < all.length - 1)
+    .slice(-lines)
+    .join("\n");
 }
 
 export function qaRunSummary(run: QaRun) {

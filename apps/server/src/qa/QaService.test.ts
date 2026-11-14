@@ -20,6 +20,7 @@ import {
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -327,6 +328,16 @@ describe("QA runs", () => {
       const mainRun = (yield* completed(service, onMain.id)).run;
       assert.include(mainRun, { status: "passed", ref: "main", branch: "main", commit: main });
       assert.isFalse(mainRun.dirty);
+      // The checkout was already set up for this commit, so the run skips the setup script.
+      assert.deepEqual(
+        mainRun.steps?.map((step) => [step.id, step.status]),
+        [
+          ["checkout", "done"],
+          ["setup", "skipped"],
+          ["command", "done"],
+          ["report", "done"],
+        ],
+      );
 
       yield* snapshotWhere(service, "v26.10", (snapshot) => snapshot.checkout?.state === "ready");
       const onTag = yield* service.start({ projectId, suiteId: "unit", ref: "v26.10" });
@@ -334,6 +345,13 @@ describe("QA runs", () => {
         snapshot.recentRuns.some((run) => run.id === onTag.id && run.status !== "running"),
       )).recentRuns.find((run) => run.id === onTag.id)!;
       assert.include(tagRun, { status: "failed", ref: "v26.10", branch: null, commit: tag });
+      assert.deepEqual(
+        tagRun.steps?.slice(2).map((step) => [step.id, step.status]),
+        [
+          ["command", "failed"],
+          ["report", "failed"],
+        ],
+      );
 
       const compared = yield* service.snapshot({ projectId, ref: "main" });
       assert.deepEqual(
@@ -399,6 +417,97 @@ describe("QA runs", () => {
       );
       assert.equal(adopted.schedule?.revision, "legacy");
       assert.isEmpty(yield* sql`SELECT * FROM qa_schedules`);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("streams a run's steps and output while it runs, setup script included", () =>
+    Effect.gen(function* () {
+      const { service, root, fs, path, push } = yield* fixture(
+        "require('node:net').createServer().listen(0, '127.0.0.1', () => console.log('ready'));",
+        [suite],
+        {},
+        {},
+        {},
+        true,
+      );
+      yield* fs.writeFileString(
+        path.join(root, "t3.json"),
+        encodeJson({
+          scripts: [
+            {
+              name: "Setup",
+              command: `node -e "console.error('installing dependencies')"`,
+              runOnWorktreeCreate: true,
+            },
+          ],
+          qa: { suites: [suite] },
+        }),
+      );
+      yield* push("main");
+      yield* snapshotWhere(service, "main", (snapshot) => snapshot.checkout?.state === "ready");
+      // A new commit on the ref makes the run set its checkout up again.
+      yield* fs.writeFileString(path.join(root, "changed.txt"), "changed");
+      yield* push("main");
+      const run = yield* service.start({ projectId, suiteId: "unit", ref: "main" });
+      assert.deepEqual(
+        run.steps?.map((step) => [step.id, step.status]),
+        [
+          ["checkout", "pending"],
+          ["setup", "pending"],
+          ["command", "pending"],
+          ["report", "pending"],
+        ],
+      );
+      const watched = service.watch({ projectId, runId: run.id }).pipe(
+        Stream.mapAccum(
+          () => "",
+          (output, event) => {
+            const next = event.reset ? event.output : output + event.output;
+            return [next, [{ run: event.run, output: next }]] as const;
+          },
+        ),
+      );
+      const last = yield* watched.pipe(Stream.runLast, Effect.forkScoped);
+      const live = Option.getOrThrow(
+        yield* watched.pipe(
+          Stream.filter((view) => view.output.includes("ready")),
+          Stream.runHead,
+        ),
+      );
+      assert.equal(live.run.status, "running");
+      assert.deepEqual(
+        live.run.steps?.map((step) => [step.id, step.status]),
+        [
+          ["checkout", "done"],
+          ["setup", "done"],
+          ["command", "running"],
+          ["report", "pending"],
+        ],
+      );
+      assert.include(live.output, "Running the setup script from t3.json");
+      assert.include(live.output, "installing dependencies");
+      assert.equal(live.output, (yield* service.details({ projectId, runId: run.id })).output);
+
+      yield* service.cancel({ projectId, runId: run.id });
+      // The stream of a run ends with the run, on the state it was saved in.
+      const final = Option.getOrThrow(yield* Fiber.join(last));
+      const saved = yield* service.details({ projectId, runId: run.id });
+      assert.equal(final.run.status, "cancelled");
+      assert.deepEqual(final.run, saved.run);
+      assert.equal(final.output, saved.output);
+      assert.deepEqual(
+        final.run.steps?.slice(2).map((step) => [step.id, step.status]),
+        [
+          ["command", "failed"],
+          ["report", "pending"],
+        ],
+      );
+      // Watching a run that has ended sends what was saved and ends.
+      const replayed = yield* service.watch({ projectId, runId: run.id }).pipe(Stream.runCollect);
+      assert.deepEqual(
+        replayed.map((event) => [event.run.status, event.reset, event.output]),
+        [["cancelled", true, saved.output]],
+      );
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

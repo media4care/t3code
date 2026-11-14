@@ -117,6 +117,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.qaSubscribe]: AuthTerminalReadScope,
   [WS_METHODS.qaDetails]: AuthTerminalReadScope,
+  [WS_METHODS.qaWatch]: AuthTerminalReadScope,
   [WS_METHODS.qaTests]: AuthTerminalReadScope,
   [WS_METHODS.releasesSubscribe]: AuthTerminalReadScope,
   [WS_METHODS.releasesProjects]: AuthTerminalReadScope,

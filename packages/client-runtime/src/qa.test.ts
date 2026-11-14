@@ -1,6 +1,15 @@
 import { EnvironmentId, ProjectId, type QaRun, type QaSuite } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
-import { groupQaSuites, qaDashboard, qaProjects, qaRepositories } from "./qa.ts";
+import {
+  applyQaRunProgress,
+  groupQaSuites,
+  qaDashboard,
+  qaOutputTail,
+  qaProjects,
+  qaRepositories,
+  qaRunSteps,
+  qaStepDuration,
+} from "./qa.ts";
 
 const suites: QaSuite[] = [
   { id: "backend", name: "API", command: "vp test run", component: "Backend", kind: "integration" },
@@ -126,4 +135,35 @@ it("lists each repository once per environment that runs QA, by a fork's origin,
     ["acme/app", "app2"],
     ["local", "local"],
   ]);
+});
+
+it("follows a watched run's output, and shows where an interrupted run stopped", () => {
+  const running = run(suites[0]!, "running");
+  const event = { run: running, outputTruncated: false };
+  const first = applyQaRunProgress(null, { ...event, output: "one\n", reset: true });
+  const second = applyQaRunProgress(first, { ...event, output: "two\n", reset: false });
+  expect(second.output).toBe("one\ntwo\n");
+  // The server starts over when it no longer keeps what this client has.
+  expect(applyQaRunProgress(second, { ...event, output: "three\n", reset: true }).output).toBe(
+    "three\n",
+  );
+  expect(qaOutputTail("first\n\u001b[32mok\u001b[0m\r\n10%\r50%\r100%\nlast\n", 3)).toBe(
+    "ok\n100%\nlast",
+  );
+
+  const steps = [
+    {
+      id: "checkout",
+      status: "done",
+      startedAt: "2026-10-30T10:00:00.000Z",
+      finishedAt: "2026-10-30T10:00:00.400Z",
+    },
+    { id: "command", status: "running", startedAt: "2026-10-30T10:00:00.400Z", finishedAt: null },
+  ] as const;
+  const now = Date.parse("2026-10-30T10:01:05.000Z");
+  expect(steps.map((step) => qaStepDuration(step, now))).toEqual(["0s", "1m 5s"]);
+  expect(qaRunSteps({ ...running, steps }).map((step) => step.status)).toEqual(["done", "running"]);
+  expect(
+    qaRunSteps({ ...run(suites[0]!, "interrupted"), steps }).map((step) => step.status),
+  ).toEqual(["done", "failed"]);
 });

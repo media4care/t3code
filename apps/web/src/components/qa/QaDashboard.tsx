@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import type {
   DevicePoolEntry,
+  EnvironmentId,
+  ProjectId,
   QaDeviceSelection,
   QaRun,
   QaRunStatus,
@@ -36,6 +38,7 @@ import type { qaDashboard } from "@t3tools/client-runtime/qa";
 import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { QaRunActivity } from "./QaRunProgress";
 import { QaSimlockDevices, QaSuiteDevices } from "./QaSuiteDevices";
 
 export interface QaSuiteDeviceChoices {
@@ -212,6 +215,8 @@ function TestKind({ kind }: { kind: QaTestKind }) {
 }
 
 export function QaSuiteGroup({
+  environmentId,
+  projectId,
   label,
   entries,
   showComponent,
@@ -222,6 +227,8 @@ export function QaSuiteGroup({
   onCancel,
   onView,
 }: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
   label: string;
   entries: readonly QaDashboardEntry[];
   showComponent: boolean;
@@ -258,6 +265,8 @@ export function QaSuiteGroup({
         {entries.map((entry) => (
           <SuiteCard
             key={entry.suite.id}
+            environmentId={environmentId}
+            projectId={projectId}
             entry={entry}
             showComponent={showComponent}
             devices={devices}
@@ -274,6 +283,8 @@ export function QaSuiteGroup({
 }
 
 function SuiteCard({
+  environmentId,
+  projectId,
   entry: { suite, run, component, kind, freshness },
   showComponent,
   devices,
@@ -283,6 +294,8 @@ function SuiteCard({
   onCancel,
   onView,
 }: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
   entry: QaDashboardEntry;
   showComponent: boolean;
   devices: QaSuiteDeviceChoices;
@@ -402,7 +415,11 @@ function SuiteCard({
         ) : null}
         {run?.repositoryFile ? <span>{qaRunSource(run)}</span> : null}
       </div>
-      {run?.summary ? (
+      {run?.status === "running" && run.steps ? (
+        <div className="mt-4">
+          <QaRunActivity environmentId={environmentId} projectId={projectId} run={run} />
+        </div>
+      ) : run?.summary ? (
         <div className="mt-4 flex flex-wrap gap-4 rounded-lg bg-muted/40 px-3 py-2 text-xs">
           <span className="text-success-foreground">
             <strong className="tabular-nums">

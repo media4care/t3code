@@ -1,13 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef, useState } from "react";
-import {
-  ActivityIcon,
-  ArrowLeftIcon,
-  FlaskConicalIcon,
-  PlayIcon,
-  RefreshCwIcon,
-  SearchIcon,
-} from "lucide-react";
+import { useState } from "react";
+import { ArrowLeftIcon, FlaskConicalIcon, PlayIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
@@ -34,6 +27,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useNavigateToMainApp } from "../sidebar/mainAppLocation";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { Button } from "../ui/button";
+import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -41,6 +35,7 @@ import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaDevicePool, QaSimlockNote } from "./QaDevicePool";
 import { QaCheckoutStatus, QaRefComparison, QaRefPicker } from "./QaRefs";
+import { QaOutput, QaRunSteps, useQaLiveRun } from "./QaRunProgress";
 import { QaTestList } from "./QaTestList";
 
 export function QaPage() {
@@ -168,8 +163,7 @@ function ProjectQa({
   const visibleCount = groups.reduce((total, group) => total + group.entries.length, 0);
   const runSuite = async (suiteId: string) => {
     setBusy(true);
-    const result = await start({ environmentId, input: { ...scope, suiteId } });
-    if (result._tag === "Success") setSelectedRun(result.value.id);
+    await start({ environmentId, input: { ...scope, suiteId } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -350,23 +344,6 @@ function ProjectQa({
           )}
         </section>
       ) : null}
-      {running ? (
-        <div
-          role="status"
-          className="flex flex-wrap items-center gap-3 rounded-xl border border-info/20 bg-info/5 p-4"
-        >
-          <ActivityIcon className="size-5 text-info-foreground" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">Running {running.suite.name}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              One suite runs at a time in this repository.
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setSelectedRun(running.id)}>
-            View run
-          </Button>
-        </div>
-      ) : null}
       {selectedRun ? (
         <RunDetails
           key={selectedRun}
@@ -441,6 +418,8 @@ function ProjectQa({
             {groups.map((group) => (
               <QaSuiteGroup
                 key={`${grouping}:${group.label}`}
+                environmentId={environmentId}
+                projectId={projectId}
                 label={group.label}
                 entries={group.entries}
                 showComponent={grouping !== "component"}
@@ -563,11 +542,6 @@ function RunDetails({
   supportsTests: boolean;
   onClose: () => void;
 }) {
-  const panel = useRef<HTMLElement>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Bring the selected run into the scrollable QA viewport when it opens.
-  useEffect(() => {
-    panel.current?.scrollIntoView({ block: "start", behavior: "instant" });
-  }, []);
   const query = useEnvironmentQuery(
     serverEnvironment.qaDetails({
       environmentId,
@@ -575,110 +549,124 @@ function RunDetails({
     }),
   );
   const data = query.data;
+  // A run in progress is followed live; its saved details arrive once it ends.
+  const live = useQaLiveRun(environmentId, projectId, data?.run);
+  const run = live?.run ?? data?.run;
+  const output = live ?? data;
+  const running = run?.status === "running";
   return (
-    <section ref={panel} aria-label="Run details" className="rounded-xl border border-border p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="min-w-0 flex-1 basis-48 break-words text-lg font-semibold">
-          {data?.run.suite.name ?? "Run details"}
-        </h2>
-        <div className="ml-auto flex shrink-0 gap-2">
-          <Button variant="ghost" size="sm" onClick={query.refresh}>
-            Refresh output
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      </div>
-      {query.error ? <p role="alert">{query.error}</p> : null}
-      {data ? (
-        <>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <QaRunBadge run={data.run} />
-            <span className="text-sm text-muted-foreground">
-              {qaRunDuration(data.run)} · {qaRunSummary(data.run)}
-            </span>
-          </div>
-          <p className="mt-3 text-sm text-muted-foreground">{qaRunSource(data.run)}</p>
-          {data.run.devices?.length ? (
-            <p className="mt-2 text-sm">
-              On{" "}
-              {data.run.devices
-                .map(
-                  (device) =>
-                    `${device.name} (${device.physical ? "physical" : device.platform === "ios" ? "simulator" : "emulator"}, ${device.deviceId})`,
-                )
-                .join(", ")}
-            </p>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogPopup className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{run?.suite.name ?? "Run details"}</DialogTitle>
+          {run ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <QaRunBadge run={run} />
+              <span className="text-sm text-muted-foreground">
+                {qaRunDuration(run)} · {qaRunSummary(run)}
+              </span>
+            </div>
           ) : null}
-          {data.run.repositoryFile ? (
-            <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
-              {data.run.repositoryFile}
-            </p>
-          ) : data.run.source?.type !== "ci" ? (
-            <p className="mt-3 break-all font-mono text-xs text-muted-foreground">
-              {data.run.cwd}
-              <br />
-              {data.run.suite.command}
-            </p>
-          ) : data.run.source.url ? (
-            <a
-              href={data.run.source.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-primary underline"
-            >
-              Open CI run
-            </a>
-          ) : null}
-          <p className="mt-2 text-xs text-muted-foreground">
-            {data.run.ref ?? data.run.branch ?? "No branch recorded"} ·{" "}
-            {data.run.commit ?? "No Git revision recorded"}
-            {data.run.dirty ? " · Working directory had uncommitted changes" : ""}
-            {data.run.exitCode !== null ? ` · Exit ${data.run.exitCode}` : ""}
-          </p>
-          <details
-            className="mt-4"
-            open={data.run.status === "failed" || data.run.status === "incomplete"}
-          >
-            <summary className="cursor-pointer text-sm font-medium">Run output</summary>
-            {data.outputTruncated ? (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Output truncated; showing the most recent output.
-              </p>
-            ) : null}
-            <pre className="mt-4 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-xs">
-              {data.output ||
-                (data.run.status === "running"
-                  ? "Waiting for output. Refresh to see progress."
-                  : "No output captured.")}
-            </pre>
-          </details>
-          {data.run.note ? <p className="mt-3 text-sm">{data.run.note}</p> : null}
-          {supportsTests ? (
-            <QaTestList
-              environmentId={environmentId}
-              projectId={projectId}
-              gitRef={gitRef}
-              runId={runId}
-            />
+        </DialogHeader>
+        <DialogPanel>
+          {query.error ? <p role="alert">{query.error}</p> : null}
+          {run && output ? (
+            <>
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">{qaRunSource(run)}</p>
+                {run.devices?.length ? (
+                  <p className="text-sm">
+                    On{" "}
+                    {run.devices
+                      .map(
+                        (device) =>
+                          `${device.name} (${device.physical ? "physical" : device.platform === "ios" ? "simulator" : "emulator"}, ${device.deviceId})`,
+                      )
+                      .join(", ")}
+                  </p>
+                ) : null}
+                {run.repositoryFile ? (
+                  <p className="break-all font-mono text-xs text-muted-foreground">
+                    {run.repositoryFile}
+                  </p>
+                ) : run.source?.type !== "ci" ? (
+                  <p className="break-all font-mono text-xs text-muted-foreground">
+                    {run.cwd}
+                    <br />
+                    {run.suite.command}
+                  </p>
+                ) : run.source.url ? (
+                  <a
+                    href={run.source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-primary underline"
+                  >
+                    Open CI run
+                  </a>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  {run.ref ?? run.branch ?? "No branch recorded"} ·{" "}
+                  {run.commit ?? "No Git revision recorded"}
+                  {run.dirty ? " · Working directory had uncommitted changes" : ""}
+                  {run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
+                </p>
+              </div>
+              <QaRunSteps run={run} />
+              <details open={running || run.status === "failed" || run.status === "incomplete"}>
+                <summary className="cursor-pointer text-sm font-medium">Run output</summary>
+                <div className="mt-3 space-y-3">
+                  {output.outputTruncated ? (
+                    <p className="text-sm text-muted-foreground">
+                      Output truncated; showing the most recent output.
+                    </p>
+                  ) : null}
+                  <QaOutput
+                    text={output.output}
+                    placeholder={running ? "Waiting for output…" : "No output captured."}
+                  />
+                  {/* A server from before runs were streamed sends output only when asked. */}
+                  {running && !live ? (
+                    <Button variant="outline" size="sm" onClick={query.refresh}>
+                      Refresh output
+                    </Button>
+                  ) : null}
+                </div>
+              </details>
+              {run.note ? <p className="text-sm">{run.note}</p> : null}
+              {supportsTests ? (
+                <QaTestList
+                  environmentId={environmentId}
+                  projectId={projectId}
+                  gitRef={gitRef}
+                  runId={runId}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Update this environment’s server to view individual test results.
+                </p>
+              )}
+              {data?.reportXml ? (
+                <details>
+                  <summary className="cursor-pointer text-sm font-medium">
+                    Saved JUnit report
+                  </summary>
+                  <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-muted p-4 text-xs">
+                    {data.reportXml}
+                  </pre>
+                </details>
+              ) : null}
+            </>
           ) : (
-            <p className="mt-4 text-sm text-muted-foreground">
-              Update this environment’s server to view individual test results.
-            </p>
+            <p className="text-sm text-muted-foreground">Loading run…</p>
           )}
-          {data.reportXml ? (
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm font-medium">Saved JUnit report</summary>
-              <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-muted p-4 text-xs">
-                {data.reportXml}
-              </pre>
-            </details>
-          ) : null}
-        </>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">Loading run…</p>
-      )}
-    </section>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }

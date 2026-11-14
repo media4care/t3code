@@ -15,13 +15,14 @@ import {
   type QaResultFilter,
   type qaDashboard,
 } from "@t3tools/client-runtime/qa";
-import type { QaTestKind } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, QaTestKind } from "@t3tools/contracts";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 import { SearchField } from "../../components/ui/SearchField";
 import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
+import { QaRunActivity } from "./QaRunProgress";
 
 const KINDS = {
   unit: {
@@ -98,6 +99,8 @@ const RESULTS = {
 };
 
 interface RunActions {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
   canRun: boolean;
   canCancel: boolean;
   onRun: (id: string) => void;
@@ -282,6 +285,8 @@ function SuiteGroup({
 function SuiteCard({
   entry: { suite, run, component, kind, category, freshness },
   showComponent,
+  environmentId,
+  projectId,
   canRun,
   canCancel,
   onRun,
@@ -323,7 +328,9 @@ function SuiteCard({
           </Text>
         </View>
       ) : null}
-      {run?.status === "running" ? (
+      {run?.status === "running" && run.steps ? (
+        <QaRunActivity environmentId={environmentId} projectId={projectId} run={run} />
+      ) : run?.status === "running" ? (
         <View className="flex-row items-center gap-2">
           <AppActivityIndicator colorClassName="accent-update-foreground" />
           <Text className="font-t3-semibold text-sm text-update-foreground">
@@ -383,7 +390,7 @@ function SuiteCard({
           <Button
             label={
               run.status === "running"
-                ? "Progress"
+                ? "Full output"
                 : run.summary && !run.repositoryFile
                   ? `Tests (${run.summary.tests})`
                   : "Details"
