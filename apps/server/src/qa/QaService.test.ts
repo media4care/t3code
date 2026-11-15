@@ -192,6 +192,8 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
     stream: SubscriptionRef.changes(pool),
     refresh: SubscriptionRef.get(pool).pipe(Effect.tap(() => Deferred.succeed(listed, undefined))),
     prepare: devices.prepare ?? startDevice,
+    // Hosts show running emulators, not physical devices.
+    attachStream: (device) => Effect.succeed(device.id.startsWith("emulator-")),
     claim: (entries, run) => {
       const keys = new Set(entries.map((entry) => entry.key));
       return Effect.acquireRelease(
@@ -1658,6 +1660,7 @@ describe("QA devices", () => {
           platform: "android",
           physical: false,
           version: "Android",
+          hostId: LOCAL_DEVICE_HOST_ID,
         },
       ]);
 
@@ -1850,6 +1853,7 @@ setInterval(() => {}, 1000);`),
           platform: "android",
           physical: false,
           version: "15",
+          hostId: LOCAL_DEVICE_HOST_ID,
         },
       ]);
       assert.deepEqual(

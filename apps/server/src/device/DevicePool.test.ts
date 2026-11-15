@@ -73,6 +73,7 @@ const fixture = Effect.fn("fixture")(function* () {
   const states = yield* PubSub.unbounded<DeviceServiceState>();
   let current = deviceState([]);
   const commands: Array<ReadonlyArray<string>> = [];
+  const attached: Array<string> = [];
   const reports = ["tablet", "tv"];
   const emit = (state: DeviceServiceState) =>
     Effect.suspend(() => {
@@ -92,7 +93,7 @@ const fixture = Effect.fn("fixture")(function* () {
           Effect.andThen(emit(deviceState([{ ...stoppedAvd, id: "emulator-5554", booted: true }]))),
           Effect.as("emulator-5554"),
         ),
-      attach: () => Effect.die("Device pools do not attach devices"),
+      attach: (device) => Effect.sync(() => void attached.push(device.id)),
       shutdown: () => Effect.die("Device pools do not shut down devices"),
       screenshot: () => Effect.die("Device pools do not take screenshots"),
     },
@@ -123,7 +124,7 @@ const fixture = Effect.fn("fixture")(function* () {
       Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
     ),
   ).pipe(Effect.map((context) => Context.get(context, DevicePool.DevicePool)));
-  return { start, emit, commands, booted };
+  return { start, emit, commands, attached, booted };
 });
 
 const waitFor = (
@@ -240,7 +241,7 @@ describe("DevicePool", () => {
 
   it.effect("starts a stopped emulator for a run and returns it as listed once it is ready", () =>
     Effect.gen(function* () {
-      const { start, emit, commands, booted } = yield* fixture();
+      const { start, emit, commands, attached, booted } = yield* fixture();
       const pool = yield* start;
       yield* emit(deviceState([stoppedAvd]));
       const [stopped] = yield* waitFor(pool, (entries) => entries[0]?.state === "stopped");
@@ -261,6 +262,14 @@ describe("DevicePool", () => {
       ]);
       const [running] = yield* waitFor(pool, (entries) => entries[0]?.state === "running");
       expect(running?.key).toBe(stopped!.key);
+      // Its stream attaches for QA to show; a stopped or unlisted device has none to show.
+      expect(yield* pool.attachStream({ hostId: LOCAL_DEVICE_HOST_ID, id: "emulator-5554" })).toBe(
+        true,
+      );
+      expect(yield* pool.attachStream({ hostId: LOCAL_DEVICE_HOST_ID, id: "Tablet_7" })).toBe(
+        false,
+      );
+      expect(attached).toEqual(["emulator-5554"]);
 
       yield* emit(deviceState([]));
       const gone = yield* pool.prepare(stopped!).pipe(Effect.flip);

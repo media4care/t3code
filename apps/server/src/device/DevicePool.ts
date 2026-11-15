@@ -88,6 +88,14 @@ export class DevicePool extends Context.Service<
       run: DevicePoolQaRun,
     ) => Effect.Effect<boolean, never, Scope.Scope>;
     readonly forget: (input: DeviceForgetInput) => Effect.Effect<void, DevicePoolError>;
+    /**
+     * Attaches the stream of a running simulator or emulator so a client can watch it. False when
+     * the host does not list it running, or cannot show it.
+     */
+    readonly attachStream: (device: {
+      readonly hostId: DeviceSummary["hostId"];
+      readonly id: string;
+    }) => Effect.Effect<boolean>;
   }
 >()("t3/device/DevicePool") {}
 
@@ -387,6 +395,27 @@ const make = Effect.gen(function* () {
     return device;
   }, prepareLock.withPermit);
 
+  const attachStream: DevicePool["Service"]["attachStream"] = Effect.fn("DevicePool.attachStream")(
+    function* (wanted) {
+      const ready = yield* deviceService.currentReadiness(wanted.hostId);
+      if (!ready) return false;
+      // Listed again: Simlock may have started a simulator this server has not listed yet.
+      const state = yield* deviceService.list.pipe(Effect.catch(() => deviceService.state));
+      const device = state.devices.find(
+        (candidate) => candidate.hostId === wanted.hostId && candidate.id === wanted.id,
+      );
+      if (!device?.booted || device.physical) return false;
+      return yield* ready.devices.attach(device).pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not attach a QA device's stream", { cause }).pipe(
+            Effect.as(false),
+          ),
+        ),
+      );
+    },
+  );
+
   const claim: DevicePool["Service"]["claim"] = (entries, run) =>
     Effect.acquireRelease(
       lock.withPermit(
@@ -421,6 +450,7 @@ const make = Effect.gen(function* () {
     prepare,
     claim,
     forget,
+    attachStream,
   });
 });
 

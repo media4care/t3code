@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { CheckIcon, MinusIcon, XIcon } from "lucide-react";
 import type { EnvironmentId, ProjectId, QaRun, QaRunStep } from "@t3tools/contracts";
 import {
@@ -12,6 +13,9 @@ import { cn } from "~/lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { Spinner } from "../ui/spinner";
+
+// Loaded only once a run has a device to show: the stream view brings the whole device viewer.
+const QaDeviceStreams = lazy(() => import("./QaDeviceStreams"));
 
 /** A run in progress as the server streams it; null for a finished run or a server without steps. */
 export function useQaLiveRun(
@@ -124,9 +128,16 @@ export function QaRunActivity({
   run: QaRun;
 }) {
   const live = useQaLiveRun(environmentId, projectId, run);
+  const current = live?.run ?? run;
+  const testing = current.steps?.some((step) => step.id === "command" && step.status === "running");
   return (
     <div className="grid gap-3">
-      <QaRunSteps run={live?.run ?? run} />
+      <QaRunSteps run={current} />
+      {testing && current.devices?.some((device) => device.hostId) ? (
+        <Suspense>
+          <QaDeviceStreams environmentId={environmentId} devices={current.devices} />
+        </Suspense>
+      ) : null}
       <QaOutput
         size="short"
         text={qaOutputTail(live?.output ?? "")}

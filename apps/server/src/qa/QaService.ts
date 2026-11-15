@@ -1,4 +1,5 @@
 import {
+  LOCAL_DEVICE_HOST_ID,
   QaError,
   qaRemoteOf,
   QaConfiguration,
@@ -790,11 +791,14 @@ const make = Effect.gen(function* () {
         Effect.result,
       );
       if (leased._tag === "Failure") return stop(`Not run. ${leased.failure.message}`);
-      appendOutput(
-        entry,
-        `[T3 QA] ${label}: ${leased.success.device.name} (${leased.success.device.deviceId})\n`,
-      );
-      devices.push(leased.success.device);
+      const leasedDevice = leased.success.device;
+      appendOutput(entry, `[T3 QA] ${label}: ${leasedDevice.name} (${leasedDevice.deviceId})\n`);
+      // Leased from this machine's worker, so this machine's host can show it.
+      const watchable = yield* devicePool.attachStream({
+        hostId: LOCAL_DEVICE_HOST_ID,
+        id: leasedDevice.deviceId,
+      });
+      devices.push(watchable ? { ...leasedDevice, hostId: LOCAL_DEVICE_HOST_ID } : leasedDevice);
       Object.assign(leaseEnvironment, leased.success.environment);
     }
     entry.details = { ...entry.details, run: { ...entry.details.run, devices } };
@@ -865,6 +869,7 @@ const make = Effect.gen(function* () {
       if (prepared._tag === "Failure") return stop(prepared.failure.message);
       const device = prepared.success;
       appendOutput(entry, `[T3 QA] ${label}: ${device.name} (${device.id})\n`);
+      const watchable = yield* devicePool.attachStream(device);
       devices.push({
         requirement: assignment.key,
         deviceId: device.id,
@@ -872,6 +877,7 @@ const make = Effect.gen(function* () {
         platform: device.platform,
         physical: device.physical,
         version: device.version,
+        ...(watchable ? { hostId: device.hostId } : {}),
       });
     }
     entry.details = { ...entry.details, run: { ...entry.details.run, devices } };
