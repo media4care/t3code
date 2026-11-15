@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { MonitorSmartphoneIcon, RefreshCwIcon } from "lucide-react";
 import type { DeviceSimlockInventory, EnvironmentId } from "@t3tools/contracts";
+import { qaWhen } from "@t3tools/client-runtime/qa";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
@@ -117,7 +118,7 @@ export function QaSimlockNote({
       {inventory && (
         <>
           <p className="mt-2 text-xs text-muted-foreground">
-            Last checked {new Date(inventory.scannedAt).toLocaleTimeString()}
+            Last checked {qaWhen(inventory.scannedAt)}
             {query.error ? " · Showing previous results" : ""}
           </p>
           <div className="mt-4 grid gap-5 lg:grid-cols-2">

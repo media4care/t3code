@@ -13,6 +13,7 @@ import {
   qaDefaultSchedule,
   qaScheduleLabel,
   qaRunSource,
+  qaWhen,
 } from "@t3tools/client-runtime/qa";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -109,11 +110,11 @@ export function QaAutomation({
               · <span className="font-mono">{schedule.configuration.branch}</span>
             </p>
             <p className="text-muted-foreground">
-              Next: {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "Paused"}
+              Next: {schedule.nextRunAt ? qaWhen(schedule.nextRunAt) : "Paused"}
             </p>
             <p className="text-muted-foreground">
               Last: {schedule.lastStatus}
-              {schedule.lastRunAt ? ` · ${new Date(schedule.lastRunAt).toLocaleString()}` : ""}
+              {schedule.lastRunAt ? ` · ${qaWhen(schedule.lastRunAt)}` : ""}
             </p>
             {schedule.note ? <p role="status">{schedule.note}</p> : null}
           </div>
@@ -202,7 +203,7 @@ export function QaAutomation({
                   <p className="break-words text-xs text-muted-foreground">
                     {qaRunSource(run)} · {run.ref ?? run.branch} · {run.commit?.slice(0, 8)}
                     <br />
-                    {new Date(run.finishedAt ?? run.startedAt).toLocaleString()}
+                    {qaWhen(run.finishedAt ?? run.startedAt)}
                   </p>
                 </div>
                 <QaRunBadge run={run} />

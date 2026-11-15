@@ -618,7 +618,9 @@ it("shows freshness separately from results, filters affected suites and control
     { router: "/qa" },
   );
   const api = screen.getByRole("region", { name: "API integration tests" });
-  await expect.element(api.getByText("Passed", { exact: true })).toBeVisible();
+  await expect
+    .element(api.getByText("47 passed · 1 skipped · 1m 42s", { exact: true }))
+    .toBeVisible();
   await expect.element(api.getByText("Needs rerun", { exact: true })).toBeVisible();
   await api.getByText("Changed inputs (1)").click();
   await expect.element(api.getByText("backend/auth.ts")).toBeVisible();

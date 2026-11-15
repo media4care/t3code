@@ -15,6 +15,7 @@ import {
   qaScheduleLabel,
   qaRunSource,
   qaStatusLabel,
+  qaWhen,
 } from "@t3tools/client-runtime/qa";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -112,9 +113,9 @@ export function QaAutomation({
               · {schedule.configuration.branch}
             </Text>
             <Text className="text-sm text-foreground-muted">
-              Next: {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "Paused"}
+              Next: {schedule.nextRunAt ? qaWhen(schedule.nextRunAt) : "Paused"}
               {"\n"}Last: {schedule.lastStatus}
-              {schedule.lastRunAt ? ` · ${new Date(schedule.lastRunAt).toLocaleString()}` : ""}
+              {schedule.lastRunAt ? ` · ${qaWhen(schedule.lastRunAt)}` : ""}
             </Text>
             {schedule.note ? <Text>{schedule.note}</Text> : null}
           </>
@@ -192,7 +193,7 @@ export function QaAutomation({
               <Text className="text-xs text-foreground-muted">
                 {qaRunSource(run)} · {run.ref ?? run.branch} · {run.commit?.slice(0, 8)}
                 {"\n"}
-                {new Date(run.finishedAt ?? run.startedAt).toLocaleString()}
+                {qaWhen(run.finishedAt ?? run.startedAt)}
               </Text>
             </Pressable>
           ))

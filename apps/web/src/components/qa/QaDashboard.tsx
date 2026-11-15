@@ -1,20 +1,16 @@
 import {
   ActivityIcon,
   AlertCircleIcon,
-  BlocksIcon,
   CheckCircle2Icon,
+  CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
   CircleDashedIcon,
-  Clock3Icon,
-  FlaskConicalIcon,
-  GlobeIcon,
   LayersIcon,
   PlayIcon,
-  RouteIcon,
-  SmartphoneIcon,
   SquareIcon,
-  TerminalIcon,
+  TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import type {
   DevicePoolEntry,
@@ -23,13 +19,13 @@ import type {
   QaDeviceSelection,
   QaRun,
   QaRunStatus,
-  QaTestKind,
 } from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
-  qaRunDuration,
+  qaRunHeadline,
   qaRunSource,
   qaStatusLabel,
+  qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
   type QaResultFilter,
@@ -38,6 +34,7 @@ import type { qaDashboard } from "@t3tools/client-runtime/qa";
 import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { QaRunActivity } from "./QaRunProgress";
 import { QaSimlockDevices, QaSuiteDevices } from "./QaSuiteDevices";
 
@@ -52,16 +49,6 @@ export interface QaSuiteDeviceChoices {
   readonly canChoose: boolean;
   readonly onChoose: (suiteId: string, requirement: string, deviceKey: string | null) => void;
 }
-
-const KIND_STYLES = {
-  unit: { icon: FlaskConicalIcon, color: "bg-success/10 text-success-foreground" },
-  integration: { icon: BlocksIcon, color: "bg-warning/10 text-warning-foreground" },
-  playwright: { icon: GlobeIcon, color: "bg-info/10 text-info-foreground" },
-  maestro: { icon: SmartphoneIcon, color: "bg-guest/10 text-guest-foreground" },
-  e2e: { icon: RouteIcon, color: "bg-error/10 text-error-foreground" },
-  tooling: { icon: TerminalIcon, color: "bg-primary/10 text-primary" },
-  other: { icon: LayersIcon, color: "bg-muted text-muted-foreground" },
-};
 
 const METRICS = [
   {
@@ -203,13 +190,26 @@ export function QaStatusBadge({
   );
 }
 
-function TestKind({ kind }: { kind: QaTestKind }) {
-  const { icon: Icon, color } = KIND_STYLES[kind];
+const RESULT_TONES = {
+  passed: { icon: CheckIcon, text: "text-success-foreground", circle: "bg-success/10" },
+  failed: { icon: XIcon, text: "text-destructive-foreground", circle: "bg-error/10" },
+  attention: { icon: TriangleAlertIcon, text: "text-warning-foreground", circle: "bg-warning/10" },
+  running: { icon: null, text: "text-info-foreground", circle: "bg-info/10" },
+  never: { icon: CircleDashedIcon, text: "text-muted-foreground", circle: "bg-muted" },
+};
+
+function resultTone(entry: QaDashboardEntry) {
+  return RESULT_TONES[entry.run?.status === "failed" ? "failed" : entry.category];
+}
+
+function StatusIcon({ entry }: { entry: QaDashboardEntry }) {
+  const { icon: Icon, text, circle } = resultTone(entry);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium ${color}`}
+      aria-hidden
+      className={`flex size-8 shrink-0 items-center justify-center rounded-full ${circle} ${text}`}
     >
-      <Icon className="size-3.5" /> {QA_KIND_LABELS[kind]}
+      {Icon ? <Icon className="size-4" /> : <Spinner size="md" />}
     </span>
   );
 }
@@ -285,7 +285,7 @@ export function QaSuiteGroup({
 function SuiteCard({
   environmentId,
   projectId,
-  entry: { suite, run, component, kind, freshness },
+  entry,
   showComponent,
   devices,
   canRun,
@@ -305,6 +305,7 @@ function SuiteCard({
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
+  const { suite, run, component, kind, freshness } = entry;
   const assignments =
     suite.devices?.length && !devices.simlock
       ? devices.pool &&
@@ -318,19 +319,50 @@ function SuiteCard({
       aria-label={suite.name}
       className="@container/suite flex min-w-0 flex-col rounded-xl border border-border bg-card p-4 sm:p-5"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <TestKind kind={kind} />
-        {showComponent ? <span className="text-xs text-muted-foreground">{component}</span> : null}
-        <div className="ml-auto flex items-center gap-1.5">
-          {blocked ? (
-            <Badge variant="warning">
-              <CircleAlertIcon /> Blocked
-            </Badge>
-          ) : null}
-          <QaRunBadge run={run} />
+      <div className="flex items-start gap-3">
+        <StatusIcon entry={entry} />
+        <div className="min-w-0 flex-1">
+          <h4 className="font-semibold leading-snug">{suite.name}</h4>
+          <p className={`text-sm ${resultTone(entry).text}`}>{qaRunHeadline(run)}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {[
+              QA_KIND_LABELS[kind],
+              showComponent ? component : null,
+              run ? qaWhen(run.startedAt) : null,
+              run?.devices?.length
+                ? `On ${run.devices.map((device) => device.name).join(", ")}`
+                : null,
+              run?.repositoryFile ? qaRunSource(run) : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
         </div>
+        {blocked ? (
+          <Badge variant="warning">
+            <CircleAlertIcon /> Blocked
+          </Badge>
+        ) : null}
+        {run?.status === "running" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!canCancel}
+            onClick={() => onCancel(run.id)}
+          >
+            <SquareIcon /> Cancel
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!canRun || blocked}
+            onClick={() => onRun(suite.id)}
+          >
+            <PlayIcon /> Run
+          </Button>
+        )}
       </div>
-      <h4 className="mt-3 font-semibold leading-snug">{suite.name}</h4>
       {suite.devices?.length && devices.simlock ? (
         <QaSimlockDevices requirements={suite.devices} />
       ) : assignments !== undefined ? (
@@ -385,68 +417,17 @@ function SuiteCard({
           {run?.status !== "passed" ? (
             <p className="mt-2 text-muted-foreground">
               {freshness.lastPassedAt
-                ? `Last passed ${new Date(freshness.lastPassedAt).toLocaleString()}`
+                ? `Last passed ${qaWhen(freshness.lastPassedAt)}`
                 : "No successful run recorded"}
             </p>
           ) : null}
         </div>
       ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <Clock3Icon className="size-3.5" />
-          {run ? (
-            <time dateTime={run.startedAt}>
-              Last run{" "}
-              {new Date(run.startedAt).toLocaleString(undefined, {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-            </time>
-          ) : (
-            "No QA runs recorded"
-          )}
-        </span>
-        {run ? <span>{qaRunDuration(run)}</span> : null}
-        {run?.devices?.length ? (
-          <span>On {run.devices.map((device) => device.name).join(", ")}</span>
-        ) : null}
-        {run?.repositoryFile ? <span>{qaRunSource(run)}</span> : null}
-      </div>
       {run?.status === "running" && run.steps ? (
         <div className="mt-4">
           <QaRunActivity environmentId={environmentId} projectId={projectId} run={run} />
         </div>
-      ) : run?.summary ? (
-        <div className="mt-4 flex flex-wrap gap-4 rounded-lg bg-muted/40 px-3 py-2 text-xs">
-          <span className="text-success-foreground">
-            <strong className="tabular-nums">
-              {run.summary.tests - run.summary.failures - run.summary.skipped}
-            </strong>{" "}
-            passed
-          </span>
-          <span
-            className={
-              run.summary.failures ? "text-destructive-foreground" : "text-muted-foreground"
-            }
-          >
-            <strong className="tabular-nums">{run.summary.failures}</strong> failed
-          </span>
-          <span className="text-muted-foreground">
-            <strong className="tabular-nums">{run.summary.skipped}</strong> skipped
-          </span>
-        </div>
-      ) : (
-        <p className="mt-4 text-xs text-muted-foreground">
-          {run?.status === "running"
-            ? "Executing on the selected environment."
-            : run
-              ? "No test report recorded."
-              : "Run this suite to record its first result."}
-        </p>
-      )}
+      ) : null}
       {run?.note ? <p className="mt-3 text-xs text-muted-foreground">{run.note}</p> : null}
       <details className="mt-3 text-xs text-muted-foreground">
         <summary className="w-fit cursor-pointer">Command</summary>
@@ -455,32 +436,13 @@ function SuiteCard({
           {suite.command}
         </p>
       </details>
-      <div className="mt-auto flex justify-end gap-2 pt-4">
-        {run ? (
+      {run ? (
+        <div className="mt-auto flex justify-end pt-3">
           <Button variant="ghost" size="sm" onClick={() => onView(run.id)}>
             {run.summary && !run.repositoryFile ? `View tests (${run.summary.tests})` : "View run"}
           </Button>
-        ) : null}
-        {run?.status === "running" ? (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canCancel}
-            onClick={() => onCancel(run.id)}
-          >
-            <SquareIcon /> Cancel
-          </Button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canRun || blocked}
-            onClick={() => onRun(suite.id)}
-          >
-            <PlayIcon /> Run
-          </Button>
-        )}
-      </div>
+        </div>
+      ) : null}
     </section>
   );
 }

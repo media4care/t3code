@@ -7,8 +7,10 @@ import {
   qaOutputTail,
   qaProjects,
   qaRepositories,
+  qaRunHeadline,
   qaRunSteps,
   qaStepDuration,
+  qaWhen,
 } from "./qa.ts";
 
 const suites: QaSuite[] = [
@@ -166,4 +168,32 @@ it("follows a watched run's output, and shows where an interrupted run stopped",
   expect(
     qaRunSteps({ ...run(suites[0]!, "interrupted"), steps }).map((step) => step.status),
   ).toEqual(["done", "failed"]);
+});
+
+it("leads a suite card with its outcome, and dates runs in 24-hour time relative to today", () => {
+  const passed = run(suites[0]!, "passed");
+  expect(qaRunHeadline(undefined)).toBe("Never run");
+  expect(qaRunHeadline(run(suites[0]!, "running"))).toBe("Running");
+  expect(qaRunHeadline(passed)).toBe("Command passed · 1m 0s");
+  expect(qaRunHeadline({ ...passed, summary: { tests: 298, failures: 0, skipped: 2 } })).toBe(
+    "296 passed · 2 skipped · 1m 0s",
+  );
+  expect(
+    qaRunHeadline({
+      ...run(suites[0]!, "failed"),
+      summary: { tests: 120, failures: 3, skipped: 0 },
+    }),
+  ).toBe("3 failed of 120 · 1m 0s");
+
+  // Local times, so the labels hold in any time zone the tests run in.
+  // @effect-diagnostics-next-line globalDate:off
+  const now = new Date(2026, 10, 15, 11, 20).getTime();
+  const at = (day: number, hour: number, minute: number) =>
+    // @effect-diagnostics-next-line globalDate:off
+    new Date(2026, 10, day, hour, minute).toISOString();
+  expect(qaWhen(at(15, 9, 5), now)).toBe("today 09:05");
+  expect(qaWhen(at(14, 20, 53), now)).toBe("yesterday 20:53");
+  expect(qaWhen(at(16, 0, 0), now)).toBe("tomorrow 00:00");
+  expect(qaWhen(at(12, 23, 22), now)).toMatch(/^\S+ 23:22$/);
+  expect(qaWhen(at(1, 8, 15), now)).not.toMatch(/today|yesterday|AM|PM/);
 });

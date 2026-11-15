@@ -364,6 +364,51 @@ export function qaRunSummary(run: QaRun) {
       : "No test report";
 }
 
+/** The outcome a suite card leads with: counts from the report when there is one, then how long it took. */
+export function qaRunHeadline(run: QaRun | undefined) {
+  if (!run) return "Never run";
+  if (run.status === "running") return "Running";
+  const summary = run.summary;
+  const outcome = summary?.failures
+    ? `${summary.failures} failed of ${summary.tests}`
+    : summary && run.status === "passed"
+      ? `${summary.tests - summary.skipped} passed${summary.skipped ? ` · ${summary.skipped} skipped` : ""}`
+      : qaStatusLabel(run);
+  return `${outcome} · ${qaRunDuration(run)}`;
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+const time24 = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+const dayMonth = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
+const dayMonthYear = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+
+// @effect-diagnostics-next-line globalDate:off - Labels render in clients, outside an Effect runtime.
+const localMidnight = (ms: number) => new Date(ms).setHours(0, 0, 0, 0);
+
+/** When something QA happened or will happen, in 24-hour time: "today 09:41", "Wed 14:02", "3 Nov 08:15". */
+// @effect-diagnostics-next-line globalDate:off
+export function qaWhen(iso: string, now = Date.now()) {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return iso;
+  const days = Math.round((localMidnight(now) - localMidnight(at)) / DAY);
+  const time = time24.format(at);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `yesterday ${time}`;
+  if (days === -1) return `tomorrow ${time}`;
+  if (Math.abs(days) < 7) return `${weekday.format(at)} ${time}`;
+  const year = (ms: number) => dayMonthYear.formatToParts(ms).find((part) => part.type === "year");
+  return `${(year(at)?.value === year(now)?.value ? dayMonth : dayMonthYear).format(at)} ${time}`;
+}
+
 export const QA_CONFIGURATION_EXAMPLE = `{
   "qa": {
     "suites": [

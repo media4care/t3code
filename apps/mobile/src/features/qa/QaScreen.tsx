@@ -14,6 +14,7 @@ import {
   qaRunSource,
   QA_OFF_EVERYWHERE,
   QA_SHARED_RESULTS_NOTICE,
+  qaWhen,
 } from "@t3tools/client-runtime/qa";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -258,7 +259,7 @@ function ProjectQa({
           <Text className="text-xs text-foreground-muted">
             Includes changed, expired, unknown, untested, and unsuccessful suites.
             {snapshot.checkedAt
-              ? ` Checked ${new Date(snapshot.checkedAt).toLocaleTimeString()}. Refresh after editing files.`
+              ? ` Checked ${qaWhen(snapshot.checkedAt)}. Refresh after editing files.`
               : ""}
           </Text>
           {snapshot.batchRunning ? (
@@ -341,7 +342,7 @@ function ProjectQa({
                 {run.suite.name} · {qaStatusLabel(run)} · {qaRunSource(run)}
               </Text>
               <Text className="text-sm text-foreground-muted">
-                {new Date(run.startedAt).toLocaleString()} · {qaRunDuration(run)}
+                {qaWhen(run.startedAt)} · {qaRunDuration(run)}
               </Text>
               <Text className="font-mono text-xs text-foreground-muted">
                 {run.ref ? `${run.ref} · ` : ""}

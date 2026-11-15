@@ -22,6 +22,7 @@ import {
   devicePoolKind,
   type DevicePoolFilter,
 } from "@t3tools/client-runtime/device/pool";
+import { qaWhen } from "@t3tools/client-runtime/qa";
 import {
   deviceEnvironment,
   deviceHostProbeAtom,
@@ -322,15 +323,7 @@ function DeviceCard({
           {entry.inUse ? <Badge variant="outline">In use</Badge> : null}
           {offline && entry.lastSeenAt ? (
             <span className="text-xs text-muted-foreground">
-              Last seen{" "}
-              <time dateTime={entry.lastSeenAt}>
-                {new Date(entry.lastSeenAt).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </time>
+              Last seen <time dateTime={entry.lastSeenAt}>{qaWhen(entry.lastSeenAt)}</time>
             </span>
           ) : null}
         </div>
