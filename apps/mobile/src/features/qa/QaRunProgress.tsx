@@ -88,11 +88,25 @@ export function QaRunSteps({ run }: { run: QaRun }) {
   );
 }
 
-/** A run's output, kept on its newest line as it grows. */
-export function QaOutput({ text, placeholder }: { text: string; placeholder: string }) {
+/**
+ * A run's output, kept on its newest line as it grows.
+ * Live output gets a fixed height so streaming lines never resize what surrounds it.
+ */
+export function QaOutput({
+  text,
+  placeholder,
+  live = false,
+}: {
+  text: string;
+  placeholder: string;
+  live?: boolean;
+}) {
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   return (
-    <View accessibilityLabel="Run output" className="max-h-80 rounded-lg bg-subtle p-3">
+    <View
+      accessibilityLabel="Run output"
+      className={`${live ? "h-80" : "max-h-80"} rounded-lg bg-subtle p-3`}
+    >
       <ScrollView
         ref={scroll}
         nestedScrollEnabled
@@ -120,7 +134,11 @@ export function QaRunActivity({
   return (
     <View className="gap-3">
       <QaRunSteps run={live?.run ?? run} />
-      <View accessibilityLabel="Run output" className="rounded-lg bg-subtle p-3">
+      {/* Fixed height, newest line at the bottom: wrapped or arriving lines never resize the card. */}
+      <View
+        accessibilityLabel="Run output"
+        className="h-40 justify-end overflow-hidden rounded-lg bg-subtle p-3"
+      >
         <Text selectable className="font-mono text-xs">
           {qaOutputTail(live?.output ?? "", 8) || "Waiting for output…"}
         </Text>

@@ -457,6 +457,7 @@ function RunDetails({
                   </Text>
                 ) : null}
                 <QaOutput
+                  live={running}
                   text={output.output}
                   placeholder={running ? "Waiting for output…" : "No output captured."}
                 />

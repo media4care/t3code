@@ -93,15 +93,20 @@ export function QaRunSteps({ run }: { run: QaRun }) {
   );
 }
 
-/** A reversed column keeps the scroll on the newest line as output arrives, without script. */
+/**
+ * A reversed column keeps the scroll on the newest line as output arrives, without script.
+ * Live output gets a fixed height so streaming lines never resize what surrounds it.
+ */
 export function QaOutput({
   text,
   placeholder,
   size = "tall",
+  live = false,
 }: {
   text: string;
   placeholder: string;
   size?: "short" | "tall";
+  live?: boolean;
 }) {
   return (
     <div
@@ -109,7 +114,7 @@ export function QaOutput({
       aria-label="Run output"
       className={cn(
         "flex flex-col-reverse overflow-auto rounded-lg bg-muted p-3",
-        size === "short" ? "max-h-56" : "max-h-96",
+        size === "short" ? (live ? "h-56" : "max-h-56") : live ? "h-96" : "max-h-96",
       )}
     >
       <pre className="whitespace-pre-wrap break-words font-mono text-xs">{text || placeholder}</pre>
@@ -140,6 +145,7 @@ export function QaRunActivity({
       ) : null}
       <QaOutput
         size="short"
+        live
         text={qaOutputTail(live?.output ?? "")}
         placeholder="Waiting for output…"
       />

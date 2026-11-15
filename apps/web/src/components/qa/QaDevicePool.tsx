@@ -224,7 +224,7 @@ function DeviceGroups({
   const showHosts = new Set(entries.map((entry) => entry.hostId)).size > 1;
   return devicePoolGroups(entries, filter).map((group) => (
     <details key={group.id} open className="group/devices">
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
         <h4 className="text-sm font-semibold">{group.label}</h4>
         <span className="text-xs text-muted-foreground">{group.entries.length}</span>
         <ChevronDownIcon className="ml-auto size-4 -rotate-90 text-muted-foreground group-open/devices:rotate-0" />
