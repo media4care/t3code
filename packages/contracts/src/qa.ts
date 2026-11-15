@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { DeviceFormFactor, DevicePlatform, DevicePoolKey } from "./device.ts";
+import { DeviceFormFactor, DeviceHostId, DevicePlatform, DevicePoolKey } from "./device.ts";
 import type { RepositoryIdentity } from "./environment.ts";
 import { RecurringSchedule } from "./scheduledTask.ts";
 
@@ -147,6 +147,8 @@ export const QaRunDevice = Schema.Struct({
   platform: DevicePlatform,
   physical: Schema.Boolean,
   version: Schema.String,
+  /** The device host whose stream shows the device; absent when no host can show it. */
+  hostId: Schema.optionalKey(DeviceHostId),
 });
 export type QaRunDevice = typeof QaRunDevice.Type;
 

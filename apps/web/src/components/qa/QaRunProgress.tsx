@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { CheckIcon, MinusIcon, XIcon } from "lucide-react";
 import type { EnvironmentId, ProjectId, QaRun, QaRunStep } from "@t3tools/contracts";
 import {
@@ -12,6 +13,9 @@ import { cn } from "~/lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { Spinner } from "../ui/spinner";
+
+// Loaded only once a run has a device to show: the stream view brings the whole device viewer.
+const QaDeviceStreams = lazy(() => import("./QaDeviceStreams"));
 
 /** A run in progress as the server streams it; null for a finished run or a server without steps. */
 export function useQaLiveRun(
@@ -89,15 +93,20 @@ export function QaRunSteps({ run }: { run: QaRun }) {
   );
 }
 
-/** A reversed column keeps the scroll on the newest line as output arrives, without script. */
+/**
+ * A reversed column keeps the scroll on the newest line as output arrives, without script.
+ * Live output gets a fixed height so streaming lines never resize what surrounds it.
+ */
 export function QaOutput({
   text,
   placeholder,
   size = "tall",
+  live = false,
 }: {
   text: string;
   placeholder: string;
   size?: "short" | "tall";
+  live?: boolean;
 }) {
   return (
     <div
@@ -105,7 +114,7 @@ export function QaOutput({
       aria-label="Run output"
       className={cn(
         "flex flex-col-reverse overflow-auto rounded-lg bg-muted p-3",
-        size === "short" ? "max-h-56" : "max-h-96",
+        size === "short" ? (live ? "h-56" : "max-h-56") : live ? "h-96" : "max-h-96",
       )}
     >
       <pre className="whitespace-pre-wrap break-words font-mono text-xs">{text || placeholder}</pre>
@@ -124,11 +133,19 @@ export function QaRunActivity({
   run: QaRun;
 }) {
   const live = useQaLiveRun(environmentId, projectId, run);
+  const current = live?.run ?? run;
+  const testing = current.steps?.some((step) => step.id === "command" && step.status === "running");
   return (
     <div className="grid gap-3">
-      <QaRunSteps run={live?.run ?? run} />
+      <QaRunSteps run={current} />
+      {testing && current.devices?.some((device) => device.hostId) ? (
+        <Suspense>
+          <QaDeviceStreams environmentId={environmentId} devices={current.devices} />
+        </Suspense>
+      ) : null}
       <QaOutput
         size="short"
+        live
         text={qaOutputTail(live?.output ?? "")}
         placeholder="Waiting for output…"
       />

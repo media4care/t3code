@@ -1,6 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
-import { ArrowLeftIcon, FlaskConicalIcon, PlayIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ChevronDownIcon,
+  FlaskConicalIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  SearchIcon,
+} from "lucide-react";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
@@ -618,8 +625,14 @@ function RunDetails({
                 </p>
               </div>
               <QaRunSteps run={run} />
-              <details open={running || run.status === "failed" || run.status === "incomplete"}>
-                <summary className="cursor-pointer text-sm font-medium">Run output</summary>
+              <details
+                open={running || run.status === "failed" || run.status === "incomplete"}
+                className="group/output"
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+                  Run output
+                  <ChevronDownIcon className="ml-auto size-4 -rotate-90 text-muted-foreground group-open/output:rotate-0" />
+                </summary>
                 <div className="mt-3 space-y-3">
                   {output.outputTruncated ? (
                     <p className="text-sm text-muted-foreground">
@@ -627,6 +640,7 @@ function RunDetails({
                     </p>
                   ) : null}
                   <QaOutput
+                    live={running}
                     text={output.output}
                     placeholder={running ? "Waiting for output…" : "No output captured."}
                   />
