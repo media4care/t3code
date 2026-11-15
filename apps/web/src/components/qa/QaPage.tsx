@@ -24,6 +24,7 @@ import {
   QA_SHARED_RESULTS_NOTICE,
   type QaGrouping,
   type QaResultFilter,
+  qaWhen,
 } from "@t3tools/client-runtime/qa";
 import { deviceEnvironment } from "../../state/device";
 import { useProjects } from "../../state/entities";
@@ -311,7 +312,7 @@ function ProjectQa({
             <p className="mt-1 text-xs text-muted-foreground">
               Includes changed, expired, unknown, untested, and unsuccessful suites.
               {snapshot.checkedAt
-                ? ` Checked ${new Date(snapshot.checkedAt).toLocaleTimeString()}. Refresh after editing files.`
+                ? ` Checked ${qaWhen(snapshot.checkedAt)}. Refresh after editing files.`
                 : ""}
             </p>
             {snapshot.batchRunning ? (
@@ -504,9 +505,7 @@ function ProjectQa({
                     <td className="p-3">
                       <QaRunBadge run={run} />
                     </td>
-                    <td className="whitespace-nowrap p-3">
-                      {new Date(run.startedAt).toLocaleString()}
-                    </td>
+                    <td className="whitespace-nowrap p-3">{qaWhen(run.startedAt)}</td>
                     <td className="whitespace-nowrap p-3">{qaRunDuration(run)}</td>
                     <td className="p-3 font-mono text-xs">
                       {run.ref ? `${run.ref} · ` : ""}

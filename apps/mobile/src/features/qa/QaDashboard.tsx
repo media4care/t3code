@@ -5,72 +5,25 @@ import {
   QA_GROUP_OPTIONS,
   QA_KIND_LABELS,
   groupQaSuites,
-  qaRunDuration,
+  qaRunHeadline,
   qaRunSource,
-  qaRunSummary,
-  qaStatusLabel,
+  qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
   type QaGrouping,
   type QaResultFilter,
   type qaDashboard,
 } from "@t3tools/client-runtime/qa";
-import type { EnvironmentId, ProjectId, QaTestKind } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
+import { IconButton } from "../../components/ui/IconButton";
 import { SearchField } from "../../components/ui/SearchField";
 import { ListFilterMenu, ListFilterRow } from "../layout/workspace/ListFilterMenu";
 import { QaRunActivity } from "./QaRunProgress";
 
-const KINDS = {
-  unit: {
-    icon: "flask",
-    background: "bg-adaptive-emerald-500-a12-a16",
-    text: "text-adaptive-emerald-700-300",
-    tint: "accent-adaptive-emerald-700-300",
-  },
-  integration: {
-    icon: "puzzlepiece",
-    background: "bg-warning",
-    text: "text-warning-foreground",
-    tint: "accent-warning-foreground",
-  },
-  playwright: {
-    icon: "globe",
-    background: "bg-update",
-    text: "text-update-foreground",
-    tint: "accent-update-foreground",
-  },
-  maestro: {
-    icon: "iphone",
-    background: "bg-adaptive-violet-500-a12-a16",
-    text: "text-adaptive-violet-700-300",
-    tint: "accent-adaptive-violet-700-300",
-  },
-  e2e: {
-    icon: "point.topleft.down.to.point.bottomright.curvepath",
-    background: "bg-adaptive-rose-500-a12-a16",
-    text: "text-adaptive-rose-700-300",
-    tint: "accent-adaptive-rose-700-300",
-  },
-  tooling: {
-    icon: "terminal",
-    background: "bg-subtle-strong",
-    text: "text-foreground-secondary",
-    tint: "accent-foreground-secondary",
-  },
-  other: {
-    icon: "cube",
-    background: "bg-subtle",
-    text: "text-foreground-muted",
-    tint: "accent-foreground-muted",
-  },
-} satisfies Record<
-  QaTestKind,
-  { icon: AppSymbolName; background: string; text: string; tint: string }
->;
 const RESULTS = {
   passed: {
     label: "Passed",
@@ -282,6 +235,53 @@ function SuiteGroup({
   );
 }
 
+const STATUS_ICONS = {
+  passed: {
+    name: "checkmark",
+    tint: "accent-adaptive-emerald-700-300",
+    background: "bg-adaptive-emerald-500-a12-a16",
+  },
+  failed: { name: "xmark", tint: "accent-danger-foreground", background: "bg-danger" },
+  attention: {
+    name: "exclamationmark.triangle",
+    tint: "accent-warning-foreground",
+    background: "bg-warning",
+  },
+  never: { name: "circle.dashed", tint: "accent-foreground-muted", background: "bg-subtle" },
+} satisfies Record<string, { name: AppSymbolName; tint: string; background: string }>;
+
+function StatusIcon({
+  status,
+  category,
+}: {
+  status: QaRunStatus | undefined;
+  category: QaDashboardEntry["category"];
+}) {
+  const icon =
+    status === "failed"
+      ? STATUS_ICONS.failed
+      : category === "running"
+        ? null
+        : STATUS_ICONS[category];
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className={`size-8 items-center justify-center rounded-full ${icon?.background ?? "bg-update"}`}
+    >
+      {icon ? (
+        <SymbolView name={icon.name} size={14} tintColorClassName={icon.tint} />
+      ) : (
+        <AppActivityIndicator
+          size="small"
+          colorClassName="accent-update-foreground"
+          style={{ transform: [{ scale: 0.75 }] }}
+        />
+      )}
+    </View>
+  );
+}
+
 function SuiteCard({
   entry: { suite, run, component, kind, category, freshness },
   showComponent,
@@ -297,20 +297,56 @@ function SuiteCard({
   showComponent: boolean;
 }) {
   const [showCommand, setShowCommand] = useState(false);
+  const running = run?.status === "running";
   return (
     <View
-      className={`gap-3 rounded-2xl border bg-card p-4 ${run?.status === "running" ? "border-primary" : "border-border-subtle"}`}
+      className={`gap-3 rounded-2xl border bg-card p-4 ${running ? "border-primary" : "border-border-subtle"}`}
     >
-      <View className="flex-row flex-wrap items-center gap-2">
-        <View
-          className={`flex-row items-center gap-1.5 rounded-md px-2 py-1 ${KINDS[kind].background}`}
+      <View className="flex-row items-center gap-3">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityHint={run ? "Opens the run" : "Shows the command"}
+          onPress={() => (run ? onView(run.id) : setShowCommand(!showCommand))}
+          className="flex-1 flex-row items-center gap-3"
         >
-          <SymbolView name={KINDS[kind].icon} size={13} tintColorClassName={KINDS[kind].tint} />
-          <Text className={`text-xs ${KINDS[kind].text}`}>{QA_KIND_LABELS[kind]}</Text>
-        </View>
-        {showComponent ? <Text className="text-xs text-foreground-muted">{component}</Text> : null}
+          <StatusIcon status={run?.status} category={category} />
+          <View className="flex-1 gap-0.5">
+            <Text className="font-t3-semibold text-base">{suite.name}</Text>
+            <Text
+              className={`text-sm ${run?.status === "failed" ? "text-danger-foreground" : RESULTS[category].color}`}
+            >
+              {qaRunHeadline(run)}
+            </Text>
+            <Text className="text-xs text-foreground-muted">
+              {[
+                QA_KIND_LABELS[kind],
+                showComponent ? component : null,
+                run ? qaWhen(run.startedAt) : null,
+                run?.repositoryFile ? qaRunSource(run) : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </Text>
+          </View>
+        </Pressable>
+        {running ? (
+          <IconButton
+            accessibilityLabel="Cancel"
+            icon="stop.fill"
+            variant="danger"
+            disabled={!canCancel}
+            onPress={() => onCancel(run.id)}
+          />
+        ) : (
+          <IconButton
+            accessibilityLabel="Run"
+            icon="play"
+            variant="tonal"
+            disabled={!canRun}
+            onPress={() => onRun(suite.id)}
+          />
+        )}
       </View>
-      <Text className="font-t3-semibold text-base">{suite.name}</Text>
       {run?.outputTail ? (
         <View className="gap-2 rounded-lg bg-danger p-3">
           <Text className="font-t3-semibold text-xs text-danger-foreground">
@@ -328,28 +364,8 @@ function SuiteCard({
           </Text>
         </View>
       ) : null}
-      {run?.status === "running" && run.steps ? (
+      {running && run.steps ? (
         <QaRunActivity environmentId={environmentId} projectId={projectId} run={run} />
-      ) : run?.status === "running" ? (
-        <View className="flex-row items-center gap-2">
-          <AppActivityIndicator colorClassName="accent-update-foreground" />
-          <Text className="font-t3-semibold text-sm text-update-foreground">
-            Running since {new Date(run.startedAt).toLocaleTimeString()}
-          </Text>
-        </View>
-      ) : (
-        <Text
-          className={`text-sm ${run?.status === "failed" ? "text-danger-foreground" : RESULTS[category].color}`}
-        >
-          {qaStatusLabel(run)}
-          {run ? ` · ${new Date(run.startedAt).toLocaleString()} · ${qaRunDuration(run)}` : ""}
-        </Text>
-      )}
-      {run?.summary ? (
-        <Text className="text-xs text-foreground-muted">{qaRunSummary(run)}</Text>
-      ) : null}
-      {run?.repositoryFile ? (
-        <Text className="text-xs text-foreground-muted">{qaRunSource(run)}</Text>
       ) : null}
       {freshness?.state === "stale" ? (
         <View className="gap-2 rounded-lg bg-subtle p-3">
@@ -368,46 +384,12 @@ function SuiteCard({
           ) : null}
           {run?.status !== "passed" && freshness.lastPassedAt ? (
             <Text className="text-xs text-foreground-muted">
-              Last passed {new Date(freshness.lastPassedAt).toLocaleString()}
+              Last passed {qaWhen(freshness.lastPassedAt)}
             </Text>
           ) : null}
         </View>
       ) : null}
       {run?.note ? <Text className="text-xs text-foreground-muted">{run.note}</Text> : null}
-      <View className="flex-row flex-wrap items-center gap-2">
-        {run?.status === "running" ? (
-          <Button
-            label="Cancel"
-            icon="stop.fill"
-            tone="danger"
-            disabled={!canCancel}
-            onPress={() => onCancel(run.id)}
-          />
-        ) : (
-          <Button label="Run" icon="play" disabled={!canRun} onPress={() => onRun(suite.id)} />
-        )}
-        {run ? (
-          <Button
-            label={
-              run.status === "running"
-                ? "Full output"
-                : run.summary && !run.repositoryFile
-                  ? `Tests (${run.summary.tests})`
-                  : "Details"
-            }
-            icon={run.status === "running" ? "terminal" : "list.number"}
-            tone="text"
-            onPress={() => onView(run.id)}
-          />
-        ) : (
-          <Button
-            label={showCommand ? "Hide command" : "Command"}
-            icon="chevron.left.forwardslash.chevron.right"
-            tone="text"
-            onPress={() => setShowCommand(!showCommand)}
-          />
-        )}
-      </View>
       {showCommand ? (
         <Text selectable className="font-mono text-xs text-foreground-muted">
           {suite.cwd ? `${suite.cwd} › ` : ""}
