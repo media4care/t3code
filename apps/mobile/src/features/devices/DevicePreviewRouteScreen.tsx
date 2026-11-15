@@ -37,7 +37,11 @@ import { deviceEnvironment, useDeviceHubAccess } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { DeviceStreamWebView, type DeviceStreamRef } from "./DeviceStreamWebView";
+import {
+  DeviceStreamWebView,
+  useDeviceStreamColors,
+  type DeviceStreamRef,
+} from "./DeviceStreamWebView";
 import {
   selectedThreadDevicePreview,
   threadDevicePreviews,
@@ -401,6 +405,7 @@ function OpenDevicePreview({
 }) {
   const { session } = preview;
   const { themeVariables } = useAppearancePreferences();
+  const colors = useDeviceStreamColors();
   const [viewer] = useState(uuidv4);
   const { access, error, refresh } = useDeviceHubAccess(environmentId, session.hostId, viewer);
   const onUnauthorized = async () => refresh();
@@ -411,14 +416,7 @@ function OpenDevicePreview({
       platform={session.platform}
       deviceId={session.deviceId}
       serveSimOnly={preview.serveSimOnly}
-      colors={{
-        background: themeVariables["--color-sheet-solid"],
-        foreground: themeVariables["--color-foreground"],
-        muted: themeVariables["--color-foreground-muted"],
-        buttonBackground: themeVariables["--color-secondary"],
-        buttonForeground: themeVariables["--color-secondary-foreground"],
-        buttonBorder: themeVariables["--color-secondary-border"],
-      }}
+      colors={colors}
       onUnauthorized={onUnauthorized}
       onInputConnected={onInputConnected}
     />

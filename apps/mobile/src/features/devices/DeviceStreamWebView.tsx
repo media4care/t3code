@@ -14,6 +14,7 @@ import type { DeviceStreamStatus } from "@t3tools/client-runtime/device/stream";
 
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText } from "../../components/ui/AppText";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 import {
   deviceStreamBaseUrl,
@@ -21,6 +22,19 @@ import {
   deviceStreamMessage,
   type DeviceStreamConfiguration,
 } from "./device-stream-document";
+
+/** The viewer's colors, from the current theme. */
+export function useDeviceStreamColors(): DeviceStreamConfiguration["colors"] {
+  const { themeVariables } = useAppearancePreferences();
+  return {
+    background: themeVariables["--color-sheet-solid"],
+    foreground: themeVariables["--color-foreground"],
+    muted: themeVariables["--color-foreground-muted"],
+    buttonBackground: themeVariables["--color-secondary"],
+    buttonForeground: themeVariables["--color-secondary-foreground"],
+    buttonBorder: themeVariables["--color-secondary-border"],
+  };
+}
 
 export interface DeviceStreamRef {
   home: () => void;

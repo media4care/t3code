@@ -14,6 +14,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useVisibleSecondClock } from "../threads/use-visible-second-clock";
+import { QaDeviceStreams } from "./QaDeviceStreams";
 
 /** A run in progress as the server streams it; null for a finished run or a server without steps. */
 export function useQaLiveRun(
@@ -131,9 +132,14 @@ export function QaRunActivity({
   run: QaRun;
 }) {
   const live = useQaLiveRun(environmentId, projectId, run);
+  const current = live?.run ?? run;
+  const testing = current.steps?.some((step) => step.id === "command" && step.status === "running");
   return (
     <View className="gap-3">
-      <QaRunSteps run={live?.run ?? run} />
+      <QaRunSteps run={current} />
+      {testing && current.devices?.some((device) => device.hostId) ? (
+        <QaDeviceStreams environmentId={environmentId} devices={current.devices} />
+      ) : null}
       {/* Fixed height, newest line at the bottom: wrapped or arriving lines never resize the card. */}
       <View
         accessibilityLabel="Run output"
