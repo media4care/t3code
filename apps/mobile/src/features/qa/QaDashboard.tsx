@@ -4,17 +4,23 @@ import {
   QA_FILTER_OPTIONS,
   QA_GROUP_OPTIONS,
   QA_KIND_LABELS,
+  QA_PLATFORM_LABELS,
   groupQaSuites,
+  qaPlatformHeadline,
+  qaOutputTail,
+  qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
   qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
+  type QaPlatformOutcome,
+  type QaPlatformResult,
   type QaGrouping,
   type QaResultFilter,
   type qaDashboard,
 } from "@t3tools/client-runtime/qa";
-import type { EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
+import type { DevicePlatform, EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
@@ -56,7 +62,7 @@ interface RunActions {
   projectId: ProjectId;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (id: string) => void;
+  onRun: (id: string, platform?: DevicePlatform) => void;
   onCancel: (id: string) => void;
   onView: (id: string) => void;
 }
@@ -283,7 +289,7 @@ function StatusIcon({
 }
 
 function SuiteCard({
-  entry: { suite, run, component, kind, category, freshness },
+  entry: { suite, run, platforms, component, kind, category, freshness },
   showComponent,
   environmentId,
   projectId,
@@ -298,6 +304,7 @@ function SuiteCard({
 }) {
   const [showCommand, setShowCommand] = useState(false);
   const running = run?.status === "running";
+  const separate = platforms.length > 0;
   return (
     <View
       className={`gap-3 rounded-2xl border bg-card p-4 ${running ? "border-primary" : "border-border-subtle"}`}
@@ -306,7 +313,7 @@ function SuiteCard({
         <Pressable
           accessibilityRole="button"
           accessibilityHint={run ? "Opens the run" : "Shows the command"}
-          onPress={() => (run ? onView(run.id) : setShowCommand(!showCommand))}
+          onPress={() => (run && !separate ? onView(run.id) : setShowCommand(!showCommand))}
           className="flex-1 flex-row items-center gap-3"
         >
           <StatusIcon status={run?.status} category={category} />
@@ -315,13 +322,14 @@ function SuiteCard({
             <Text
               className={`text-sm ${run?.status === "failed" ? "text-danger-foreground" : RESULTS[category].color}`}
             >
-              {qaRunHeadline(run)}
+              {separate ? qaPlatformsHeadline(platforms) : qaRunHeadline(run)}
             </Text>
             <Text className="text-xs text-foreground-muted">
               {[
                 QA_KIND_LABELS[kind],
                 showComponent ? component : null,
-                run ? qaWhen(run.startedAt) : null,
+                separate ? "Each platform runs on its own" : null,
+                run && !separate ? qaWhen(run.startedAt) : null,
                 run?.repositoryFile ? qaRunSource(run) : null,
               ]
                 .filter(Boolean)
@@ -339,7 +347,7 @@ function SuiteCard({
           />
         ) : (
           <IconButton
-            accessibilityLabel="Run"
+            accessibilityLabel={!separate ? "Run" : platforms.length === 2 ? "Run both" : "Run all"}
             icon="play"
             variant="tonal"
             disabled={!canRun}
@@ -347,7 +355,15 @@ function SuiteCard({
           />
         )}
       </View>
-      {run?.outputTail ? (
+      {separate ? (
+        <PlatformRows
+          platforms={platforms}
+          canRun={canRun}
+          onRun={(platform) => onRun(suite.id, platform)}
+          onView={onView}
+        />
+      ) : null}
+      {run?.outputTail && !separate ? (
         <View className="gap-2 rounded-lg bg-danger p-3">
           <Text className="font-t3-semibold text-xs text-danger-foreground">
             Failure output{run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
@@ -382,20 +398,136 @@ function SuiteCard({
               changed paths.
             </Text>
           ) : null}
-          {run?.status !== "passed" && freshness.lastPassedAt ? (
+          {category !== "passed" && freshness.lastPassedAt ? (
             <Text className="text-xs text-foreground-muted">
               Last passed {qaWhen(freshness.lastPassedAt)}
             </Text>
           ) : null}
         </View>
       ) : null}
-      {run?.note ? <Text className="text-xs text-foreground-muted">{run.note}</Text> : null}
+      {run?.note && !separate ? (
+        <Text className="text-xs text-foreground-muted">{run.note}</Text>
+      ) : null}
       {showCommand ? (
         <Text selectable className="font-mono text-xs text-foreground-muted">
           {suite.cwd ? `${suite.cwd} › ` : ""}
           {suite.command}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+const PLATFORM_ICONS: Record<
+  Exclude<QaPlatformOutcome, "running">,
+  { name: AppSymbolName; tint: string; background: string }
+> = {
+  passed: STATUS_ICONS.passed,
+  failed: STATUS_ICONS.failed,
+  "not-run": STATUS_ICONS.attention,
+  queued: { name: "clock", tint: "accent-foreground-muted", background: "bg-subtle" },
+  never: STATUS_ICONS.never,
+};
+
+const PLATFORM_TEXT: Record<QaPlatformOutcome, string> = {
+  passed: RESULTS.passed.color,
+  failed: "text-danger-foreground",
+  "not-run": RESULTS.attention.color,
+  running: RESULTS.running.color,
+  queued: RESULTS.never.color,
+  never: RESULTS.never.color,
+};
+
+/** One row per platform of a suite that runs each platform on its own. */
+function PlatformRows({
+  platforms,
+  canRun,
+  onRun,
+  onView,
+}: {
+  platforms: ReadonlyArray<QaPlatformResult>;
+  canRun: boolean;
+  onRun: (platform: DevicePlatform) => void;
+  onView: (id: string) => void;
+}) {
+  return (
+    <View className="overflow-hidden rounded-xl border border-border-subtle">
+      {platforms.map((result, index) => {
+        const { platform, run, outcome } = result;
+        const label = QA_PLATFORM_LABELS[platform];
+        const icon = outcome === "running" ? null : PLATFORM_ICONS[outcome];
+        const busy = outcome === "running" || outcome === "queued";
+        return (
+          <View
+            key={platform}
+            className={`gap-2 p-3 ${index > 0 ? "border-t border-border-subtle" : ""}`}
+          >
+            <View className="flex-row items-center gap-3">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${label}: ${qaPlatformHeadline(result)}`}
+                accessibilityHint={run ? "Opens the run" : undefined}
+                disabled={!run}
+                onPress={() => run && onView(run.id)}
+                className="min-h-11 flex-1 flex-row items-center gap-3"
+              >
+                <View
+                  className={`size-6 items-center justify-center rounded-md ${icon?.background ?? "bg-update"}`}
+                >
+                  {icon ? (
+                    <SymbolView name={icon.name} size={12} tintColorClassName={icon.tint} />
+                  ) : (
+                    <AppActivityIndicator
+                      size="small"
+                      colorClassName="accent-update-foreground"
+                      style={{ transform: [{ scale: 0.6 }] }}
+                    />
+                  )}
+                </View>
+                <View className="flex-1 gap-0.5">
+                  <Text className="font-t3-semibold text-sm">
+                    {label}
+                    {run?.devices?.length ? (
+                      <Text className="font-sans text-xs text-foreground-muted">
+                        {" "}
+                        · {run.devices.map((device) => device.name).join(", ")}
+                      </Text>
+                    ) : null}
+                  </Text>
+                  <Text className={`text-xs ${PLATFORM_TEXT[outcome]}`}>
+                    {qaPlatformHeadline(result)}
+                  </Text>
+                  {run?.note && outcome !== "passed" && !busy ? (
+                    <Text className="text-xs text-foreground-muted">{run.note}</Text>
+                  ) : null}
+                </View>
+              </Pressable>
+              {busy ? null : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Run ${label}${run ? " again" : ""}`}
+                  disabled={!canRun}
+                  onPress={() => onRun(platform)}
+                  className={`size-11 items-center justify-center rounded-full bg-subtle ${canRun ? "" : "opacity-40"}`}
+                >
+                  <SymbolView
+                    name="arrow.clockwise"
+                    size={14}
+                    tintColorClassName="accent-foreground"
+                  />
+                </Pressable>
+              )}
+            </View>
+            {outcome === "failed" && run?.outputTail ? (
+              <View className="rounded-lg bg-danger p-2">
+                <Text selectable className="font-mono text-xs">
+                  {qaOutputTail(run.outputTail, 4)}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
     </View>
   );
 }

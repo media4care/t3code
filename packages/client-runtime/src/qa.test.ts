@@ -5,6 +5,7 @@ import {
   groupQaSuites,
   qaDashboard,
   qaOutputTail,
+  qaPlatformsHeadline,
   qaProjects,
   qaRepositories,
   qaRunHeadline,
@@ -69,6 +70,46 @@ it.each(["failed", "incomplete", "cancelled", "interrupted"] as const)(
     ]);
   },
 );
+
+it("sums up a suite run per platform from each platform's latest run, ignoring older single runs", () => {
+  const phones: QaSuite = {
+    id: "phones",
+    name: "Phone flows",
+    command: "maestro test flows",
+    runPer: "platform",
+    devices: [
+      { platform: "android", formFactor: "phone" },
+      { platform: "ios", formFactor: "phone" },
+    ],
+  };
+  const single = { ...run(phones, "failed"), id: "single", exitCode: 1 };
+  const android = { ...run(phones, "passed"), id: "android", platform: "android" as const };
+  const ios = { ...run(phones, "incomplete"), id: "ios", platform: "ios" as const };
+  const finished = qaDashboard([phones], [single, android, ios]).entries[0]!;
+  expect(finished.platforms.map(({ outcome }) => outcome)).toEqual(["passed", "not-run"]);
+  expect(finished.run?.id).toBe("ios");
+  expect(finished.category).toBe("attention");
+  expect(qaPlatformsHeadline(finished.platforms)).toBe("1 of 2 not run");
+
+  const failed = { ...ios, status: "failed" as const, exitCode: 1 };
+  expect(qaPlatformsHeadline(qaDashboard([phones], [android, failed]).entries[0]!.platforms)).toBe(
+    "1 of 2 failed",
+  );
+  expect(qaDashboard([phones], [android, { ...ios, status: "passed" }]).entries[0]?.category).toBe(
+    "passed",
+  );
+
+  const running = qaDashboard(
+    [phones],
+    [{ ...android, status: "running" }],
+    [],
+    [{ suiteId: "phones", platform: "ios" }],
+  ).entries[0]!;
+  expect(running.platforms.map(({ outcome }) => outcome)).toEqual(["running", "queued"]);
+  expect(running.category).toBe("running");
+  expect(qaPlatformsHeadline(running.platforms)).toBe("Running 1 of 2");
+  expect(qaDashboard([phones], [single]).entries[0]?.category).toBe("never");
+});
 
 it("combines case-insensitive search terms, result filters, and component or type grouping", () => {
   const { entries } = qaDashboard(suites, [run(suites[0]!, "passed"), run(suites[1]!, "failed")]);

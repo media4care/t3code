@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { DevicePlatform, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
   qaDashboard,
@@ -12,6 +12,7 @@ import {
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  qaRunTitle,
   QA_OFF_EVERYWHERE,
   QA_SHARED_RESULTS_NOTICE,
   qaWhen,
@@ -131,12 +132,13 @@ function ProjectQa({
     snapshot?.suites ?? [],
     snapshot?.latestRuns ?? [],
     snapshot?.freshness,
+    snapshot?.queuedPlatforms,
   );
   const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
   const [showHistory, setShowHistory] = useState(false);
-  const runSuite = async (suiteId: string) => {
+  const runSuite = async (suiteId: string, platform?: DevicePlatform) => {
     setBusy(true);
-    await start({ environmentId, input: { ...scope, suiteId } });
+    await start({ environmentId, input: { ...scope, suiteId, ...(platform ? { platform } : {}) } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -310,8 +312,8 @@ function ProjectQa({
           counts={counts}
           canRun={connected && permission && !busy && !running && !snapshot?.batchRunning}
           canCancel={connected && permission && !busy}
-          onRun={(suiteId) => {
-            void runSuite(suiteId);
+          onRun={(suiteId, platform) => {
+            void runSuite(suiteId, platform);
           }}
           onCancel={(runId) => {
             void cancelRun(runId);
@@ -334,12 +336,12 @@ function ProjectQa({
             <Pressable
               key={run.id}
               accessibilityRole="button"
-              accessibilityLabel={`View ${run.suite.name} run`}
+              accessibilityLabel={`View ${qaRunTitle(run)} run`}
               onPress={() => setSelectedRun(run.id)}
               className="gap-2 rounded-xl border border-border-subtle p-4"
             >
               <Text className="font-t3-semibold">
-                {run.suite.name} · {qaStatusLabel(run)} · {qaRunSource(run)}
+                {qaRunTitle(run)} · {qaStatusLabel(run)} · {qaRunSource(run)}
               </Text>
               <Text className="text-sm text-foreground-muted">
                 {qaWhen(run.startedAt)} · {qaRunDuration(run)}
@@ -395,7 +397,7 @@ function RunDetails({
       run?.status === "incomplete" ||
       run?.status === "interrupted");
   return (
-    <Sheet title={run?.suite.name ?? "Run details"} onClose={onClose}>
+    <Sheet title={run ? qaRunTitle(run) : "Run details"} onClose={onClose}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{

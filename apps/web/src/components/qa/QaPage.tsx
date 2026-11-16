@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { DevicePlatform, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
   QA_FILTER_OPTIONS,
@@ -20,6 +20,7 @@ import {
   qaRunDuration,
   qaRunSummary,
   qaRunSource,
+  qaRunTitle,
   QA_OFF_EVERYWHERE,
   QA_SHARED_RESULTS_NOTICE,
   type QaGrouping,
@@ -165,13 +166,14 @@ function ProjectQa({
     snapshot?.suites ?? [],
     snapshot?.latestRuns ?? [],
     snapshot?.freshness,
+    snapshot?.queuedPlatforms,
   );
   const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
   const groups = groupQaSuites(entries, grouping, search, filter);
   const visibleCount = groups.reduce((total, group) => total + group.entries.length, 0);
-  const runSuite = async (suiteId: string) => {
+  const runSuite = async (suiteId: string, platform?: DevicePlatform) => {
     setBusy(true);
-    await start({ environmentId, input: { ...scope, suiteId } });
+    await start({ environmentId, input: { ...scope, suiteId, ...(platform ? { platform } : {}) } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -446,8 +448,8 @@ function ProjectQa({
                 }}
                 canRun={connected && canRun && !busy && !running && !snapshot?.batchRunning}
                 canCancel={connected && canRun && !busy}
-                onRun={(suiteId) => {
-                  void runSuite(suiteId);
+                onRun={(suiteId, platform) => {
+                  void runSuite(suiteId, platform);
                 }}
                 onCancel={(runId) => {
                   void cancelRun(runId);
@@ -499,7 +501,7 @@ function ProjectQa({
                 {snapshot.recentRuns.map((run) => (
                   <tr key={run.id} className="border-t border-border">
                     <td className="p-3">
-                      {run.suite.name}
+                      {qaRunTitle(run)}
                       <p className="text-xs text-muted-foreground">{qaRunSource(run)}</p>
                     </td>
                     <td className="p-3">
@@ -516,7 +518,7 @@ function ProjectQa({
                       <Button
                         variant="ghost"
                         size="sm"
-                        aria-label={`View ${run.suite.name} run`}
+                        aria-label={`View ${qaRunTitle(run)} run`}
                         onClick={() => setSelectedRun(run.id)}
                       >
                         Details
@@ -569,7 +571,7 @@ function RunDetails({
     >
       <DialogPopup className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{run?.suite.name ?? "Run details"}</DialogTitle>
+          <DialogTitle>{run ? qaRunTitle(run) : "Run details"}</DialogTitle>
           {run ? (
             <div className="flex flex-wrap items-center gap-3">
               <QaRunBadge run={run} />

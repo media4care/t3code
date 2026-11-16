@@ -1,6 +1,9 @@
 import {
   QaCiReport,
+  qaCombinedStatus,
   qaRemoteOf,
+  qaSuitePlatforms,
+  type DevicePlatform,
   type EnvironmentId,
   type QaCheckout,
   type RepositoryIdentity,
@@ -190,21 +193,66 @@ function qaResultCategory(run: QaRun | undefined): Exclude<QaResultFilter, "all"
   return "attention";
 }
 
+export const QA_PLATFORM_LABELS: Record<DevicePlatform, string> = {
+  android: "Android",
+  ios: "iOS",
+};
+
+/** Where one platform of a suite that runs each platform separately stands. */
+export type QaPlatformOutcome = "running" | "queued" | "passed" | "failed" | "not-run" | "never";
+
+export interface QaPlatformResult {
+  readonly platform: DevicePlatform;
+  readonly run: QaRun | undefined;
+  readonly outcome: QaPlatformOutcome;
+}
+
+function qaPlatformOutcome(run: QaRun | undefined, queued: boolean): QaPlatformOutcome {
+  if (run?.status === "running") return "running";
+  if (queued) return "queued";
+  if (!run) return "never";
+  if (run.status === "passed") return "passed";
+  // Its command never ran: no device, or stopped before it started.
+  return run.exitCode === null ? "not-run" : "failed";
+}
+
 export function qaDashboard(
   suites: readonly QaSuite[],
   latestRuns: readonly QaRun[],
   freshness: readonly QaFreshness[] = [],
+  queuedPlatforms: ReadonlyArray<{ suiteId: string; platform: DevicePlatform }> = [],
 ) {
-  const latest = new Map(latestRuns.map((run) => [run.suite.id, run]));
   const assessments = new Map(freshness.map((item) => [item.suiteId, item]));
   const counts = { total: suites.length, passed: 0, attention: 0, running: 0, never: 0 };
   const entries = suites.map((suite) => {
-    const run = latest.get(suite.id);
-    const category = qaResultCategory(run);
+    const runs = latestRuns.filter((run) => run.suite.id === suite.id);
+    const platforms = qaSuitePlatforms(suite).map((platform): QaPlatformResult => {
+      const run = runs.find((candidate) => candidate.platform === platform);
+      const queued = queuedPlatforms.some(
+        (item) => item.suiteId === suite.id && item.platform === platform,
+      );
+      return { platform, run, outcome: qaPlatformOutcome(run, queued) };
+    });
+    const ran = platforms.flatMap(({ run }) => (run ? [run] : []));
+    // The run that speaks for the suite: the one running, else the worst.
+    const status = qaCombinedStatus(ran.map((run) => run.status));
+    const run = platforms.length
+      ? ran.find((candidate) => candidate.status === status)
+      : runs.find((candidate) => candidate.platform === undefined);
+    const category = !platforms.length
+      ? qaResultCategory(run)
+      : !ran.length
+        ? "never"
+        : status === "running"
+          ? "running"
+          : platforms.every(({ outcome }) => outcome === "passed")
+            ? "passed"
+            : "attention";
     counts[category] += 1;
     return {
       suite,
       run,
+      platforms,
       category,
       freshness: assessments.get(suite.id),
       component: qaSuiteComponent(suite),
@@ -212,6 +260,40 @@ export function qaDashboard(
     };
   });
   return { entries, counts };
+}
+
+/** What a suite run per platform leads with: "Running 1 of 2", "1 of 2 failed", "2 of 2 passed". */
+export function qaPlatformsHeadline(platforms: ReadonlyArray<QaPlatformResult>) {
+  const total = platforms.length;
+  const running = platforms.findIndex(({ outcome }) => outcome === "running");
+  if (running !== -1) return `Running ${running + 1} of ${total}`;
+  const count = (outcome: QaPlatformOutcome) =>
+    platforms.filter((platform) => platform.outcome === outcome).length;
+  if (count("queued")) return `${count("queued")} of ${total} queued`;
+  if (count("failed")) return `${count("failed")} of ${total} failed`;
+  const notRun = count("not-run") + count("never");
+  if (notRun === total) return count("never") === total ? "Never run" : "Not run";
+  if (notRun) return `${notRun} of ${total} not run`;
+  return `${total} of ${total} passed`;
+}
+
+/** One platform's row: its outcome, and how the run went when it ran its command. */
+export function qaPlatformHeadline({ run, outcome }: QaPlatformResult) {
+  switch (outcome) {
+    case "queued":
+      return "Queued";
+    case "never":
+      return "Never run";
+    case "not-run":
+      return `${run?.status === "cancelled" ? "Cancelled" : "Not run"}${run ? ` · ${qaWhen(run.startedAt)}` : ""}`;
+    default:
+      return run ? `${qaRunHeadline(run)} · ${qaWhen(run.startedAt)}` : "Never run";
+  }
+}
+
+/** A run's name in lists: its suite, and the platform for a suite that runs each separately. */
+export function qaRunTitle(run: QaRun) {
+  return run.platform ? `${run.suite.name} · ${QA_PLATFORM_LABELS[run.platform]}` : run.suite.name;
 }
 export type QaDashboardEntry = ReturnType<typeof qaDashboard>["entries"][number];
 

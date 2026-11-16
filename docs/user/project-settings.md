@@ -254,6 +254,14 @@ device with an `id`, and `T3_QA_DEVICES` as JSON describing them all. Run detail
 record the devices used. Commands run on the environment's machine, so only its own
 devices can be used.
 
+A suite whose devices span Android and iOS can run each platform on its own with
+`"runPer": "platform"`. **Run both** then runs the command once per platform, one after
+another in the order of `devices`, each with only that platform's devices and
+variables. A platform that fails or gets no device doesn't stop the next one. The suite
+card shows one row per platform with its own result and a button to rerun just that
+platform. The other platform's `T3_QA_DEVICE_ID_<ID>` is unset, so the command must
+cope with it being empty.
+
 To let [Simlock](https://incubator.callstack.com/simlock/) hand out the devices, run a
 Simlock worker on the QA machine and set **Settings → Devices → QA → QA devices** to
 **Simlock on this machine**. T3 Code does not install Simlock; the `simlock` command

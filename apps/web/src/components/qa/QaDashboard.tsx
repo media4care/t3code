@@ -7,12 +7,15 @@ import {
   CircleAlertIcon,
   CircleDashedIcon,
   LayersIcon,
+  ClockIcon,
   PlayIcon,
+  RotateCwIcon,
   SquareIcon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
 import type {
+  DevicePlatform,
   DevicePoolEntry,
   EnvironmentId,
   ProjectId,
@@ -22,12 +25,18 @@ import type {
 } from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
+  QA_PLATFORM_LABELS,
+  qaPlatformHeadline,
+  qaOutputTail,
+  qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
   qaStatusLabel,
   qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
+  type QaPlatformOutcome,
+  type QaPlatformResult,
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
 import type { qaDashboard } from "@t3tools/client-runtime/qa";
@@ -235,7 +244,7 @@ export function QaSuiteGroup({
   devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (suiteId: string) => void;
+  onRun: (suiteId: string, platform?: DevicePlatform) => void;
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
@@ -301,11 +310,12 @@ function SuiteCard({
   devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (suiteId: string) => void;
+  onRun: (suiteId: string, platform?: DevicePlatform) => void;
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
-  const { suite, run, component, kind, freshness } = entry;
+  const { suite, run, platforms, component, kind, freshness } = entry;
+  const separate = platforms.length > 0;
   const assignments =
     suite.devices?.length && !devices.simlock
       ? devices.pool &&
@@ -323,13 +333,16 @@ function SuiteCard({
         <StatusIcon entry={entry} />
         <div className="min-w-0 flex-1">
           <h4 className="font-semibold leading-snug">{suite.name}</h4>
-          <p className={`text-sm ${resultTone(entry).text}`}>{qaRunHeadline(run)}</p>
+          <p className={`text-sm ${resultTone(entry).text}`}>
+            {separate ? qaPlatformsHeadline(platforms) : qaRunHeadline(run)}
+          </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {[
               QA_KIND_LABELS[kind],
               showComponent ? component : null,
-              run ? qaWhen(run.startedAt) : null,
-              run?.devices?.length
+              separate ? "Each platform runs on its own" : null,
+              run && !separate ? qaWhen(run.startedAt) : null,
+              run?.devices?.length && !separate
                 ? `On ${run.devices.map((device) => device.name).join(", ")}`
                 : null,
               run?.repositoryFile ? qaRunSource(run) : null,
@@ -359,12 +372,22 @@ function SuiteCard({
             disabled={!canRun || blocked}
             onClick={() => onRun(suite.id)}
           >
-            <PlayIcon /> Run
+            <PlayIcon /> {!separate ? "Run" : platforms.length === 2 ? "Run both" : "Run all"}
           </Button>
         )}
       </div>
+      {separate ? (
+        <PlatformRows
+          platforms={platforms}
+          canRun={canRun && !blocked}
+          onRun={(platform) => onRun(suite.id, platform)}
+          onView={onView}
+        />
+      ) : null}
       {suite.devices?.length && devices.simlock ? (
-        <QaSimlockDevices requirements={suite.devices} />
+        separate ? null : (
+          <QaSimlockDevices requirements={suite.devices} />
+        )
       ) : assignments !== undefined ? (
         <QaSuiteDevices
           assignments={assignments}
@@ -372,7 +395,7 @@ function SuiteCard({
           onChoose={(requirement, deviceKey) => devices.onChoose(suite.id, requirement, deviceKey)}
         />
       ) : null}
-      {run?.outputTail ? (
+      {run?.outputTail && !separate ? (
         <div className="mt-3 rounded-lg border border-error/20 bg-error/5 p-3">
           <p className="text-xs font-medium text-destructive-foreground">
             Failure output{run.exitCode !== null ? ` · Exit ${run.exitCode}` : ""}
@@ -414,7 +437,7 @@ function SuiteCard({
               ) : null}
             </details>
           ) : null}
-          {run?.status !== "passed" ? (
+          {entry.category !== "passed" ? (
             <p className="mt-2 text-muted-foreground">
               {freshness.lastPassedAt
                 ? `Last passed ${qaWhen(freshness.lastPassedAt)}`
@@ -428,7 +451,9 @@ function SuiteCard({
           <QaRunActivity environmentId={environmentId} projectId={projectId} run={run} />
         </div>
       ) : null}
-      {run?.note ? <p className="mt-3 text-xs text-muted-foreground">{run.note}</p> : null}
+      {run?.note && !separate ? (
+        <p className="mt-3 text-xs text-muted-foreground">{run.note}</p>
+      ) : null}
       <details className="mt-3 text-xs text-muted-foreground">
         <summary className="w-fit cursor-pointer">Command</summary>
         <p className="mt-2 break-all rounded-lg bg-muted/40 p-3 font-mono">
@@ -436,7 +461,7 @@ function SuiteCard({
           {suite.command}
         </p>
       </details>
-      {run ? (
+      {run && !separate ? (
         <div className="mt-auto flex justify-end pt-3">
           <Button variant="ghost" size="sm" onClick={() => onView(run.id)}>
             {run.summary && !run.repositoryFile ? `View tests (${run.summary.tests})` : "View run"}
@@ -444,5 +469,95 @@ function SuiteCard({
         </div>
       ) : null}
     </section>
+  );
+}
+
+const PLATFORM_TONES: Record<QaPlatformOutcome, (typeof RESULT_TONES)[keyof typeof RESULT_TONES]> =
+  {
+    passed: RESULT_TONES.passed,
+    failed: RESULT_TONES.failed,
+    "not-run": RESULT_TONES.attention,
+    running: RESULT_TONES.running,
+    queued: { ...RESULT_TONES.never, icon: ClockIcon },
+    never: RESULT_TONES.never,
+  };
+
+/** One row per platform of a suite that runs each platform on its own. */
+function PlatformRows({
+  platforms,
+  canRun,
+  onRun,
+  onView,
+}: {
+  platforms: ReadonlyArray<QaPlatformResult>;
+  canRun: boolean;
+  onRun: (platform: DevicePlatform) => void;
+  onView: (runId: string) => void;
+}) {
+  return (
+    <ul
+      aria-label="Platforms"
+      className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border"
+    >
+      {platforms.map((result) => {
+        const { platform, run, outcome } = result;
+        const label = QA_PLATFORM_LABELS[platform];
+        const { icon: Icon, text, circle } = PLATFORM_TONES[outcome];
+        const busy = outcome === "running" || outcome === "queued";
+        return (
+          <li
+            key={platform}
+            aria-label={label}
+            className={`p-3 ${outcome === "failed" ? "bg-error/5" : ""}`}
+          >
+            <div className="flex items-start gap-3">
+              <span
+                aria-hidden
+                className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md ${circle} ${text}`}
+              >
+                {Icon ? <Icon className="size-3.5" /> : <Spinner size="sm" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm">
+                  <span className="font-medium">{label}</span>
+                  {run?.devices?.length ? (
+                    <span className="text-xs text-muted-foreground">
+                      {" "}
+                      · {run.devices.map((device) => device.name).join(", ")}
+                    </span>
+                  ) : null}
+                </p>
+                <p className={`text-xs ${text}`}>{qaPlatformHeadline(result)}</p>
+                {run?.note && outcome !== "passed" && !busy ? (
+                  <p className="mt-1 text-xs text-muted-foreground">{run.note}</p>
+                ) : null}
+              </div>
+              {run ? (
+                <Button variant="ghost" size="compact" onClick={() => onView(run.id)}>
+                  {run.summary && !run.repositoryFile ? `Tests (${run.summary.tests})` : "Output"}
+                </Button>
+              ) : null}
+              {busy ? null : (
+                <Button
+                  variant="outline"
+                  size="icon-xs"
+                  aria-label={`Run ${label}${run ? " again" : ""}`}
+                  title={`Run ${label} only`}
+                  disabled={!canRun}
+                  onClick={() => onRun(platform)}
+                >
+                  <RotateCwIcon />
+                </Button>
+              )}
+            </div>
+            {outcome === "failed" && run?.outputTail ? (
+              <pre className="mt-2 whitespace-pre-wrap break-words rounded-md border border-error/20 bg-background/60 p-2 font-mono text-xs">
+                {qaOutputTail(run.outputTail, 4)}
+              </pre>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }

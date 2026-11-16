@@ -99,8 +99,16 @@ export const QaSuite = Schema.Struct({
       ),
     ),
   ),
+  /** `platform` runs the command once per platform of its devices, each with only that platform's. */
+  runPer: Schema.optionalKey(Schema.Literal("platform")),
 });
 export type QaSuite = typeof QaSuite.Type;
+
+/** The platforms a suite runs on separately, in the order of its devices; none when it runs once. */
+export function qaSuitePlatforms(suite: QaSuite): ReadonlyArray<DevicePlatform> {
+  if (suite.runPer !== "platform") return [];
+  return [...new Set((suite.devices ?? []).map((device) => device.platform))];
+}
 
 export const QaConfiguration = Schema.Struct({
   sharedResults: Schema.optionalKey(Schema.Boolean),
@@ -119,6 +127,19 @@ export const QaRunStatus = Schema.Literals([
   "incomplete",
 ]);
 export type QaRunStatus = typeof QaRunStatus.Type;
+
+const STATUS_ORDER: ReadonlyArray<QaRunStatus> = [
+  "running",
+  "failed",
+  "incomplete",
+  "interrupted",
+  "cancelled",
+  "passed",
+];
+/** The status that speaks for several runs: one still running, else the worst result. */
+export function qaCombinedStatus(statuses: ReadonlyArray<QaRunStatus>): QaRunStatus | undefined {
+  return STATUS_ORDER.find((status) => statuses.includes(status));
+}
 
 export const QaReportSummary = Schema.Struct({
   tests: NonNegativeInt,
@@ -176,6 +197,8 @@ export const QaRun = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   /** The branch or tag QA checked out for this run; absent for a run in a project's own checkout. */
   ref: Schema.optionalKey(Schema.String),
+  /** The platform this run tested, for a suite that runs each platform separately. */
+  platform: Schema.optionalKey(DevicePlatform),
   dirty: Schema.NullOr(Schema.Boolean),
   summary: Schema.NullOr(QaReportSummary),
   note: Schema.NullOr(Schema.String),
@@ -213,10 +236,12 @@ export const QaProjectInput = Schema.Struct({
   ref: Schema.optionalKey(QaRef),
 });
 export type QaProjectInput = typeof QaProjectInput.Type;
+/** Without `platform`, a suite that runs each platform separately runs all of them in turn. */
 export const QaStartInput = Schema.Struct({
   projectId: ProjectId,
   suiteId: ShortText,
   ref: Schema.optionalKey(QaRef),
+  platform: Schema.optionalKey(DevicePlatform),
 });
 export type QaStartInput = typeof QaStartInput.Type;
 /** `ref` is the snapshot a client shows the run in, so its details refresh with that snapshot. */
@@ -379,6 +404,10 @@ export const QaSnapshot = Schema.Struct({
   freshness: Schema.optionalKey(Schema.Array(QaFreshness)),
   checkedAt: Schema.optionalKey(IsoDateTime),
   queuedSuiteIds: Schema.optionalKey(Schema.Array(ShortText)),
+  /** The platforms still queued for suites that run each platform separately. */
+  queuedPlatforms: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ suiteId: ShortText, platform: DevicePlatform })),
+  ),
   batchError: Schema.optionalKey(Schema.NullOr(Schema.String)),
   batchRunning: Schema.optionalKey(Schema.Boolean),
   schedule: Schema.optionalKey(Schema.NullOr(QaSchedule)),
