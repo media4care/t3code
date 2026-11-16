@@ -7,6 +7,7 @@ import {
   QA_PLATFORM_LABELS,
   groupQaSuites,
   qaPlatformHeadline,
+  qaOutputTail,
   qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
@@ -518,12 +519,10 @@ function PlatformRows({
               )}
             </View>
             {outcome === "failed" && run?.outputTail ? (
-              <View className="max-h-32 rounded-lg bg-danger p-2">
-                <ScrollView nestedScrollEnabled>
-                  <Text selectable className="font-mono text-xs">
-                    {run.outputTail}
-                  </Text>
-                </ScrollView>
+              <View className="rounded-lg bg-danger p-2">
+                <Text selectable className="font-mono text-xs">
+                  {qaOutputTail(run.outputTail, 4)}
+                </Text>
               </View>
             ) : null}
           </View>

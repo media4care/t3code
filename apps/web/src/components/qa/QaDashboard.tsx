@@ -27,6 +27,7 @@ import {
   QA_KIND_LABELS,
   QA_PLATFORM_LABELS,
   qaPlatformHeadline,
+  qaOutputTail,
   qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
@@ -550,8 +551,8 @@ function PlatformRows({
               )}
             </div>
             {outcome === "failed" && run?.outputTail ? (
-              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-error/20 bg-background/60 p-2 font-mono text-xs">
-                {run.outputTail}
+              <pre className="mt-2 whitespace-pre-wrap break-words rounded-md border border-error/20 bg-background/60 p-2 font-mono text-xs">
+                {qaOutputTail(run.outputTail, 4)}
               </pre>
             ) : null}
           </li>
