@@ -7,6 +7,7 @@ import type {
 import {
   checkoutBlockingPaths,
   describeCheckoutDiscard,
+  gitExplorerRemoteCheckout,
 } from "@t3tools/client-runtime/git-explorer";
 import { useState } from "react";
 import { Button } from "../ui/button";
@@ -35,9 +36,14 @@ export function GitExplorerBranchAction(props: {
   const [overview] = useState(props.overview);
   const { execute, pending, allowed, failure } = useGitExplorerAction({ ...props, overview });
   const switching = props.action === "switch";
+  // Only reached without a tracking branch: those switch to the local branch instead.
+  const newBranch =
+    props.reference.kind === "remote"
+      ? gitExplorerRemoteCheckout(props.reference, overview.refs, overview.headBranch).localName
+      : null;
   const blockingPaths = switching ? checkoutBlockingPaths(failure) : null;
   const discard = blockingPaths
-    ? describeCheckoutDiscard(props.reference.shortName, blockingPaths)
+    ? describeCheckoutDiscard(newBranch ?? props.reference.shortName, blockingPaths)
     : null;
   return (
     <Dialog
@@ -63,14 +69,21 @@ export function GitExplorerBranchAction(props: {
         >
           <DialogHeader>
             <DialogTitle>
-              {discard?.title ?? (switching ? "Switch branch" : "Rename branch")}
+              {discard?.title ??
+                (newBranch
+                  ? "Check out remote branch"
+                  : switching
+                    ? "Switch branch"
+                    : "Rename branch")}
             </DialogTitle>
             <DialogDescription>
               {discard
                 ? discard.description
-                : switching
-                  ? `Switch this worktree to ${props.reference.shortName}. Local changes are kept; Git will refuse if they would be overwritten.`
-                  : `Rename the local branch ${props.reference.shortName}. Its remote branch is unchanged.`}
+                : newBranch
+                  ? `Create local branch ${newBranch} tracking ${props.reference.shortName} and switch this worktree to it. Local changes are kept; Git will refuse if they would be overwritten.`
+                  : switching
+                    ? `Switch this worktree to ${props.reference.shortName}. Local changes are kept; Git will refuse if they would be overwritten.`
+                    : `Rename the local branch ${props.reference.shortName}. Its remote branch is unchanged.`}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 px-6 py-4 text-xs">
@@ -109,9 +122,11 @@ export function GitExplorerBranchAction(props: {
                 ? "Working…"
                 : blockingPaths
                   ? "Discard and switch"
-                  : switching
-                    ? "Switch branch"
-                    : "Rename branch"}
+                  : newBranch
+                    ? "Check out"
+                    : switching
+                      ? "Switch branch"
+                      : "Rename branch"}
             </Button>
           </DialogFooter>
         </form>

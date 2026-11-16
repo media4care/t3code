@@ -5,6 +5,7 @@ import {
   gitExplorerBranchDeletionBlock,
   gitExplorerReleaseChannels,
   gitExplorerReleaseSource,
+  gitExplorerRemoteCheckout,
   gitExplorerUpstreamMergeSummary,
 } from "@t3tools/client-runtime/git-explorer";
 import type { ReactNode } from "react";
@@ -137,7 +138,9 @@ export function GitExplorerBranchRow(props: {
           ? "Select this branch for deletion."
           : ref.kind === "local"
             ? "Long press for branch details and actions."
-            : undefined
+            : ref.kind === "remote"
+              ? "Long press to check out this branch."
+              : undefined
       }
       accessibilityState={
         props.selection
@@ -301,6 +304,29 @@ export function GitExplorerBranchRow(props: {
   );
   const container = (content: ReactNode) =>
     sidebar ? <View style={THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE}>{content}</View> : content;
+  if (ref.kind === "remote" && !props.selection) {
+    const checkout = gitExplorerRemoteCheckout(ref, props.overview.refs, props.overview.headBranch);
+    const unavailable = checkout.unavailable ?? props.actions.switchUnavailable;
+    return container(
+      <Menu
+        title={ref.shortName}
+        shouldOpenOnLongPress
+        actions={[
+          {
+            id: "checkout",
+            title: checkout.label,
+            ...(unavailable ? { subtitle: unavailable } : {}),
+            attributes: { disabled: unavailable !== null },
+          },
+        ]}
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "checkout") props.actions.confirmSwitch(ref, props.overview);
+        }}
+      >
+        {row}
+      </Menu>,
+    );
+  }
   if (ref.kind !== "local" || props.selection) return container(row);
   return container(
     <GestureDetector gesture={hoverGesture}>

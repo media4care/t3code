@@ -8,6 +8,7 @@ import {
   gitExplorerBranchRows,
   gitExplorerFolderExpanded,
   gitExplorerReleaseSource,
+  gitExplorerRemoteCheckout,
   type GitExplorerBranchTreeRow,
 } from "@t3tools/client-runtime/git-explorer";
 import type {
@@ -131,6 +132,12 @@ interface BranchActions {
   // Every ref, since releasing master needs a release branch to merge into.
   refs: readonly GitExplorerRef[];
   onDelete: (reference: GitExplorerRef, status: GitExplorerBranchStatus) => void;
+}
+
+interface RemoteCheckout {
+  label: string;
+  unavailable: string | null;
+  onCheckout: () => void;
 }
 
 interface BranchSelection {
@@ -265,6 +272,7 @@ function ReferenceRow({
   actions,
   selection,
   tagActions,
+  checkout,
   onShowHistory,
 }: {
   reference: GitExplorerRef;
@@ -279,6 +287,7 @@ function ReferenceRow({
   actions?: BranchActions;
   selection?: BranchSelection;
   tagActions?: TagActions;
+  checkout?: RemoteCheckout;
   onShowHistory?: (reference: GitExplorerRef) => void;
 }) {
   const palette = GIT_EXPLORER_COLORS[color % GIT_EXPLORER_COLORS.length]!;
@@ -313,6 +322,7 @@ function ReferenceRow({
       | "copy-name"
       | "copy-hash"
       | "switch"
+      | "checkout"
       | "rename"
       | "merge"
       | "push-tag"
@@ -343,6 +353,16 @@ function ReferenceRow({
                 id: "delete-tag" as const,
                 label: "Delete local tag…",
                 disabled: tagActions.unavailable !== null,
+              },
+            ]
+          : []),
+        ...(checkout
+          ? [
+              {
+                id: "checkout" as const,
+                label: checkout.label,
+                disabled: checkout.unavailable !== null,
+                separatorBefore: true,
               },
             ]
           : []),
@@ -379,6 +399,10 @@ function ReferenceRow({
       async (action) => {
         if (action === "show-history") {
           onShowHistory?.(reference);
+          return;
+        }
+        if (action === "checkout") {
+          if (checkout?.unavailable === null) checkout.onCheckout();
           return;
         }
         const channel = gitExplorerReleaseMenuChannel(action);
@@ -441,6 +465,7 @@ function ReferenceRow({
           if (selection) return;
           if (actions && !current && !actions.deleteUnavailable && !actions.pendingBranch)
             actions.onBranchAction("switch", reference);
+          else if (checkout?.unavailable === null) checkout.onCheckout();
         }}
         aria-current={!selection && selected ? "true" : undefined}
         aria-pressed={
@@ -875,6 +900,16 @@ export function GitExplorerBranches({
     filter !== "" || gitExplorerFolderExpanded(path, overview.headBranch, toggledLocal.has(path));
   const isRemoteExpanded = (path: string) => filter !== "" || expandedRemote.has(path);
   const emphasizedRefs = gitExplorerEmphasizedRefs(overview.refs);
+  const remoteCheckout = (reference: GitExplorerRef): RemoteCheckout => {
+    const plan = gitExplorerRemoteCheckout(reference, overview.refs, overview.headBranch);
+    return {
+      label: plan.label,
+      unavailable:
+        actions.deleteUnavailable ??
+        (actions.pendingBranch ? "Another Git action is in progress." : plan.unavailable),
+      onCheckout: () => actions.onBranchAction("switch", plan.tracking ?? reference),
+    };
+  };
   const localRefs = overview.refs.filter(
     (reference) => reference.kind === "local" && matches(reference),
   );
@@ -1050,6 +1085,7 @@ export function GitExplorerBranches({
                         current={false}
                         selected={selectedRevision === row.reference.hash}
                         onSelect={onSelect}
+                        checkout={remoteCheckout(row.reference)}
                         onShowHistory={onShowHistory}
                       />
                     )}

@@ -730,6 +730,22 @@ it.layer(layer)("GitExplorer", (it) => {
       assert.equal(yield* git(["branch", "--show-current"]), "feature/new");
       assert.equal(yield* git(["config", "branch.feature/new.merge"]), "refs/heads/main");
       assert.include(yield* git(["diff"]), "keep local edits");
+      yield* git(["config", "remote.origin.url", "."]);
+      yield* git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+      yield* git(["update-ref", "refs/remotes/origin/topic", root]);
+      const remote = {
+        ...target,
+        expectedBranch: "feature/new",
+        branchName: "refs/remotes/origin/topic",
+      };
+      yield* explorer.runAction({ ...remote, action: "switch" });
+      assert.equal(yield* git(["branch", "--show-current"]), "topic");
+      assert.equal(yield* git(["config", "branch.topic.merge"]), "refs/heads/topic");
+      yield* git(["branch", "-m", "topic", "renamed-topic"]);
+      yield* git(["switch", "main"]);
+      yield* explorer.runAction({ ...remote, expectedBranch: "main", action: "switch" });
+      assert.equal(yield* git(["branch", "--show-current"]), "renamed-topic");
+      assert.include(yield* git(["diff"]), "keep local edits");
     }),
   );
 
@@ -766,6 +782,19 @@ it.layer(layer)("GitExplorer", (it) => {
       assert.equal(
         (yield* explorer.runAction({ ...target, action: "switch" }).pipe(Effect.flip))._tag,
         "GitExplorerError",
+      );
+      yield* git(["update-ref", "refs/remotes/origin/feature", root]);
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, branchName: "refs/remotes/origin/feature", action: "switch" })
+          .pipe(Effect.flip)).reason,
+        "branch-exists",
+      );
+      assert.equal(
+        (yield* explorer
+          .runAction({ ...target, branchName: "refs/remotes/origin/feature", action: "rename" })
+          .pipe(Effect.flip)).reason,
+        "invalid-branch",
       );
       assert.equal(yield* git(["branch", "--show-current"]), "main");
       assert.equal(yield* git(["rev-parse", "refs/heads/feature"]), root);

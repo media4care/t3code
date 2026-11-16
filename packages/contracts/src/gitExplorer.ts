@@ -149,7 +149,10 @@ export const GitExplorerRunActionInput = Schema.Struct({
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(10000))),
   stashHash: Schema.optional(GitExplorerHash),
   restoreIndex: Schema.optional(Schema.Boolean),
-  branchName: Schema.optional(GitExplorerLocalBranch),
+  // `switch` also takes a remote-tracking branch, checking out the local branch that tracks it.
+  branchName: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^refs\/(heads|remotes)\/.+/), Schema.isMaxLength(1024)),
+  ),
   branchHash: Schema.optional(GitExplorerHash),
   newName: Schema.optional(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
   filePaths: Schema.optional(
@@ -383,6 +386,7 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
     "stash-drop-failed",
     "stash-pop-drop-failed",
     "branch-in-use",
+    "branch-exists",
     "invalid-branch-name",
     "changes-changed",
     "commit-message-required",
@@ -437,6 +441,8 @@ export class GitExplorerError extends Schema.TaggedError<GitExplorerError>()("Gi
         return "The stash was applied, but Git could not delete the saved entry. Refresh and delete it separately; do not apply it again.";
       case "branch-in-use":
         return "This branch is checked out in another worktree.";
+      case "branch-exists":
+        return "A local branch with this name already exists and tracks something else.";
       case "invalid-branch-name":
         return "Enter a valid Git branch name.";
       case "changes-changed":

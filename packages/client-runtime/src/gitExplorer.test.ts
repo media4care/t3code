@@ -7,6 +7,7 @@ import {
   gitExplorerBranchRows,
   gitExplorerFolderExpanded,
   gitExplorerReleaseSource,
+  gitExplorerRemoteCheckout,
   layoutGitGraph,
   gitExplorerEmphasizedRefs,
   gitExplorerUpstreamMergeSummary,
@@ -348,6 +349,41 @@ describe("Git Explorer upstream status", () => {
     expect(
       formatGitExplorerSync({ ...tracked, upstreamMissing: true, ahead: null, behind: null }),
     ).toBe("Upstream missing");
+  });
+});
+
+describe("Git Explorer remote checkout", () => {
+  const ref = (kind: "local" | "remote", shortName: string, upstream: string | null = null) =>
+    ({
+      name: `refs/${kind === "local" ? "heads" : "remotes"}/${shortName}`,
+      shortName,
+      kind,
+      hash: "a".repeat(40),
+      upstream,
+      ahead: null,
+      behind: null,
+      upstreamMissing: false,
+    }) satisfies GitExplorerRef;
+
+  it("switches to the tracking branch, creates a new one, or refuses a name taken by another branch", () => {
+    const topic = ref("remote", "origin/feature/topic");
+    const tracking = ref("local", "my-topic", topic.name);
+    expect(gitExplorerRemoteCheckout(topic, [topic, tracking], "main")).toMatchObject({
+      tracking,
+      label: "Switch to my-topic",
+      unavailable: null,
+    });
+    expect(gitExplorerRemoteCheckout(topic, [topic, tracking], "my-topic").unavailable).toBe(
+      "my-topic is already checked out.",
+    );
+    expect(gitExplorerRemoteCheckout(topic, [topic], "main")).toMatchObject({
+      tracking: null,
+      localName: "feature/topic",
+      unavailable: null,
+    });
+    expect(
+      gitExplorerRemoteCheckout(topic, [topic, ref("local", "feature/topic")], "main").unavailable,
+    ).toBe("A local branch feature/topic already exists and tracks something else.");
   });
 });
 
