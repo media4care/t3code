@@ -29,6 +29,7 @@ import {
   type GitExplorerSubmodule,
   type GitExplorerWorktree,
 } from "@t3tools/contracts";
+import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeUtil from "node:util";
 import * as Context from "effect/Context";
@@ -2043,8 +2044,10 @@ const make = Effect.gen(function* () {
           }
           if (input.action === "switch" || input.action === "rename") {
             const name = input.branchName;
+            const remote = input.action === "switch" && name?.startsWith("refs/remotes/") === true;
             if (
-              !name?.startsWith("refs/heads/") ||
+              !name ||
+              !(remote || name.startsWith("refs/heads/")) ||
               !input.branchHash ||
               (yield* run(cwd, ["check-ref-format", name], { allowNonZero: true })).exitCode !== 0
             )
@@ -2060,9 +2063,34 @@ const make = Effect.gen(function* () {
                 operation: input.action,
                 reason: "branch-changed",
               });
-            const shortName = name.slice("refs/heads/".length);
+            const shortName = name.replace(/^refs\/(heads|remotes)\//, "");
+            // A remote-tracking branch switches to the local branch tracking it, or creates one.
+            let localName = shortName;
+            let tracking: string | undefined;
+            if (remote) {
+              const heads = (yield* run(cwd, [
+                "for-each-ref",
+                "--format=%(refname)%00%(upstream)",
+                "refs/heads",
+              ])).stdout
+                .split("\n")
+                .flatMap((line) => {
+                  const [branch, upstream] = line.split("\0");
+                  return branch ? [[branch.slice("refs/heads/".length), upstream] as const] : [];
+                });
+              tracking = heads.find(([, upstream]) => upstream === name)?.[0];
+              localName = tracking ?? deriveLocalBranchNameFromRemoteRef(shortName);
+              if (
+                !tracking &&
+                heads.some(([branch]) => branch === localName || branch === shortName)
+              )
+                return yield* new GitExplorerError({
+                  operation: input.action,
+                  reason: "branch-exists",
+                });
+            }
             const { worktrees } = yield* resolve(input);
-            if (worktrees.some((tree) => tree.branch === shortName && tree.path !== cwd))
+            if (worktrees.some((tree) => tree.branch === localName && tree.path !== cwd))
               return yield* new GitExplorerError({
                 operation: input.action,
                 reason: "branch-in-use",
@@ -2070,10 +2098,10 @@ const make = Effect.gen(function* () {
             if (input.action === "switch") {
               yield* git.switchRef({
                 cwd,
-                refName: shortName,
+                refName: tracking ?? shortName,
                 ...(input.filePaths ? { discardPaths: input.filePaths } : {}),
               });
-              return { message: `Switched to ${shortName}.` };
+              return { message: `Switched to ${localName}.` };
             }
             if (
               !input.newName ||

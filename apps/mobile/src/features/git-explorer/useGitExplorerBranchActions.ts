@@ -2,6 +2,7 @@ import {
   checkoutBlockingPaths,
   describeCheckoutDiscard,
   describeGitFailure,
+  gitExplorerRemoteCheckout,
   prepareGitExplorerBranchDeletion,
 } from "@t3tools/client-runtime/git-explorer";
 import { useAtomValue } from "@effect/atom-react";
@@ -85,18 +86,19 @@ export function useGitExplorerBranchActions(params: GitExplorerParams, onRefresh
         ? "A branch action is in progress."
         : null;
   const confirmSwitch = (ref: GitExplorerRef, overview: GitExplorerOverviewResult) => {
-    if (
-      switchUnavailable ||
-      pending.current ||
-      ref.kind !== "local" ||
-      ref.shortName === overview.headBranch
-    )
-      return;
+    if (switchUnavailable || pending.current || ref.kind === "tag") return;
+    const remote =
+      ref.kind === "remote"
+        ? gitExplorerRemoteCheckout(ref, overview.refs, overview.headBranch)
+        : null;
+    const branch = remote?.tracking ?? ref;
+    if (remote?.unavailable || branch.shortName === overview.headBranch) return;
+    const newBranch = remote && !remote.tracking ? remote.localName : null;
     Dialog.confirm({
-      title: "Switch branch",
-      message: `Switch ${overview.selectedWorktreePath} to ${ref.shortName}. Local changes are kept; Git will refuse if they would be overwritten.`,
-      confirmText: "Switch branch",
-      onConfirm: () => runSwitchTo(ref, overview),
+      title: newBranch ? "Check out remote branch" : "Switch branch",
+      message: `${newBranch ? `Create local branch ${newBranch} tracking ${ref.shortName} and switch ${overview.selectedWorktreePath} to it.` : `Switch ${overview.selectedWorktreePath} to ${branch.shortName}.`} Local changes are kept; Git will refuse if they would be overwritten.`,
+      confirmText: newBranch ? "Check out" : "Switch branch",
+      onConfirm: () => runSwitchTo(branch, overview),
     });
   };
   const runSwitchTo = (

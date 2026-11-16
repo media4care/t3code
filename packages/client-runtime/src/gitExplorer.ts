@@ -11,6 +11,7 @@ import {
   type GitExplorerSubmodule,
   type ModelSelection,
 } from "@t3tools/contracts";
+import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
 import * as Schema from "effect/Schema";
 
 export interface GitGraphLine {
@@ -287,6 +288,36 @@ export function gitExplorerBranchDeletionBlock(
   if (!status.targetRef || !status.targetHash)
     return "A comparison branch is required before deletion.";
   return null;
+}
+
+/** Checking out a remote-tracking branch switches to the local branch tracking it, or creates one. */
+export function gitExplorerRemoteCheckout(
+  remote: GitExplorerRef,
+  refs: readonly GitExplorerRef[],
+  headBranch: string | null,
+) {
+  const tracking = refs.find((ref) => ref.kind === "local" && ref.upstream === remote.name);
+  if (tracking)
+    return {
+      localName: tracking.shortName,
+      tracking,
+      label: `Switch to ${tracking.shortName}`,
+      unavailable:
+        tracking.shortName === headBranch ? `${tracking.shortName} is already checked out.` : null,
+    };
+  const localName = deriveLocalBranchNameFromRemoteRef(remote.shortName);
+  const taken = refs.some(
+    (ref) =>
+      ref.kind === "local" && (ref.shortName === localName || ref.shortName === remote.shortName),
+  );
+  return {
+    localName,
+    tracking: null,
+    label: `Check out as ${localName}`,
+    unavailable: taken
+      ? `A local branch ${localName} already exists and tracks something else.`
+      : null,
+  };
 }
 
 export function prepareGitExplorerBranchDeletion(
