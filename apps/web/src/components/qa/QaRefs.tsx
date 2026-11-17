@@ -58,9 +58,8 @@ export function QaRefPicker({
       }}
     >
       <SelectTrigger aria-label="Branch or tag">
-        <SelectValue>
-          <GitBranchIcon /> {value}
-        </SelectValue>
+        <GitBranchIcon />
+        <SelectValue>{value}</SelectValue>
       </SelectTrigger>
       <SelectPopup>
         {known.map(({ ref }) => (
