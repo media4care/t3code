@@ -18,27 +18,31 @@ export function CollapsibleSectionHeader({
 }: Omit<ComponentProps<"button">, "className" | "style" | "aria-expanded"> & {
   expanded: boolean;
   tone?: keyof typeof tones;
-  variant?: "default" | "panel";
+  /** "shelf" is a small-caps divider whose count sits beside the label. */
+  variant?: "default" | "panel" | "shelf";
   accessory?: ReactNode;
 }) {
+  const shelf = variant === "shelf";
   return (
     <button
       {...buttonProps}
       type="button"
       aria-expanded={expanded}
       className={cn(
-        "flex h-8 w-full cursor-pointer items-center gap-2 rounded-md text-left text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        "flex h-8 w-full cursor-pointer items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        shelf ? "text-2xs font-semibold tracking-wider uppercase" : "text-xs font-medium",
         variant === "panel" ? "ps-2 pe-2.5" : "px-2",
         tones[tone].label,
       )}
     >
       <span className="min-w-0 truncate">{children}</span>
+      {shelf ? accessory : null}
       <span
         aria-hidden
-        // A header with a trailing count drops its rule so it doesn't read as a leader.
-        className={cn("h-px min-w-2 flex-1", tones[tone].line, accessory && "invisible")}
+        // A trailing count drops the rule so it doesn't read as a leader; a shelf keeps its count by the label.
+        className={cn("h-px min-w-2 flex-1", tones[tone].line, accessory && !shelf && "invisible")}
       />
-      {accessory}
+      {shelf ? null : accessory}
       <ChevronDownIcon
         aria-hidden
         className={cn("size-3 shrink-0 transition-transform", !expanded && "-rotate-90")}

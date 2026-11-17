@@ -40,7 +40,12 @@ export const SidebarPinnedProjects = memo(function SidebarPinnedProjects(props: 
           onClick={props.onToggle}
           expanded={props.expanded}
           data-testid="sidebar-pinned-projects-shelf-toggle"
-          accessory={<span className="font-normal tabular-nums">{props.projects.length}</span>}
+          variant="shelf"
+          accessory={
+            <span className="font-normal tracking-normal tabular-nums opacity-70">
+              {props.projects.length}
+            </span>
+          }
         >
           Pinned projects
         </CollapsibleSectionHeader>
