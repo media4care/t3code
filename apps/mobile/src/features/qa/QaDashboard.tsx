@@ -4,23 +4,23 @@ import {
   QA_FILTER_OPTIONS,
   QA_GROUP_OPTIONS,
   QA_KIND_LABELS,
-  QA_PLATFORM_LABELS,
   groupQaSuites,
-  qaPlatformHeadline,
+  qaLaneHeadline,
+  qaLaneLabel,
+  qaLanesHeadline,
   qaOutputTail,
-  qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
   qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
-  type QaPlatformOutcome,
-  type QaPlatformResult,
+  type QaLaneOutcome,
+  type QaLaneResult,
   type QaGrouping,
   type QaResultFilter,
   type qaDashboard,
 } from "@t3tools/client-runtime/qa";
-import type { DevicePlatform, EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
@@ -62,7 +62,7 @@ interface RunActions {
   projectId: ProjectId;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (id: string, platform?: DevicePlatform) => void;
+  onRun: (id: string, lanes?: ReadonlyArray<string>) => void;
   onCancel: (id: string) => void;
   onView: (id: string) => void;
 }
@@ -289,7 +289,7 @@ function StatusIcon({
 }
 
 function SuiteCard({
-  entry: { suite, run, platforms, component, kind, category, freshness },
+  entry: { suite, run, lanes, component, kind, category, freshness },
   showComponent,
   environmentId,
   projectId,
@@ -304,7 +304,7 @@ function SuiteCard({
 }) {
   const [showCommand, setShowCommand] = useState(false);
   const running = run?.status === "running";
-  const separate = platforms.length > 0;
+  const separate = lanes.length > 0;
   return (
     <View
       className={`gap-3 rounded-2xl border bg-card p-4 ${running ? "border-primary" : "border-border-subtle"}`}
@@ -322,13 +322,17 @@ function SuiteCard({
             <Text
               className={`text-sm ${run?.status === "failed" ? "text-danger-foreground" : RESULTS[category].color}`}
             >
-              {separate ? qaPlatformsHeadline(platforms) : qaRunHeadline(run)}
+              {separate ? qaLanesHeadline(lanes) : qaRunHeadline(run)}
             </Text>
             <Text className="text-xs text-foreground-muted">
               {[
                 QA_KIND_LABELS[kind],
                 showComponent ? component : null,
-                separate ? "Each platform runs on its own" : null,
+                separate
+                  ? suite.variants
+                    ? "Each device and variant runs on its own"
+                    : "Each device runs on its own"
+                  : null,
                 run && !separate ? qaWhen(run.startedAt) : null,
                 run?.repositoryFile ? qaRunSource(run) : null,
               ]
@@ -347,7 +351,7 @@ function SuiteCard({
           />
         ) : (
           <IconButton
-            accessibilityLabel={!separate ? "Run" : platforms.length === 2 ? "Run both" : "Run all"}
+            accessibilityLabel={!separate ? "Run" : lanes.length === 2 ? "Run both" : "Run all"}
             icon="play"
             variant="tonal"
             disabled={!canRun}
@@ -356,10 +360,10 @@ function SuiteCard({
         )}
       </View>
       {separate ? (
-        <PlatformRows
-          platforms={platforms}
+        <LaneRows
+          lanes={lanes}
           canRun={canRun}
-          onRun={(platform) => onRun(suite.id, platform)}
+          onRun={(lane) => onRun(suite.id, [lane])}
           onView={onView}
         />
       ) : null}
@@ -418,8 +422,8 @@ function SuiteCard({
   );
 }
 
-const PLATFORM_ICONS: Record<
-  Exclude<QaPlatformOutcome, "running">,
+const LANE_ICONS: Record<
+  Exclude<QaLaneOutcome, "running">,
   { name: AppSymbolName; tint: string; background: string }
 > = {
   passed: STATUS_ICONS.passed,
@@ -429,7 +433,7 @@ const PLATFORM_ICONS: Record<
   never: STATUS_ICONS.never,
 };
 
-const PLATFORM_TEXT: Record<QaPlatformOutcome, string> = {
+const LANE_TEXT: Record<QaLaneOutcome, string> = {
   passed: RESULTS.passed.color,
   failed: "text-danger-foreground",
   "not-run": RESULTS.attention.color,
@@ -438,34 +442,38 @@ const PLATFORM_TEXT: Record<QaPlatformOutcome, string> = {
   never: RESULTS.never.color,
 };
 
-/** One row per platform of a suite that runs each platform on its own. */
-function PlatformRows({
-  platforms,
+/** One row per lane of a suite run per device; phones list what the web shows as a grid. */
+function LaneRows({
+  lanes,
   canRun,
   onRun,
   onView,
 }: {
-  platforms: ReadonlyArray<QaPlatformResult>;
+  lanes: ReadonlyArray<QaLaneResult>;
   canRun: boolean;
-  onRun: (platform: DevicePlatform) => void;
+  onRun: (lane: string) => void;
   onView: (id: string) => void;
 }) {
   return (
     <View className="overflow-hidden rounded-xl border border-border-subtle">
-      {platforms.map((result, index) => {
-        const { platform, run, outcome } = result;
-        const label = QA_PLATFORM_LABELS[platform];
-        const icon = outcome === "running" ? null : PLATFORM_ICONS[outcome];
+      {lanes.map((result, index) => {
+        const { lane, run, outcome } = result;
+        const label = qaLaneLabel(lane);
+        const icon = outcome === "running" ? null : LANE_ICONS[outcome];
         const busy = outcome === "running" || outcome === "queued";
+        const headline =
+          run && !busy
+            ? `${qaLaneHeadline(result)} · ${qaWhen(run.startedAt)}`
+            : qaLaneHeadline(result);
         return (
           <View
-            key={platform}
+            key={lane.key}
             className={`gap-2 p-3 ${index > 0 ? "border-t border-border-subtle" : ""}`}
           >
             <View className="flex-row items-center gap-3">
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`${label}: ${qaPlatformHeadline(result)}`}
+                accessibilityLabel={`${label}: ${headline}`}
                 accessibilityHint={run ? "Opens the run" : undefined}
                 disabled={!run}
                 onPress={() => run && onView(run.id)}
@@ -494,9 +502,7 @@ function PlatformRows({
                       </Text>
                     ) : null}
                   </Text>
-                  <Text className={`text-xs ${PLATFORM_TEXT[outcome]}`}>
-                    {qaPlatformHeadline(result)}
-                  </Text>
+                  <Text className={`text-xs ${LANE_TEXT[outcome]}`}>{headline}</Text>
                   {run?.note && outcome !== "passed" && !busy ? (
                     <Text className="text-xs text-foreground-muted">{run.note}</Text>
                   ) : null}
@@ -507,7 +513,7 @@ function PlatformRows({
                   accessibilityRole="button"
                   accessibilityLabel={`Run ${label}${run ? " again" : ""}`}
                   disabled={!canRun}
-                  onPress={() => onRun(platform)}
+                  onPress={() => onRun(lane.key)}
                   className={`size-11 items-center justify-center rounded-full bg-subtle ${canRun ? "" : "opacity-40"}`}
                 >
                   <SymbolView

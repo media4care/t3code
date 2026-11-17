@@ -254,13 +254,33 @@ device with an `id`, and `T3_QA_DEVICES` as JSON describing them all. Run detail
 record the devices used. Commands run on the environment's machine, so only its own
 devices can be used.
 
-A suite whose devices span Android and iOS can run each platform on its own with
-`"runPer": "platform"`. **Run both** then runs the command once per platform, one after
-another in the order of `devices`, each with only that platform's devices and
-variables. A platform that fails or gets no device doesn't stop the next one. The suite
-card shows one row per platform with its own result and a button to rerun just that
-platform. The other platform's `T3_QA_DEVICE_ID_<ID>` is unset, so the command must
-cope with it being empty.
+A suite with several devices can run each device on its own with `"runPer": "device"`.
+**Run all** then runs the command once per device, one after another in the order of
+`devices`, each with only that device and its variables. A device that fails or isn't
+available doesn't stop the next one. The other devices' `T3_QA_DEVICE_ID_<ID>` are unset,
+so the command must cope with them being empty.
+
+To also run each device in several ways, such as with and without hardware, add
+`variants`. Each runs on every device, or only on the device `id`s it lists, and the
+command reads its `id` from `T3_QA_VARIANT`:
+
+```json
+{
+  "runPer": "device",
+  "devices": [
+    { "id": "tablet", "platform": "android", "formFactor": "tablet" },
+    { "id": "ios", "platform": "ios", "formFactor": "tablet" }
+  ],
+  "variants": [
+    { "id": "swOnly", "name": "SW only" },
+    { "id": "swAndHw", "name": "SW + HW", "devices": ["tablet"] }
+  ]
+}
+```
+
+The suite card shows a grid with a row per device and a column per variant. Each cell
+keeps its own result and output. Rerun one cell with its button, or select several
+and run them with the suite's **Run** button. On mobile, the cells are listed one per row.
 
 To let [Simlock](https://incubator.callstack.com/simlock/) hand out the devices, run a
 Simlock worker on the QA machine and set **Settings → Devices → QA → QA devices** to

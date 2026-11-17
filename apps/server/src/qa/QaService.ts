@@ -10,10 +10,8 @@ import {
   QA_OUTPUT_TAIL_LIMIT,
   ProjectId,
   qaDeviceRequirementKey,
-  qaSuitePlatforms,
+  qaSuiteLanes,
   qaCombinedStatus,
-  type DevicePlatform,
-  type QaDeviceRequirement,
   type QaSetScheduleInput,
   type QaSetDeviceInput,
   type QaImportInput,
@@ -150,23 +148,41 @@ function deviceEnvironment(suite: QaRun["suite"], devices: ReadonlyArray<QaRunDe
   };
 }
 
-/** A run of one platform uses only that platform's devices. */
-const usedBy =
-  (run: Pick<QaRun, "platform">) =>
-  (requirement: QaDeviceRequirement): boolean =>
-    run.platform === undefined || requirement.platform === run.platform;
+function laneOf(run: Pick<QaRun, "suite" | "lane">) {
+  return run.lane === undefined
+    ? undefined
+    : qaSuiteLanes(run.suite).find((lane) => lane.key === run.lane);
+}
 
-/** What a batch runs, in order: each suite once, or once per platform for one that runs them separately. */
+/** A run of one lane uses only that lane's device; `key` is a device requirement's key. */
+const usedBy = (run: Pick<QaRun, "suite" | "lane">) => {
+  const device = laneOf(run)?.device;
+  return (key: string): boolean => run.lane === undefined || key === device;
+};
+
+/** What a batch runs, in order: each suite once, or once per lane for a suite run per device. */
 interface QueuedRun {
   readonly suiteId: string;
-  readonly platform?: DevicePlatform;
+  readonly lane?: string;
 }
-function queuedRuns(suites: ReadonlyArray<QaSuite>, ids: ReadonlyArray<string>) {
+function queuedRuns(
+  suites: ReadonlyArray<QaSuite>,
+  ids: ReadonlyArray<string>,
+  only?: ReadonlyArray<string>,
+) {
   return ids.flatMap((suiteId): ReadonlyArray<QueuedRun> => {
     const suite = suites.find((candidate) => candidate.id === suiteId);
-    const platforms = suite ? qaSuitePlatforms(suite) : [];
-    return platforms.length ? platforms.map((platform) => ({ suiteId, platform })) : [{ suiteId }];
+    const lanes = (suite ? qaSuiteLanes(suite) : []).filter(
+      (lane) => !only || only.includes(lane.key),
+    );
+    return lanes.length ? lanes.map((lane) => ({ suiteId, lane: lane.key })) : [{ suiteId }];
   });
+}
+
+/** The variant a lane runs, for its command to read. */
+function variantEnvironment(run: Pick<QaRun, "suite" | "lane">): Record<string, string> {
+  const variant = laneOf(run)?.variant;
+  return variant ? { T3_QA_VARIANT: variant.id } : {};
 }
 
 /** The steps a run of `suite` goes through; `checkout` when it runs in QA's own checkout. */
@@ -182,7 +198,7 @@ function stepsOf(suite: QaSuite, checkout: boolean): ReadonlyArray<QaRunStep> {
 
 const FRESHNESS_ORDER = { never: 0, stale: 1, unknown: 2, current: 3 } as const;
 
-/** A suite run per platform is as fresh as its least fresh platform, and passed when all have. */
+/** A suite run per device is as fresh as its least fresh lane, and passed when all have. */
 function combineFreshness(assessments: ReadonlyArray<QaFreshness>): QaFreshness {
   const [first, ...rest] = [...assessments].sort(
     (a, b) =>
@@ -426,12 +442,12 @@ const make = Effect.gen(function* () {
       status: QaRun["status"];
       commit_sha: string | null;
       started_at: string;
-      platform: string | null;
+      lane: string | null;
     }>`SELECT ref, suite_id, json_extract(run_json, '$.suite.name') AS suite_name, id, status,
         json_extract(run_json, '$.commit') AS commit_sha, json_extract(run_json, '$.startedAt') AS started_at,
-        json_extract(run_json, '$.platform') AS platform FROM (
+        json_extract(run_json, '$.lane') AS lane FROM (
       SELECT ref, suite_id, id, status, run_json,
-        ROW_NUMBER() OVER (PARTITION BY ref, suite_id, COALESCE(json_extract(run_json, '$.platform'), '') ORDER BY started_at DESC, rowid DESC) AS ordinal
+        ROW_NUMBER() OVER (PARTITION BY ref, suite_id, COALESCE(json_extract(run_json, '$.lane'), '') ORDER BY started_at DESC, rowid DESC) AS ordinal
       FROM qa_runs WHERE qa_key = ${scope.key} AND ref <> ''
         AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
     ) WHERE ordinal = 1 ORDER BY started_at DESC LIMIT 1000`;
@@ -462,8 +478,8 @@ const make = Effect.gen(function* () {
           (row) => row.suite_id,
         ).values(),
       ].map((suiteRows) => {
-        // A suite run per platform reports its platforms together, the worst one speaking for it.
-        const separate = suiteRows.filter((row) => row.platform !== null);
+        // A suite run per device reports its lanes together, the worst one speaking for it.
+        const separate = suiteRows.filter((row) => row.lane !== null);
         const current = separate.length ? separate : suiteRows.slice(0, 1);
         const status = qaCombinedStatus(current.map((row) => row.status))!;
         const row = current.find((candidate) => candidate.status === status)!;
@@ -513,7 +529,7 @@ const make = Effect.gen(function* () {
       output_tail: string;
       evidence_json: string | null;
     }>`SELECT latest.run_json, CASE WHEN saved.status IN ('failed', 'incomplete') THEN substr(saved.output, ${-QA_OUTPUT_TAIL_LIMIT}) ELSE '' END AS output_tail, evidence_json FROM (
-      SELECT id, run_json, ROW_NUMBER() OVER (PARTITION BY suite_id, COALESCE(json_extract(run_json, '$.platform'), '') ORDER BY started_at DESC, rowid DESC) AS ordinal
+      SELECT id, run_json, ROW_NUMBER() OVER (PARTITION BY suite_id, COALESCE(json_extract(run_json, '$.lane'), '') ORDER BY started_at DESC, rowid DESC) AS ordinal
       FROM qa_runs WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
     ) latest LEFT JOIN qa_run_inputs ON run_id = latest.id
     JOIN qa_runs saved ON saved.id = latest.id
@@ -523,29 +539,31 @@ const make = Effect.gen(function* () {
       WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} ORDER BY started_at DESC, rowid DESC LIMIT 50`;
     const passed = yield* sql<{
       suite_id: string;
-      platform: string;
+      lane: string;
       finished_at: string;
-    }>`SELECT suite_id, COALESCE(json_extract(run_json, '$.platform'), '') AS platform,
+    }>`SELECT suite_id, COALESCE(json_extract(run_json, '$.lane'), '') AS lane,
       MAX(json_extract(run_json, '$.finishedAt')) AS finished_at FROM qa_runs
       WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND status = 'passed'
         AND COALESCE(json_extract(run_json, '$.source.type'), '') <> 'ci'
-      GROUP BY suite_id, COALESCE(json_extract(run_json, '$.platform'), '')`;
+      GROUP BY suite_id, COALESCE(json_extract(run_json, '$.lane'), '')`;
     const ci = yield* sql<{ run_json: string }>`SELECT run_json FROM (
       SELECT run_json, ROW_NUMBER() OVER (PARTITION BY suite_id ORDER BY started_at DESC, rowid DESC) AS ordinal
       FROM qa_runs WHERE qa_key = ${scope.key} AND ref = ${scope.ref ?? ""} AND json_extract(run_json, '$.source.type') = 'ci'
     ) WHERE ordinal = 1 LIMIT 100`;
-    const passedKey = (suiteId: string, platform: string | undefined) =>
-      `${suiteId}\u0000${platform ?? ""}`;
+    const passedKey = (suiteId: string, lane: string | undefined) =>
+      `${suiteId}\u0000${lane ?? ""}`;
     const lastPassed = new Map(
-      passed.map((row) => [passedKey(row.suite_id, row.platform), row.finished_at]),
+      passed.map((row) => [passedKey(row.suite_id, row.lane), row.finished_at]),
     );
     const suites = config._tag === "Success" ? config.success.suites : [];
-    // A suite shows the runs of how it runs now: once, or once per platform.
+    // A suite shows the runs of how it runs now: once, or once per lane.
     const shown = (run: QaRun) => {
       const suite = suites.find((candidate) => candidate.id === run.suite.id);
       if (!suite) return true;
-      const platforms = qaSuitePlatforms(suite);
-      return run.platform === undefined ? platforms.length === 0 : platforms.includes(run.platform);
+      const lanes = qaSuiteLanes(suite);
+      return run.lane === undefined
+        ? lanes.length === 0
+        : lanes.some((lane) => lane.key === run.lane);
     };
     const sharing = config._tag === "Success" && config.success.sharedResults === true;
     const shared = sharing
@@ -561,7 +579,7 @@ const make = Effect.gen(function* () {
       if (row.evidence_json) evidence.set(run.id, yield* decodeEvidence(row.evidence_json));
     }
     for (const { run, fingerprint } of shared.records.values()) {
-      if (qaSuitePlatforms(run.suite).length) continue;
+      if (qaSuiteLanes(run.suite).length) continue;
       const key = passedKey(run.suite.id, undefined);
       if (run.status === "passed" && run.finishedAt && run.finishedAt > (lastPassed.get(key) ?? ""))
         lastPassed.set(key, run.finishedAt);
@@ -595,29 +613,27 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const inputs = current.get(suite.id);
           if (!inputs) return yield* new QaError({ reason: "storage" });
-          const platforms = qaSuitePlatforms(suite);
-          const assessments = yield* Effect.forEach(
-            platforms.length ? platforms : [undefined],
-            (platform) =>
-              Effect.gen(function* () {
-                const run = latestRuns.find(
-                  (candidate) => candidate.suite.id === suite.id && candidate.platform === platform,
-                );
-                const before = run ? evidence.get(run.id) : undefined;
-                return assessFreshness(
-                  suite,
-                  run,
-                  before,
-                  {
-                    ...inputs,
-                    ...(before && "fingerprint" in before
-                      ? { fingerprint: yield* sharedResults.fingerprint(inputs) }
-                      : {}),
-                  },
-                  checkedAt,
-                  lastPassed.get(passedKey(suite.id, platform)) ?? null,
-                );
-              }),
+          const lanes = qaSuiteLanes(suite).map((lane) => lane.key);
+          const assessments = yield* Effect.forEach(lanes.length ? lanes : [undefined], (lane) =>
+            Effect.gen(function* () {
+              const run = latestRuns.find(
+                (candidate) => candidate.suite.id === suite.id && candidate.lane === lane,
+              );
+              const before = run ? evidence.get(run.id) : undefined;
+              return assessFreshness(
+                suite,
+                run,
+                before,
+                {
+                  ...inputs,
+                  ...(before && "fingerprint" in before
+                    ? { fingerprint: yield* sharedResults.fingerprint(inputs) }
+                    : {}),
+                },
+                checkedAt,
+                lastPassed.get(passedKey(suite.id, lane)) ?? null,
+              );
+            }),
           );
           return combineFreshness(assessments);
         }),
@@ -625,9 +641,9 @@ const make = Effect.gen(function* () {
       queuedSuiteIds: batchIn(scope.key, scope.ref)
         ? [...new Set(batches.get(scope.key)?.pending.map((queued) => queued.suiteId))]
         : [],
-      queuedPlatforms: batchIn(scope.key, scope.ref)
-        ? (batches.get(scope.key)?.pending ?? []).flatMap(({ suiteId, platform }) =>
-            platform ? [{ suiteId, platform }] : [],
+      queuedLanes: batchIn(scope.key, scope.ref)
+        ? (batches.get(scope.key)?.pending ?? []).flatMap(({ suiteId, lane }) =>
+            lane ? [{ suiteId, lane }] : [],
           )
         : [],
       batchError: batchErrors.get(scope.key) ?? null,
@@ -864,8 +880,8 @@ const make = Effect.gen(function* () {
     const leaseEnvironment: Record<string, string> = {};
     const used = usedBy(entry.details.run);
     for (const [index, requirement] of (suite.devices ?? []).entries()) {
-      if (!used(requirement)) continue;
       const key = qaDeviceRequirementKey(requirement, index);
+      if (!used(key)) continue;
       const label = qaDeviceRequirementLabel(requirement);
       appendOutput(entry, `[T3 QA] Leasing ${label} from Simlock…\n`);
       const leased = yield* leaseFromSimlock(requirement, {
@@ -897,7 +913,10 @@ const make = Effect.gen(function* () {
   const prepareDevices = Effect.fn("QaService.prepareDevices")(function* (entry: ActiveRun) {
     const suite = entry.details.run.suite;
     const used = usedBy(entry.details.run);
-    if (!suite.devices?.some(used)) return {};
+    if (
+      !suite.devices?.some((requirement, index) => used(qaDeviceRequirementKey(requirement, index)))
+    )
+      return {};
     yield* moveToStep(entry, "devices");
     const stop = (note: string) => {
       appendOutput(entry, `[T3 QA] ${note}\n`);
@@ -921,7 +940,7 @@ const make = Effect.gen(function* () {
         pool.entries,
         deviceSelections.forScope(entry.scope.key),
         projectId,
-      ).filter((assignment) => used(assignment.requirement));
+      ).filter((assignment) => used(assignment.key));
       const blocked = assignments.find((assignment) => !assignment.device && !assignment.busy);
       if (blocked) return stop(`Not run. ${qaDeviceUnavailableReason(blocked)}`);
       const busy = assignments.find((assignment) => !assignment.device)?.busy;
@@ -1007,9 +1026,9 @@ const make = Effect.gen(function* () {
       (candidate) => candidate.id === entry.details.run.suite.id,
     );
     if (!suite) return notRun(`Not run. ${scope.ref} does not configure this suite in t3.json.`);
-    const platform = entry.details.run.platform;
-    if (platform && !qaSuitePlatforms(suite).includes(platform))
-      return notRun(`Not run. ${scope.ref} no longer runs this suite on ${platform} separately.`);
+    const { lane } = entry.details.run;
+    if (lane && !qaSuiteLanes(suite).some((candidate) => candidate.key === lane))
+      return notRun(`Not run. ${scope.ref} no longer runs this suite on ${lane} separately.`);
     const cwd = yield* fs.realPath(path.resolve(root, suite.cwd ?? ".")).pipe(Effect.option);
     if (Option.isNone(cwd) || !isInside(root, cwd.value))
       return notRun(`Not run. The suite's working directory does not exist on ${scope.ref}.`);
@@ -1065,7 +1084,13 @@ const make = Effect.gen(function* () {
             cwd: run.cwd,
             shell: platform === "win32",
             stdin: "ignore",
-            env: { ...devices, T3_QA_REPORT_PATH: reportPath, CI: "1", FORCE_COLOR: "0" },
+            env: {
+              ...devices,
+              ...variantEnvironment(run),
+              T3_QA_REPORT_PATH: reportPath,
+              CI: "1",
+              FORCE_COLOR: "0",
+            },
             extendEnv: true,
             forceKillAfter: "2 seconds",
           },
@@ -1221,7 +1246,7 @@ const make = Effect.gen(function* () {
       readonly scheduled?: boolean;
       readonly synced?: boolean;
       readonly expectedBranch?: string;
-      readonly platform?: DevicePlatform;
+      readonly lane?: string;
     } = {},
   ) {
     yield* ensureEnabled;
@@ -1233,8 +1258,8 @@ const make = Effect.gen(function* () {
     const config = yield* catalog(root);
     const suite = config.suites.find((candidate) => candidate.id === suiteId);
     if (!suite) return yield* new QaError({ reason: "suite-not-found" });
-    const { platform } = options;
-    if (platform && !qaSuitePlatforms(suite).includes(platform))
+    const { lane } = options;
+    if (lane && !qaSuiteLanes(suite).some((candidate) => candidate.key === lane))
       return yield* new QaError({ reason: "suite-not-found" });
     if (runningIn(scope.key)) return yield* new QaError({ reason: "busy" });
     const cwd = yield* fs
@@ -1261,7 +1286,7 @@ const make = Effect.gen(function* () {
       commit,
       branch: branch || null,
       ...(scope.ref === null ? {} : { ref: scope.ref }),
-      ...(platform ? { platform } : {}),
+      ...(lane ? { lane } : {}),
       dirty: changes === null ? null : changes.length > 0,
       summary: null,
       note: null,
@@ -1286,8 +1311,8 @@ const make = Effect.gen(function* () {
       root,
       evidence,
       // Summaries belong in a checkout people commit from, not in QA's own. They hold one result
-      // per suite, so a suite's separate platform runs are not shared.
-      shareResult: config.sharedResults === true && scope.ref === null && !platform,
+      // per suite, so a suite's separate lane runs are not shared.
+      shareResult: config.sharedResults === true && scope.ref === null && !lane,
       outputTotal: 0,
       watchers: new Set(),
     };
@@ -1302,30 +1327,35 @@ const make = Effect.gen(function* () {
 
   const start = Effect.fn("QaService.start")(function* (input: QaStartInput) {
     const scope = yield* scopeOf(input);
-    if (input.platform === undefined) {
-      const suite = (yield* catalog(yield* rootOf(scope))).suites.find(
-        (candidate) => candidate.id === input.suiteId,
-      );
-      // Each platform runs on its own, one after another, so a failure on one leaves the others.
-      if (suite && qaSuitePlatforms(suite).length) {
-        const { batch } = yield* startBatch(input, { suiteId: suite.id });
-        return yield* Deferred.await(batch.first);
-      }
+    const suite = (yield* catalog(yield* rootOf(scope))).suites.find(
+      (candidate) => candidate.id === input.suiteId,
+    );
+    const lanes = suite ? qaSuiteLanes(suite).map((lane) => lane.key) : [];
+    if (input.lanes?.some((lane) => !lanes.includes(lane)))
+      return yield* new QaError({ reason: "suite-not-found" });
+    // Each lane runs on its own, one after another, so a failure on one leaves the others.
+    if (suite && lanes.length && input.lanes?.length !== 1) {
+      const { batch } = yield* startBatch(input, {
+        suiteId: suite.id,
+        ...(input.lanes ? { lanes: input.lanes } : {}),
+      });
+      return yield* Deferred.await(batch.first);
     }
+    const lane = input.lanes?.[0];
     return yield* Effect.gen(function* () {
       if (batches.has(scope.key)) return yield* new QaError({ reason: "busy" });
       batchErrors.delete(scope.key);
-      return (yield* startRun(
-        scope,
-        input.suiteId,
-        input.platform ? { platform: input.platform } : {},
-      )).details.run;
+      return (yield* startRun(scope, input.suiteId, lane ? { lane } : {})).details.run;
     }).pipe(lock.withPermit, Effect.uninterruptible);
   });
 
   const startBatch = Effect.fn("QaService.startBatch")(function* (
     input: QaProjectInput,
-    options: { readonly scheduled?: QaSchedule; readonly suiteId?: string } = {},
+    options: {
+      readonly scheduled?: QaSchedule;
+      readonly suiteId?: string;
+      readonly lanes?: ReadonlyArray<string>;
+    } = {},
   ) {
     const { scheduled } = options;
     const scope = yield* scopeOf(input);
@@ -1358,7 +1388,7 @@ const make = Effect.gen(function* () {
           : target.type === "all"
             ? current.suites.map((suite) => suite.id)
             : current.freshness.filter((item) => item.needsRun).map((item) => item.suiteId);
-      const queue = queuedRuns(current.suites, ids);
+      const queue = queuedRuns(current.suites, ids, options.lanes);
       const batch: NonNullable<ReturnType<typeof batches.get>> = {
         ref: scope.ref,
         pending: [...queue],
@@ -1369,7 +1399,7 @@ const make = Effect.gen(function* () {
       batchErrors.delete(scope.key);
       batches.set(scope.key, batch);
       batch.fiber = yield* Effect.gen(function* () {
-        for (const { suiteId, platform } of queue) {
+        for (const { suiteId, lane } of queue) {
           const entry = yield* lock.withPermit(
             Effect.gen(function* () {
               const entry = yield* startRun(scope, suiteId, {
@@ -1378,7 +1408,7 @@ const make = Effect.gen(function* () {
                 ...(scheduled && scope.ref === null
                   ? { expectedBranch: scheduled.configuration.branch }
                   : {}),
-                ...(platform ? { platform } : {}),
+                ...(lane ? { lane } : {}),
               });
               batch.pending.shift();
               batch.runId = entry.details.run.id;
