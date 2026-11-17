@@ -3313,15 +3313,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
-                        const isCard =
-                          section === "active" || section === "pinned" || section === "working";
+                        // Each shelf gets its own density so sections read apart at a glance.
                         const rowVariant = folderRow
                           ? folderRowsMultiline
                             ? "folder-multiline"
                             : "folder"
-                          : isCard
+                          : section === "active"
                             ? "card"
-                            : "slim";
+                            : section === "pinned" || section === "working"
+                              ? "compact"
+                              : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
