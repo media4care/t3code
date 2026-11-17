@@ -6,6 +6,7 @@ import {
   ChevronDownIcon,
   CircleAlertIcon,
   CircleDashedIcon,
+  FileTextIcon,
   LayersIcon,
   ClockIcon,
   PlayIcon,
@@ -14,8 +15,8 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
+import { useState } from "react";
 import type {
-  DevicePlatform,
   DevicePoolEntry,
   EnvironmentId,
   ProjectId,
@@ -25,25 +26,28 @@ import type {
 } from "@t3tools/contracts";
 import {
   QA_KIND_LABELS,
-  QA_PLATFORM_LABELS,
-  qaPlatformHeadline,
+  qaLaneGrid,
+  qaLaneHeadline,
+  qaLaneLabel,
+  qaLanesHeadline,
   qaOutputTail,
-  qaPlatformsHeadline,
   qaRunHeadline,
   qaRunSource,
   qaStatusLabel,
   qaWhen,
   qaFreshnessLabel,
   type QaDashboardEntry,
-  type QaPlatformOutcome,
-  type QaPlatformResult,
+  type QaLaneOutcome,
+  type QaLaneResult,
   type QaResultFilter,
 } from "@t3tools/client-runtime/qa";
 import type { qaDashboard } from "@t3tools/client-runtime/qa";
 import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { QaRunActivity } from "./QaRunProgress";
 import { QaSimlockDevices, QaSuiteDevices } from "./QaSuiteDevices";
 
@@ -244,7 +248,7 @@ export function QaSuiteGroup({
   devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (suiteId: string, platform?: DevicePlatform) => void;
+  onRun: (suiteId: string, lanes?: ReadonlyArray<string>) => void;
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
@@ -310,20 +314,34 @@ function SuiteCard({
   devices: QaSuiteDeviceChoices;
   canRun: boolean;
   canCancel: boolean;
-  onRun: (suiteId: string, platform?: DevicePlatform) => void;
+  onRun: (suiteId: string, lanes?: ReadonlyArray<string>) => void;
   onCancel: (runId: string) => void;
   onView: (runId: string) => void;
 }) {
-  const { suite, run, platforms, component, kind, freshness } = entry;
-  const separate = platforms.length > 0;
+  const { suite, run, lanes, component, kind, freshness } = entry;
+  const separate = lanes.length > 0;
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const assignments =
     suite.devices?.length && !devices.simlock
       ? devices.pool &&
         qaDeviceAssignments(suite, devices.pool, devices.selections, devices.projectId)
       : undefined;
   // A suite waiting for a busy device can still run; it starts when the device is free.
-  const blocked =
-    assignments?.some((assignment) => !assignment.device && !assignment.busy) ?? false;
+  const blockedDevices = new Set(
+    assignments?.flatMap((assignment) =>
+      !assignment.device && !assignment.busy ? [assignment.key] : [],
+    ),
+  );
+  const blocked = separate
+    ? lanes.every(({ lane }) => blockedDevices.has(lane.device))
+    : blockedDevices.size > 0;
+  const chosen = lanes.flatMap(({ lane }) =>
+    selected.has(lane.key) && !blockedDevices.has(lane.device) ? [lane.key] : [],
+  );
+  const runLanes = (keys?: ReadonlyArray<string>) => {
+    setSelected(new Set());
+    onRun(suite.id, keys);
+  };
   return (
     <section
       aria-label={suite.name}
@@ -334,13 +352,17 @@ function SuiteCard({
         <div className="min-w-0 flex-1">
           <h4 className="font-semibold leading-snug">{suite.name}</h4>
           <p className={`text-sm ${resultTone(entry).text}`}>
-            {separate ? qaPlatformsHeadline(platforms) : qaRunHeadline(run)}
+            {separate ? qaLanesHeadline(lanes) : qaRunHeadline(run)}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {[
               QA_KIND_LABELS[kind],
               showComponent ? component : null,
-              separate ? "Each platform runs on its own" : null,
+              separate
+                ? suite.variants
+                  ? "Each device and variant runs on its own"
+                  : "Each device runs on its own"
+                : null,
               run && !separate ? qaWhen(run.startedAt) : null,
               run?.devices?.length && !separate
                 ? `On ${run.devices.map((device) => device.name).join(", ")}`
@@ -370,17 +392,32 @@ function SuiteCard({
             variant="outline"
             size="sm"
             disabled={!canRun || blocked}
-            onClick={() => onRun(suite.id)}
+            onClick={() => runLanes(chosen.length ? chosen : undefined)}
           >
-            <PlayIcon /> {!separate ? "Run" : platforms.length === 2 ? "Run both" : "Run all"}
+            <PlayIcon />{" "}
+            {!separate
+              ? "Run"
+              : chosen.length
+                ? `Run ${chosen.length} selected`
+                : lanes.length === 2
+                  ? "Run both"
+                  : "Run all"}
           </Button>
         )}
       </div>
       {separate ? (
-        <PlatformRows
-          platforms={platforms}
-          canRun={canRun && !blocked}
-          onRun={(platform) => onRun(suite.id, platform)}
+        <LaneMatrix
+          lanes={lanes}
+          selected={selected}
+          blockedDevices={blockedDevices}
+          canRun={canRun}
+          onSelect={(key, on) => {
+            const next = new Set(selected);
+            if (on) next.add(key);
+            else next.delete(key);
+            setSelected(next);
+          }}
+          onRun={(key) => runLanes([key])}
           onView={onView}
         />
       ) : null}
@@ -472,92 +509,189 @@ function SuiteCard({
   );
 }
 
-const PLATFORM_TONES: Record<QaPlatformOutcome, (typeof RESULT_TONES)[keyof typeof RESULT_TONES]> =
-  {
-    passed: RESULT_TONES.passed,
-    failed: RESULT_TONES.failed,
-    "not-run": RESULT_TONES.attention,
-    running: RESULT_TONES.running,
-    queued: { ...RESULT_TONES.never, icon: ClockIcon },
-    never: RESULT_TONES.never,
-  };
+const LANE_TONES: Record<QaLaneOutcome, (typeof RESULT_TONES)[keyof typeof RESULT_TONES]> = {
+  passed: RESULT_TONES.passed,
+  failed: RESULT_TONES.failed,
+  "not-run": RESULT_TONES.attention,
+  running: RESULT_TONES.running,
+  queued: { ...RESULT_TONES.never, icon: ClockIcon },
+  never: RESULT_TONES.never,
+};
 
-/** One row per platform of a suite that runs each platform on its own. */
-function PlatformRows({
-  platforms,
+/** A suite's lanes: a row per device, a column per variant; each cell has its own result. */
+function LaneMatrix({
+  lanes,
+  selected,
+  blockedDevices,
   canRun,
+  onSelect,
   onRun,
   onView,
 }: {
-  platforms: ReadonlyArray<QaPlatformResult>;
+  lanes: ReadonlyArray<QaLaneResult>;
+  selected: ReadonlySet<string>;
+  blockedDevices: ReadonlySet<string>;
   canRun: boolean;
-  onRun: (platform: DevicePlatform) => void;
+  onSelect: (key: string, selected: boolean) => void;
+  onRun: (key: string) => void;
   onView: (runId: string) => void;
 }) {
+  const { columns, rows } = qaLaneGrid(lanes);
+  const problems = lanes.filter(
+    ({ outcome, run }) => (outcome === "failed" || outcome === "not-run") && run,
+  );
   return (
-    <ul
-      aria-label="Platforms"
-      className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border"
-    >
-      {platforms.map((result) => {
-        const { platform, run, outcome } = result;
-        const label = QA_PLATFORM_LABELS[platform];
-        const { icon: Icon, text, circle } = PLATFORM_TONES[outcome];
-        const busy = outcome === "running" || outcome === "queued";
-        return (
-          <li
-            key={platform}
-            aria-label={label}
-            className={`p-3 ${outcome === "failed" ? "bg-error/5" : ""}`}
-          >
-            <div className="flex items-start gap-3">
+    <>
+      <div
+        role="table"
+        aria-label="Lanes"
+        className="mt-3 grid items-center gap-x-2 gap-y-1.5 rounded-lg border border-border p-2"
+        style={{
+          gridTemplateColumns: `minmax(0, max-content) repeat(${columns.length || 1}, minmax(0, 1fr))`,
+        }}
+      >
+        {columns.length ? (
+          <div role="row" className="contents">
+            <span role="columnheader" />
+            {columns.map((variant) => (
               <span
-                aria-hidden
-                className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md ${circle} ${text}`}
+                key={variant.id}
+                role="columnheader"
+                className="truncate px-1 text-xs text-muted-foreground"
               >
-                {Icon ? <Icon className="size-3.5" /> : <Spinner size="sm" />}
+                {variant.name}
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm">
-                  <span className="font-medium">{label}</span>
-                  {run?.devices?.length ? (
-                    <span className="text-xs text-muted-foreground">
-                      {" "}
-                      · {run.devices.map((device) => device.name).join(", ")}
-                    </span>
-                  ) : null}
-                </p>
-                <p className={`text-xs ${text}`}>{qaPlatformHeadline(result)}</p>
-                {run?.note && outcome !== "passed" && !busy ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{run.note}</p>
+            ))}
+          </div>
+        ) : null}
+        {rows.map((row) => {
+          const device = row.cells.find((cell) => cell?.run?.devices?.length)?.run?.devices?.[0];
+          return (
+            <div key={row.device} role="row" className="contents">
+              <span role="rowheader" className="min-w-0 pr-1">
+                <span className="block truncate text-sm font-medium">{row.label}</span>
+                {device ? (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {device.name}
+                  </span>
                 ) : null}
-              </div>
-              {run ? (
-                <Button variant="ghost" size="compact" onClick={() => onView(run.id)}>
-                  {run.summary && !run.repositoryFile ? `Tests (${run.summary.tests})` : "Output"}
-                </Button>
-              ) : null}
-              {busy ? null : (
-                <Button
-                  variant="outline"
-                  size="icon-xs"
-                  aria-label={`Run ${label}${run ? " again" : ""}`}
-                  title={`Run ${label} only`}
-                  disabled={!canRun}
-                  onClick={() => onRun(platform)}
-                >
-                  <RotateCwIcon />
-                </Button>
+              </span>
+              {row.cells.map((cell, index) =>
+                cell ? (
+                  <LaneCell
+                    key={cell.lane.key}
+                    result={cell}
+                    selected={selected.has(cell.lane.key)}
+                    canRun={canRun && !blockedDevices.has(cell.lane.device)}
+                    onSelect={(on) => onSelect(cell.lane.key, on)}
+                    onRun={() => onRun(cell.lane.key)}
+                    onView={onView}
+                  />
+                ) : (
+                  <span
+                    key={columns[index]?.id ?? index}
+                    role="cell"
+                    aria-label="Does not run here"
+                    className="h-full min-h-7 rounded-md border border-dashed border-border/60"
+                  />
+                ),
               )}
             </div>
-            {outcome === "failed" && run?.outputTail ? (
-              <pre className="mt-2 whitespace-pre-wrap break-words rounded-md border border-error/20 bg-background/60 p-2 font-mono text-xs">
-                {qaOutputTail(run.outputTail, 4)}
-              </pre>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
+          );
+        })}
+      </div>
+      {problems.map(({ lane, run, outcome }) => (
+        <div
+          key={lane.key}
+          className={`mt-2 rounded-lg p-3 text-xs ${outcome === "failed" ? "border border-error/20 bg-error/5" : "bg-muted/40"}`}
+        >
+          <p className="font-medium">{qaLaneLabel(lane)}</p>
+          {run?.note ? <p className="mt-1 text-muted-foreground">{run.note}</p> : null}
+          {outcome === "failed" && run?.outputTail ? (
+            <pre className="mt-2 whitespace-pre-wrap break-words font-mono">
+              {qaOutputTail(run.outputTail, 4)}
+            </pre>
+          ) : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function LaneCell({
+  result,
+  selected,
+  canRun,
+  onSelect,
+  onRun,
+  onView,
+}: {
+  result: QaLaneResult;
+  selected: boolean;
+  canRun: boolean;
+  onSelect: (selected: boolean) => void;
+  onRun: () => void;
+  onView: (runId: string) => void;
+}) {
+  const { lane, run, outcome } = result;
+  const { icon: Icon, text } = LANE_TONES[outcome];
+  const busy = outcome === "running" || outcome === "queued";
+  const label = qaLaneLabel(lane);
+  const headline = qaLaneHeadline(result);
+  return (
+    <div
+      role="cell"
+      aria-label={`${label}: ${headline}`}
+      className={`flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 ${
+        outcome === "failed"
+          ? "border-error/30 bg-error/5"
+          : outcome === "passed"
+            ? "border-success/25"
+            : outcome === "running"
+              ? "border-info/30"
+              : "border-border"
+      }`}
+    >
+      {busy ? null : (
+        <Checkbox
+          aria-label={`Select ${label}`}
+          checked={selected}
+          disabled={!canRun}
+          onCheckedChange={(checked) => onSelect(checked === true)}
+        />
+      )}
+      <Tooltip>
+        <TooltipTrigger
+          render={<span className={`flex min-w-0 flex-1 items-center gap-1 text-xs ${text}`} />}
+        >
+          {Icon ? <Icon className="size-3.5 shrink-0" /> : <Spinner size="sm" />}
+          <span className="truncate">{headline}</span>
+        </TooltipTrigger>
+        <TooltipPopup>{run ? `${headline} · ${qaWhen(run.startedAt)}` : headline}</TooltipPopup>
+      </Tooltip>
+      {run ? (
+        <Button
+          variant="ghost"
+          size="icon-micro"
+          aria-label={`View ${label} ${run.summary && !run.repositoryFile ? "tests" : "output"}`}
+          title={run.summary && !run.repositoryFile ? `Tests (${run.summary.tests})` : "Output"}
+          onClick={() => onView(run.id)}
+        >
+          <FileTextIcon />
+        </Button>
+      ) : null}
+      {busy ? null : (
+        <Button
+          variant="ghost"
+          size="icon-micro"
+          aria-label={`Run ${label}${run ? " again" : ""}`}
+          title={`Run ${label} only`}
+          disabled={!canRun}
+          onClick={onRun}
+        >
+          <RotateCwIcon />
+        </Button>
+      )}
+    </div>
   );
 }

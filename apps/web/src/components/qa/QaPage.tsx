@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
-import type { DevicePlatform, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
   QA_FILTER_OPTIONS,
@@ -166,14 +166,14 @@ function ProjectQa({
     snapshot?.suites ?? [],
     snapshot?.latestRuns ?? [],
     snapshot?.freshness,
-    snapshot?.queuedPlatforms,
+    snapshot?.queuedLanes,
   );
   const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
   const groups = groupQaSuites(entries, grouping, search, filter);
   const visibleCount = groups.reduce((total, group) => total + group.entries.length, 0);
-  const runSuite = async (suiteId: string, platform?: DevicePlatform) => {
+  const runSuite = async (suiteId: string, lanes?: ReadonlyArray<string>) => {
     setBusy(true);
-    await start({ environmentId, input: { ...scope, suiteId, ...(platform ? { platform } : {}) } });
+    await start({ environmentId, input: { ...scope, suiteId, ...(lanes ? { lanes } : {}) } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -448,8 +448,8 @@ function ProjectQa({
                 }}
                 canRun={connected && canRun && !busy && !running && !snapshot?.batchRunning}
                 canCancel={connected && canRun && !busy}
-                onRun={(suiteId, platform) => {
-                  void runSuite(suiteId, platform);
+                onRun={(suiteId, lanes) => {
+                  void runSuite(suiteId, lanes);
                 }}
                 onCancel={(runId) => {
                   void cancelRun(runId);

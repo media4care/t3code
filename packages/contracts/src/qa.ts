@@ -52,15 +52,15 @@ export type QaDeviceSource = typeof QaDeviceSource.Type;
 export const QaDeviceType = Schema.Literals(["any", "virtual", "physical"]);
 export type QaDeviceType = typeof QaDeviceType.Type;
 
+const Identifier = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(40),
+  Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]*$/),
+);
+
 /** A device a suite runs on. QA picks one from the device pool; people can choose another. */
 export const QaDeviceRequirement = Schema.Struct({
   /** Names this device in `T3_QA_DEVICE_<ID>`; also keeps a chosen device when the list is reordered. */
-  id: Schema.optionalKey(
-    TrimmedNonEmptyString.check(
-      Schema.isMaxLength(40),
-      Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]*$/),
-    ),
-  ),
+  id: Schema.optionalKey(Identifier),
   platform: DevicePlatform,
   formFactor: Schema.optionalKey(DeviceFormFactor),
   type: Schema.optionalKey(QaDeviceType),
@@ -72,6 +72,15 @@ export type QaDeviceRequirement = typeof QaDeviceRequirement.Type;
 /** How a suite's device choices are stored: its `id`, or its position for one without. */
 export const qaDeviceRequirementKey = (requirement: QaDeviceRequirement, index: number) =>
   requirement.id ?? String(index);
+
+/** One way to run a suite per device, passed to its command as `T3_QA_VARIANT`. */
+export const QaVariant = Schema.Struct({
+  id: Identifier,
+  name: ShortText,
+  /** The ids of the devices it runs on; all of the suite's devices when absent. */
+  devices: Schema.optionalKey(Schema.Array(Identifier).check(Schema.isMinLength(1))),
+});
+export type QaVariant = typeof QaVariant.Type;
 
 export const QaSuite = Schema.Struct({
   id: ShortText.check(Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)),
@@ -99,15 +108,55 @@ export const QaSuite = Schema.Struct({
       ),
     ),
   ),
-  /** `platform` runs the command once per platform of its devices, each with only that platform's. */
-  runPer: Schema.optionalKey(Schema.Literal("platform")),
-});
+  /** `device` runs the command once per device, and once per variant on each device. */
+  runPer: Schema.optionalKey(Schema.Literal("device")),
+  variants: Schema.optionalKey(
+    Schema.Array(QaVariant).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(8),
+      Schema.makeFilter(
+        (variants) => new Set(variants.map((variant) => variant.id)).size === variants.length,
+      ),
+    ),
+  ),
+}).check(
+  Schema.makeFilter((suite) =>
+    !suite.variants || suite.runPer === "device" ? true : 'variants need "runPer": "device"',
+  ),
+  Schema.makeFilter((suite) => {
+    const ids = new Set(suite.devices?.flatMap((device) => (device.id ? [device.id] : [])));
+    const unknown = suite.variants
+      ?.flatMap((variant) => variant.devices ?? [])
+      .find((id) => !ids.has(id));
+    return unknown === undefined ? true : `variants name an unknown device "${unknown}"`;
+  }),
+);
 export type QaSuite = typeof QaSuite.Type;
 
-/** The platforms a suite runs on separately, in the order of its devices; none when it runs once. */
-export function qaSuitePlatforms(suite: QaSuite): ReadonlyArray<DevicePlatform> {
-  if (suite.runPer !== "platform") return [];
-  return [...new Set((suite.devices ?? []).map((device) => device.platform))];
+/** One device, and variant, of a suite run per device; a run of it uses only that device. */
+export interface QaLane {
+  /** Stored on its runs; `<device>` or `<device>/<variant>`. */
+  readonly key: string;
+  /** The key of its device requirement. */
+  readonly device: string;
+  readonly requirement: QaDeviceRequirement;
+  readonly variant?: QaVariant;
+}
+
+/** The lanes a suite runs separately, device by device; none when it runs once. */
+export function qaSuiteLanes(suite: QaSuite): ReadonlyArray<QaLane> {
+  if (suite.runPer !== "device") return [];
+  return (suite.devices ?? []).flatMap((requirement, index): ReadonlyArray<QaLane> => {
+    const device = qaDeviceRequirementKey(requirement, index);
+    if (!suite.variants) return [{ key: device, device, requirement }];
+    return suite.variants
+      .filter(
+        (variant) =>
+          !variant.devices ||
+          (requirement.id !== undefined && variant.devices.includes(requirement.id)),
+      )
+      .map((variant) => ({ key: `${device}/${variant.id}`, device, requirement, variant }));
+  });
 }
 
 export const QaConfiguration = Schema.Struct({
@@ -197,8 +246,8 @@ export const QaRun = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   /** The branch or tag QA checked out for this run; absent for a run in a project's own checkout. */
   ref: Schema.optionalKey(Schema.String),
-  /** The platform this run tested, for a suite that runs each platform separately. */
-  platform: Schema.optionalKey(DevicePlatform),
+  /** The lane this run tested, for a suite run per device. */
+  lane: Schema.optionalKey(ShortText),
   dirty: Schema.NullOr(Schema.Boolean),
   summary: Schema.NullOr(QaReportSummary),
   note: Schema.NullOr(Schema.String),
@@ -236,12 +285,14 @@ export const QaProjectInput = Schema.Struct({
   ref: Schema.optionalKey(QaRef),
 });
 export type QaProjectInput = typeof QaProjectInput.Type;
-/** Without `platform`, a suite that runs each platform separately runs all of them in turn. */
+/** Without `lanes`, a suite run per device runs all its lanes in turn. */
 export const QaStartInput = Schema.Struct({
   projectId: ProjectId,
   suiteId: ShortText,
   ref: Schema.optionalKey(QaRef),
-  platform: Schema.optionalKey(DevicePlatform),
+  lanes: Schema.optionalKey(
+    Schema.Array(ShortText).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  ),
 });
 export type QaStartInput = typeof QaStartInput.Type;
 /** `ref` is the snapshot a client shows the run in, so its details refresh with that snapshot. */
@@ -404,9 +455,9 @@ export const QaSnapshot = Schema.Struct({
   freshness: Schema.optionalKey(Schema.Array(QaFreshness)),
   checkedAt: Schema.optionalKey(IsoDateTime),
   queuedSuiteIds: Schema.optionalKey(Schema.Array(ShortText)),
-  /** The platforms still queued for suites that run each platform separately. */
-  queuedPlatforms: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ suiteId: ShortText, platform: DevicePlatform })),
+  /** The lanes still queued for suites run per device. */
+  queuedLanes: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ suiteId: ShortText, lane: ShortText })),
   ),
   batchError: Schema.optionalKey(Schema.NullOr(Schema.String)),
   batchRunning: Schema.optionalKey(Schema.Boolean),

@@ -1,14 +1,22 @@
-import { EnvironmentId, ProjectId, type QaRun, type QaSuite } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type QaRun,
+  type QaRunStatus,
+  type QaSuite,
+} from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 import {
   applyQaRunProgress,
   groupQaSuites,
   qaDashboard,
   qaOutputTail,
-  qaPlatformsHeadline,
+  qaLaneGrid,
+  qaLanesHeadline,
   qaProjects,
   qaRepositories,
   qaRunHeadline,
+  qaRunTitle,
   qaRunSteps,
   qaStepDuration,
   qaWhen,
@@ -71,43 +79,61 @@ it.each(["failed", "incomplete", "cancelled", "interrupted"] as const)(
   },
 );
 
-it("sums up a suite run per platform from each platform's latest run, ignoring older single runs", () => {
+it("sums up a suite run per device from each lane's latest run, ignoring older single runs", () => {
   const phones: QaSuite = {
     id: "phones",
     name: "Phone flows",
     command: "maestro test flows",
-    runPer: "platform",
+    runPer: "device",
     devices: [
-      { platform: "android", formFactor: "phone" },
-      { platform: "ios", formFactor: "phone" },
+      { id: "android", platform: "android", formFactor: "tablet" },
+      { id: "ios", platform: "ios", formFactor: "phone" },
+    ],
+    variants: [
+      { id: "swOnly", name: "SW only" },
+      { id: "swAndHw", name: "SW + HW", devices: ["android"] },
     ],
   };
   const single = { ...run(phones, "failed"), id: "single", exitCode: 1 };
-  const android = { ...run(phones, "passed"), id: "android", platform: "android" as const };
-  const ios = { ...run(phones, "incomplete"), id: "ios", platform: "ios" as const };
-  const finished = qaDashboard([phones], [single, android, ios]).entries[0]!;
-  expect(finished.platforms.map(({ outcome }) => outcome)).toEqual(["passed", "not-run"]);
-  expect(finished.run?.id).toBe("ios");
+  const lane = (key: string, status: QaRunStatus) => ({
+    ...run(phones, status),
+    id: key,
+    lane: key,
+  });
+  const passed = [lane("android/swOnly", "passed"), lane("android/swAndHw", "passed")];
+  const ios = lane("ios/swOnly", "incomplete");
+  const finished = qaDashboard([phones], [single, ...passed, ios]).entries[0]!;
+  expect(finished.lanes.map(({ outcome }) => outcome)).toEqual(["passed", "passed", "not-run"]);
+  expect(finished.run?.id).toBe("ios/swOnly");
   expect(finished.category).toBe("attention");
-  expect(qaPlatformsHeadline(finished.platforms)).toBe("1 of 2 not run");
+  expect(qaLanesHeadline(finished.lanes)).toBe("1 of 3 not run");
+  const grid = qaLaneGrid(finished.lanes);
+  expect(grid.columns.map((variant) => variant.name)).toEqual(["SW only", "SW + HW"]);
+  expect(
+    grid.rows.map((row) => [row.label, ...row.cells.map((cell) => cell?.lane.key ?? null)]),
+  ).toEqual([
+    ["Android tablet", "android/swOnly", "android/swAndHw"],
+    ["iOS phone", "ios/swOnly", null],
+  ]);
+  expect(qaRunTitle(ios)).toBe("Phone flows · iOS phone · SW only");
 
   const failed = { ...ios, status: "failed" as const, exitCode: 1 };
-  expect(qaPlatformsHeadline(qaDashboard([phones], [android, failed]).entries[0]!.platforms)).toBe(
-    "1 of 2 failed",
+  expect(qaLanesHeadline(qaDashboard([phones], [...passed, failed]).entries[0]!.lanes)).toBe(
+    "1 of 3 failed",
   );
-  expect(qaDashboard([phones], [android, { ...ios, status: "passed" }]).entries[0]?.category).toBe(
-    "passed",
-  );
+  expect(
+    qaDashboard([phones], [...passed, { ...ios, status: "passed" }]).entries[0]?.category,
+  ).toBe("passed");
 
   const running = qaDashboard(
     [phones],
-    [{ ...android, status: "running" }],
+    [{ ...passed[0]!, status: "running" }],
     [],
-    [{ suiteId: "phones", platform: "ios" }],
+    [{ suiteId: "phones", lane: "ios/swOnly" }],
   ).entries[0]!;
-  expect(running.platforms.map(({ outcome }) => outcome)).toEqual(["running", "queued"]);
+  expect(running.lanes.map(({ outcome }) => outcome)).toEqual(["running", "never", "queued"]);
   expect(running.category).toBe("running");
-  expect(qaPlatformsHeadline(running.platforms)).toBe("Running 1 of 2");
+  expect(qaLanesHeadline(running.lanes)).toBe("Running 1 of 3");
   expect(qaDashboard([phones], [single]).entries[0]?.category).toBe("never");
 });
 

@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { DevicePlatform, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import {
   QA_CONFIGURATION_EXAMPLE,
   qaDashboard,
@@ -132,13 +132,13 @@ function ProjectQa({
     snapshot?.suites ?? [],
     snapshot?.latestRuns ?? [],
     snapshot?.freshness,
-    snapshot?.queuedPlatforms,
+    snapshot?.queuedLanes,
   );
   const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
   const [showHistory, setShowHistory] = useState(false);
-  const runSuite = async (suiteId: string, platform?: DevicePlatform) => {
+  const runSuite = async (suiteId: string, lanes?: ReadonlyArray<string>) => {
     setBusy(true);
-    await start({ environmentId, input: { ...scope, suiteId, ...(platform ? { platform } : {}) } });
+    await start({ environmentId, input: { ...scope, suiteId, ...(lanes ? { lanes } : {}) } });
     setBusy(false);
   };
   const cancelRun = async (runId: string) => {
@@ -312,8 +312,8 @@ function ProjectQa({
           counts={counts}
           canRun={connected && permission && !busy && !running && !snapshot?.batchRunning}
           canCancel={connected && permission && !busy}
-          onRun={(suiteId, platform) => {
-            void runSuite(suiteId, platform);
+          onRun={(suiteId, lanes) => {
+            void runSuite(suiteId, lanes);
           }}
           onCancel={(runId) => {
             void cancelRun(runId);

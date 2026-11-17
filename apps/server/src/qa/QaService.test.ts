@@ -1539,6 +1539,22 @@ describe("QA runs", () => {
         );
         yield* fs.writeFileString(
           path.join(root, "t3.json"),
+          encodeJson({
+            qa: {
+              suites: [
+                {
+                  ...suite,
+                  runPer: "device",
+                  devices: [{ id: "phone", platform: "android" }],
+                  variants: [{ id: "hw", name: "HW", devices: ["tablet"] }],
+                },
+              ],
+            },
+          }),
+        );
+        assert.isNotNull((yield* service.snapshot({ projectId })).configurationError);
+        yield* fs.writeFileString(
+          path.join(root, "t3.json"),
           encodeJson({ qa: { suites: [{ ...suite, cwd: ".." }] } }),
         );
         assert.equal(
@@ -1792,60 +1808,72 @@ describe("QA devices", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
-  it.live("runs each platform of a suite on its own, so one that cannot run leaves the other", () =>
+  it.live("runs each lane of a suite on its own, so one that cannot run leaves the others", () =>
     Effect.gen(function* () {
       const phones: QaSuite = {
         id: "phones",
         name: "Phone flows",
         kind: "maestro",
         command: "node run.cjs",
-        runPer: "platform",
+        runPer: "device",
         devices: [
           { id: "ios", platform: "ios", formFactor: "tablet" },
           { id: "android", platform: "android", formFactor: "tablet" },
         ],
+        variants: [
+          { id: "swOnly", name: "SW only" },
+          { id: "swAndHw", name: "SW + HW", devices: ["android"] },
+        ],
       };
       const { service } = yield* fixture(
-        "console.log(['T3_QA_DEVICE_ID_ANDROID', 'T3_QA_DEVICE_ID_IOS', 'T3_QA_DEVICE_PLATFORM'].map((name) => name + '=' + process.env[name]).join(' '));",
+        "console.log(['T3_QA_DEVICE_ID_ANDROID', 'T3_QA_DEVICE_ID_IOS', 'T3_QA_DEVICE_PLATFORM', 'T3_QA_VARIANT'].map((name) => name + '=' + process.env[name]).join(' '));",
         [phones],
         {},
         { pool: [emulator] },
       );
       const first = yield* service.start({ projectId, suiteId: phones.id });
-      assert.equal(first.platform, "ios");
+      assert.equal(first.lane, "ios/swOnly");
       const snapshot = yield* service.subscribe({ projectId }).pipe(
         Stream.filter(
           (current) =>
             !current.batchRunning &&
-            current.latestRuns.length === 2 &&
+            current.latestRuns.length === 3 &&
             current.latestRuns.every((run) => run.status !== "running"),
         ),
         Stream.runHead,
         Effect.map(Option.getOrThrow),
       );
-      const runs = new Map(snapshot.latestRuns.map((run) => [run.platform, run]));
-      assert.equal(runs.get("ios")?.status, "incomplete");
+      const runs = new Map(snapshot.latestRuns.map((run) => [run.lane, run]));
+      assert.equal(runs.get("ios/swOnly")?.status, "incomplete");
       assert.equal(
-        runs.get("ios")?.note,
+        runs.get("ios/swOnly")?.note,
         "Not run. No iOS tablet is available. Create a simulator in Xcode.",
       );
-      const android = yield* service.details({ projectId, runId: runs.get("android")!.id });
+      const android = yield* service.details({ projectId, runId: runs.get("android/swAndHw")!.id });
       assert.equal(android.run.status, "passed");
       assert.include(
         android.output,
-        "T3_QA_DEVICE_ID_ANDROID=Pixel_Tablet T3_QA_DEVICE_ID_IOS=undefined T3_QA_DEVICE_PLATFORM=android",
+        "T3_QA_DEVICE_ID_ANDROID=Pixel_Tablet T3_QA_DEVICE_ID_IOS=undefined T3_QA_DEVICE_PLATFORM=android T3_QA_VARIANT=swAndHw",
       );
       assert.deepEqual(
         android.run.devices?.map((device) => device.requirement),
         ["android"],
       );
-      // The suite is not done until every platform passes.
+      // The suite is not done until every lane passes.
       assert.isTrue(snapshot.freshness?.[0]?.needsRun);
       assert.isNull(snapshot.freshness?.[0]?.lastPassedAt);
 
-      const again = yield* service.start({ projectId, suiteId: phones.id, platform: "android" });
-      assert.equal(again.platform, "android");
+      const again = yield* service.start({
+        projectId,
+        suiteId: phones.id,
+        lanes: ["android/swOnly"],
+      });
+      assert.equal(again.lane, "android/swOnly");
       assert.equal((yield* completed(service, again.id)).run.status, "passed");
+      const missing = yield* service
+        .start({ projectId, suiteId: phones.id, lanes: ["ios/swAndHw"] })
+        .pipe(Effect.flip);
+      assert.equal(missing.reason, "suite-not-found");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

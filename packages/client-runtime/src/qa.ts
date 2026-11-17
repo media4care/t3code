@@ -2,9 +2,9 @@ import {
   QaCiReport,
   qaCombinedStatus,
   qaRemoteOf,
-  qaSuitePlatforms,
-  type DevicePlatform,
+  qaSuiteLanes,
   type EnvironmentId,
+  type QaLane,
   type QaCheckout,
   type RepositoryIdentity,
   type QaFreshness,
@@ -17,7 +17,9 @@ import {
   type QaTestKind,
   type QaScheduleConfiguration,
   type QaTestCase,
+  type QaVariant,
 } from "@t3tools/contracts";
+import { qaDeviceRequirementLabel } from "@t3tools/shared/qaDevices";
 import * as Schema from "effect/Schema";
 
 export const decodeQaCiReport = Schema.decodeUnknownSync(Schema.fromJsonString(QaCiReport));
@@ -193,21 +195,16 @@ function qaResultCategory(run: QaRun | undefined): Exclude<QaResultFilter, "all"
   return "attention";
 }
 
-export const QA_PLATFORM_LABELS: Record<DevicePlatform, string> = {
-  android: "Android",
-  ios: "iOS",
-};
+/** Where one lane of a suite run per device stands. */
+export type QaLaneOutcome = "running" | "queued" | "passed" | "failed" | "not-run" | "never";
 
-/** Where one platform of a suite that runs each platform separately stands. */
-export type QaPlatformOutcome = "running" | "queued" | "passed" | "failed" | "not-run" | "never";
-
-export interface QaPlatformResult {
-  readonly platform: DevicePlatform;
+export interface QaLaneResult {
+  readonly lane: QaLane;
   readonly run: QaRun | undefined;
-  readonly outcome: QaPlatformOutcome;
+  readonly outcome: QaLaneOutcome;
 }
 
-function qaPlatformOutcome(run: QaRun | undefined, queued: boolean): QaPlatformOutcome {
+function qaLaneOutcome(run: QaRun | undefined, queued: boolean): QaLaneOutcome {
   if (run?.status === "running") return "running";
   if (queued) return "queued";
   if (!run) return "never";
@@ -220,39 +217,39 @@ export function qaDashboard(
   suites: readonly QaSuite[],
   latestRuns: readonly QaRun[],
   freshness: readonly QaFreshness[] = [],
-  queuedPlatforms: ReadonlyArray<{ suiteId: string; platform: DevicePlatform }> = [],
+  queuedLanes: ReadonlyArray<{ suiteId: string; lane: string }> = [],
 ) {
   const assessments = new Map(freshness.map((item) => [item.suiteId, item]));
   const counts = { total: suites.length, passed: 0, attention: 0, running: 0, never: 0 };
   const entries = suites.map((suite) => {
     const runs = latestRuns.filter((run) => run.suite.id === suite.id);
-    const platforms = qaSuitePlatforms(suite).map((platform): QaPlatformResult => {
-      const run = runs.find((candidate) => candidate.platform === platform);
-      const queued = queuedPlatforms.some(
-        (item) => item.suiteId === suite.id && item.platform === platform,
+    const lanes = qaSuiteLanes(suite).map((lane): QaLaneResult => {
+      const run = runs.find((candidate) => candidate.lane === lane.key);
+      const queued = queuedLanes.some(
+        (item) => item.suiteId === suite.id && item.lane === lane.key,
       );
-      return { platform, run, outcome: qaPlatformOutcome(run, queued) };
+      return { lane, run, outcome: qaLaneOutcome(run, queued) };
     });
-    const ran = platforms.flatMap(({ run }) => (run ? [run] : []));
+    const ran = lanes.flatMap(({ run }) => (run ? [run] : []));
     // The run that speaks for the suite: the one running, else the worst.
     const status = qaCombinedStatus(ran.map((run) => run.status));
-    const run = platforms.length
+    const run = lanes.length
       ? ran.find((candidate) => candidate.status === status)
-      : runs.find((candidate) => candidate.platform === undefined);
-    const category = !platforms.length
+      : runs.find((candidate) => candidate.lane === undefined);
+    const category = !lanes.length
       ? qaResultCategory(run)
       : !ran.length
         ? "never"
         : status === "running"
           ? "running"
-          : platforms.every(({ outcome }) => outcome === "passed")
+          : lanes.every(({ outcome }) => outcome === "passed")
             ? "passed"
             : "attention";
     counts[category] += 1;
     return {
       suite,
       run,
-      platforms,
+      lanes,
       category,
       freshness: assessments.get(suite.id),
       component: qaSuiteComponent(suite),
@@ -262,13 +259,12 @@ export function qaDashboard(
   return { entries, counts };
 }
 
-/** What a suite run per platform leads with: "Running 1 of 2", "1 of 2 failed", "2 of 2 passed". */
-export function qaPlatformsHeadline(platforms: ReadonlyArray<QaPlatformResult>) {
-  const total = platforms.length;
-  const running = platforms.findIndex(({ outcome }) => outcome === "running");
+/** What a suite run per device leads with: "Running 1 of 4", "1 of 4 failed", "4 of 4 passed". */
+export function qaLanesHeadline(lanes: ReadonlyArray<QaLaneResult>) {
+  const total = lanes.length;
+  const running = lanes.findIndex(({ outcome }) => outcome === "running");
   if (running !== -1) return `Running ${running + 1} of ${total}`;
-  const count = (outcome: QaPlatformOutcome) =>
-    platforms.filter((platform) => platform.outcome === outcome).length;
+  const count = (outcome: QaLaneOutcome) => lanes.filter((lane) => lane.outcome === outcome).length;
   if (count("queued")) return `${count("queued")} of ${total} queued`;
   if (count("failed")) return `${count("failed")} of ${total} failed`;
   const notRun = count("not-run") + count("never");
@@ -277,23 +273,50 @@ export function qaPlatformsHeadline(platforms: ReadonlyArray<QaPlatformResult>) 
   return `${total} of ${total} passed`;
 }
 
-/** One platform's row: its outcome, and how the run went when it ran its command. */
-export function qaPlatformHeadline({ run, outcome }: QaPlatformResult) {
+/** One lane's cell: its outcome, and how the run went when it ran its command. */
+export function qaLaneHeadline({ run, outcome }: QaLaneResult) {
   switch (outcome) {
     case "queued":
       return "Queued";
     case "never":
       return "Never run";
     case "not-run":
-      return `${run?.status === "cancelled" ? "Cancelled" : "Not run"}${run ? ` · ${qaWhen(run.startedAt)}` : ""}`;
+      return run?.status === "cancelled" ? "Cancelled" : "Not run";
     default:
-      return run ? `${qaRunHeadline(run)} · ${qaWhen(run.startedAt)}` : "Never run";
+      return run ? qaRunHeadline(run) : "Never run";
   }
 }
 
-/** A run's name in lists: its suite, and the platform for a suite that runs each separately. */
+export function qaLaneLabel(lane: QaLane) {
+  const device = qaDeviceRequirementLabel(lane.requirement);
+  return lane.variant ? `${device} · ${lane.variant.name}` : device;
+}
+
+/** A suite's lanes as a grid: a row per device, a column per variant, empty where none runs. */
+export function qaLaneGrid(lanes: ReadonlyArray<QaLaneResult>) {
+  const columns = [
+    ...new Map(
+      lanes.flatMap(({ lane }) => (lane.variant ? [[lane.variant.id, lane.variant]] : [])),
+    ).values(),
+  ] satisfies ReadonlyArray<QaVariant>;
+  const devices = [...new Set(lanes.map(({ lane }) => lane.device))];
+  const rows = devices.map((device) => {
+    const cells = lanes.filter(({ lane }) => lane.device === device);
+    return {
+      device,
+      label: qaDeviceRequirementLabel(cells[0]!.lane.requirement),
+      cells: columns.length
+        ? columns.map((variant) => cells.find(({ lane }) => lane.variant?.id === variant.id))
+        : cells,
+    };
+  });
+  return { columns, rows };
+}
+
+/** A run's name in lists: its suite, and its lane for a suite run per device. */
 export function qaRunTitle(run: QaRun) {
-  return run.platform ? `${run.suite.name} · ${QA_PLATFORM_LABELS[run.platform]}` : run.suite.name;
+  const lane = qaSuiteLanes(run.suite).find((candidate) => candidate.key === run.lane);
+  return lane ? `${run.suite.name} · ${qaLaneLabel(lane)}` : run.suite.name;
 }
 export type QaDashboardEntry = ReturnType<typeof qaDashboard>["entries"][number];
 
