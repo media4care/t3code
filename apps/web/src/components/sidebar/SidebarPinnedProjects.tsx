@@ -1,7 +1,9 @@
+import type { ContextMenuSource } from "@t3tools/contracts";
 import { SquarePenIcon } from "lucide-react";
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
+import { contextMenuSourceOf } from "../../contextMenuSource";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
@@ -23,7 +25,11 @@ export const SidebarPinnedProjects = memo(function SidebarPinnedProjects(props: 
   onToggle: () => void;
   onSelect: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
-  onContextMenu: (group: SidebarProjectSnapshot, position: { x: number; y: number }) => void;
+  onContextMenu: (
+    group: SidebarProjectSnapshot,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
 }) {
   const visible = props.expanded
     ? props.projects
@@ -64,7 +70,11 @@ export const SidebarPinnedProjects = memo(function SidebarPinnedProjects(props: 
                 onClick={() => props.onSelect(group)}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  props.onContextMenu(group, { x: event.clientX, y: event.clientY });
+                  props.onContextMenu(
+                    group,
+                    { x: event.clientX, y: event.clientY },
+                    contextMenuSourceOf(event),
+                  );
                 }}
                 className={cn(
                   "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
