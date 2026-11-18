@@ -3,6 +3,7 @@ import QaRunsMigration from "./Migrations/083_QaRuns.ts";
 import QaInputsMigration from "./Migrations/084_QaInputs.ts";
 import QaAutomationMigration from "./Migrations/085_QaAutomation.ts";
 import QaRepositoriesMigration from "./Migrations/086_QaRepositories.ts";
+import QaRunLanesMigration from "./Migrations/087_QaRunLanes.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -178,6 +179,7 @@ const migrationEntries = [
   [84, "QaInputs", QaInputsMigration],
   [85, "QaAutomation", QaAutomationMigration],
   [86, "QaRepositories", QaRepositoriesMigration],
+  [87, "QaRunLanes", QaRunLanesMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
