@@ -1,10 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { QaRun } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 
@@ -36,6 +38,8 @@ const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, cou
     ),
   });
 });
+
+const decodeQaRun = Schema.decodeEffect(Schema.fromJsonString(QaRun));
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
 const newerMigrationId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
@@ -257,6 +261,54 @@ describe("runMigrations", () => {
       );
       assert.notInclude(String(exit), "57_ScheduledTaskWebhooks");
       assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("keeps QA runs saved before suites ran per device readable", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 86 });
+      const suite = {
+        id: "maestro",
+        name: "Maestro",
+        command: "maestro test",
+        devices: [{ id: "ios", platform: "ios" }],
+      };
+      const run = {
+        projectId: "project",
+        cwd: "/repo",
+        startedAt: "2026-11-17T11:51:07.800Z",
+        finishedAt: "2026-11-17T11:58:30.286Z",
+        status: "failed",
+        exitCode: 1,
+        commit: null,
+        branch: "master",
+        dirty: false,
+        summary: null,
+        note: null,
+      };
+      // Before runs were per device, a suite ran per platform and each run named its platform.
+      const legacy = {
+        ...run,
+        id: "legacy",
+        suite: { ...suite, runPer: "platform" },
+        platform: "ios",
+      };
+      const current = { ...run, id: "current", suite: { ...suite, runPer: "device" }, lane: "ios" };
+      for (const saved of [legacy, current])
+        yield* sql`INSERT INTO qa_runs (id, project_id, suite_id, started_at, status, run_json) VALUES (${saved.id}, 'project', 'maestro', ${saved.startedAt}, 'failed', ${JSON.stringify(saved)})`;
+
+      yield* runMigrations();
+
+      const rows = yield* sql<{ readonly run_json: string }>`
+        SELECT run_json FROM qa_runs ORDER BY id
+      `;
+      const [savedCurrent, savedLegacy] = yield* Effect.forEach(rows, (row) =>
+        decodeQaRun(row.run_json),
+      );
+      assert.strictEqual(savedLegacy?.suite.runPer, undefined);
+      assert.notProperty(JSON.parse(rows[1]!.run_json), "platform");
+      assert.strictEqual(savedCurrent?.suite.runPer, "device");
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
