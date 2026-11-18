@@ -47,6 +47,7 @@ const fixture = Effect.gen(function* () {
           ? Option.some({
               projectId,
               title: "Git",
+              hasCustomTitle: false,
               workspaceRoot: cwd,
               defaultModelSelection: null,
               defaultThreadEnvMode: null,

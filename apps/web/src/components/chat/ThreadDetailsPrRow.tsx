@@ -20,6 +20,7 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
+import type { ComposerThreadTarget } from "~/composerDraftStore";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { usePullRequestChecksRefresh } from "~/hooks/usePullRequestChecksRefresh";
 import { cn } from "~/lib/utils";
@@ -55,6 +56,8 @@ import {
   usePullRequestActionRunner,
   usePullRequestDefaultMergeMethodResolver,
   usePullRequestHandoffs,
+  writeHandoffToComposer,
+  type PullRequestThreadTask,
 } from "../pullRequest/usePullRequestActions";
 import { usePullRequestRebaseLaunch } from "../pullRequest/usePullRequestRebaseLaunch";
 import {
@@ -72,6 +75,8 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -96,6 +101,7 @@ export function ThreadDetailsPrRow({
   onOpen,
   onActed,
   onStopWatching,
+  composerTarget,
 }: {
   environmentId: EnvironmentId;
   pr: ThreadPr;
@@ -108,6 +114,8 @@ export function ThreadDetailsPrRow({
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
   onActed?: () => void;
   onStopWatching?: (() => void) | undefined;
+  /** Fix and Resolve write here instead of checking the pull request out in a new thread. */
+  composerTarget?: ComposerThreadTarget | undefined;
 }) {
   const serverConfigs = useServerConfigs();
   const supportsPullRequests = serverConfigs.get(environmentId) !== undefined;
@@ -199,6 +207,19 @@ export function ThreadDetailsPrRow({
     lastSelectedMergeMethod,
   );
 
+  const handOff = (kind: "conflicts" | "findings", task: PullRequestThreadTask) => {
+    if (composerTarget === undefined) {
+      void startHandoff(kind, task);
+      return;
+    }
+    writeHandoffToComposer(composerTarget, task);
+    toastManager.add({
+      type: "success",
+      title: "Added to the composer",
+      description: "The task is in the composer. Read it over, then send.",
+    });
+  };
+
   // The host rebases a clean branch itself; anything it cannot apply goes to an agent.
   const rebaseOntoBase = async () => {
     if (detail === null) return;
@@ -211,22 +232,28 @@ export function ThreadDetailsPrRow({
       }
       return;
     }
+    const prompt = buildRebasePullRequestPrompt({
+      number: detail.number,
+      url: detail.url,
+      headBranch: detail.headBranch,
+      baseBranch: detail.baseBranch,
+      mergeMethod: selectedMergeMethod,
+      inThisThread: composerTarget !== undefined,
+    });
+    if (composerTarget !== undefined) {
+      handOff("conflicts", { prompt });
+      return;
+    }
     void rebaseLaunch.launch({
       url: detail.url,
       title: `Rebase #${detail.number} onto ${detail.baseBranch}`,
-      prompt: buildRebasePullRequestPrompt({
-        number: detail.number,
-        url: detail.url,
-        headBranch: detail.headBranch,
-        baseBranch: detail.baseBranch,
-        mergeMethod: selectedMergeMethod,
-      }),
+      prompt,
     });
   };
 
   const startFixChecks = () => {
     if (detail === null) return;
-    void startHandoff(
+    handOff(
       "findings",
       buildFixFindingsHandoff({
         number: detail.number,
@@ -240,6 +267,7 @@ export function ThreadDetailsPrRow({
         comments: [],
         checks: detail.checks,
         commentsTruncated: false,
+        inThisThread: composerTarget !== undefined,
       }),
     );
   };
@@ -341,6 +369,10 @@ export function ThreadDetailsPrRow({
       </TooltipPopup>
     );
 
+  const newThreadSuffix =
+    composerTarget === undefined ? (
+      <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />
+    ) : null;
   const trailingAction =
     rowAction === "resolve" || rowAction === "rebase"
       ? {
@@ -348,13 +380,12 @@ export function ThreadDetailsPrRow({
           pendingLabel: "Rebasing...",
           pending: rebaseLaunch.launching,
           destructive: rowAction === "resolve",
-          suffix:
-            rowAction === "resolve" ? (
-              <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />
-            ) : null,
+          suffix: rowAction === "resolve" ? newThreadSuffix : null,
           tooltip:
             rowAction === "resolve"
-              ? `An agent rebases onto ${detail?.baseBranch}, resolves the conflicts, reviews the result and merges it`
+              ? composerTarget === undefined
+                ? `An agent rebases onto ${detail?.baseBranch}, resolves the conflicts, reviews the result and merges it`
+                : `Rebase onto ${detail?.baseBranch} and resolve the conflicts in this thread`
               : `Rebase onto ${detail?.baseBranch} before merging. If it conflicts, an agent takes over`,
           onClick: () => void rebaseOntoBase(),
         }
@@ -381,11 +412,19 @@ export function ThreadDetailsPrRow({
           : rowAction === "fix"
             ? {
                 label: "Fix",
-                pendingLabel: "Preparing...",
+                pendingLabel: "Fix",
                 pending: handoff === "findings",
                 destructive: true,
-                suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
-                tooltip: "Fix the failing checks in a new thread",
+                suffix:
+                  handoff === "findings" ? (
+                    <Spinner size="xs" aria-label="Preparing fix" />
+                  ) : (
+                    newThreadSuffix
+                  ),
+                tooltip:
+                  composerTarget === undefined
+                    ? "Fix the failing checks in a new thread"
+                    : "Fix the failing checks in this thread",
                 onClick: startFixChecks,
               }
             : rowAction === "merge"
@@ -446,9 +485,7 @@ export function ThreadDetailsPrRow({
             type="button"
             variant="ghost"
             size="sm"
-            part={part}
-            multiline={wrap}
-            className={wrap ? "items-start [&>svg]:mt-px" : undefined}
+            part={wrap ? "title" : part}
             aria-label={openAriaLabel}
             onClick={onOpen}
             onAuxClick={onOpen}
@@ -479,14 +516,14 @@ export function ThreadDetailsPrRow({
       (showChecks || trailingAction !== null || watching || baseStatus !== null) ? (
         <div className="pb-1.5">
           {openRow(detail.title, "row", true)}
-          <div className="mt-1.5 flex h-5 min-w-0 items-center gap-0.5 ps-9 pe-2.5 text-xs text-muted-foreground">
+          <div className="flex h-5 min-w-0 items-center gap-0.5 ps-9 pe-2.5 text-xs text-muted-foreground">
             <span className="me-1 shrink-0 tabular-nums">#{number}</span>
             {showChecks && checksRollup !== null ? (
               <PullRequestChecksPopover
                 checksState={checksRollup}
                 checks={detail.checks}
                 variant="count"
-                render={<ThreadDetailsControl part="meta" />}
+                render={<ThreadDetailsControl part="meta" className="min-w-0 shrink" />}
               />
             ) : null}
             {watchControl("icon")}

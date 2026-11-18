@@ -143,6 +143,7 @@ const fixture = Effect.fn("Qa.test.fixture")(function* (
         id === projectId
           ? Option.some({
               projectId,
+              hasCustomTitle: false,
               workspaceRoot: root,
               title: "QA",
               defaultModelSelection: null,

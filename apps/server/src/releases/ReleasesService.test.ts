@@ -63,6 +63,7 @@ const fixture = Effect.fn("Releases.test.fixture")(function* (
   yield* fs.writeFileString(path.join(root, "status.cjs"), script);
   const row = (id: ProjectId, workspaceRoot: string) => ({
     projectId: id,
+    hasCustomTitle: false,
     workspaceRoot,
     title: "Releases",
     defaultModelSelection: null,

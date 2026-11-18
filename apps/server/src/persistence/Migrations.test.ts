@@ -11,11 +11,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import Insights from "./Migrations/082_Insights.ts";
-import QaRuns from "./Migrations/083_QaRuns.ts";
-import QaInputs from "./Migrations/084_QaInputs.ts";
-import QaAutomation from "./Migrations/085_QaAutomation.ts";
-import QaRepositories from "./Migrations/086_QaRepositories.ts";
+import Insights from "./Migrations/097_Insights.ts";
+import QaRuns from "./Migrations/098_QaRuns.ts";
+import QaInputs from "./Migrations/099_QaInputs.ts";
+import QaAutomation from "./Migrations/100_QaAutomation.ts";
+import QaRepositories from "./Migrations/101_QaRepositories.ts";
+import QaRunLanes from "./Migrations/102_QaRunLanes.ts";
 
 const explorerMigrations = [
   ["Insights", Insights],
@@ -23,9 +24,10 @@ const explorerMigrations = [
   ["QaInputs", QaInputs],
   ["QaAutomation", QaAutomation],
   ["QaRepositories", QaRepositories],
+  ["QaRunLanes", QaRunLanes],
 ] as const;
 
-// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, and 80.
+// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, 80, and 81.
 const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, count: number) {
   yield* runMigrations({ toMigrationInclusive: base - 1 });
   yield* Migrator.make({})({
@@ -62,7 +64,9 @@ const v2TableCount = Effect.gen(function* () {
 
 describe("runMigrations", () => {
   it.effect.each(
-    [73, 77, 80, 81].flatMap((base) => [1, 2, 3, 4, 5].map((count) => [base, count] as const)),
+    [73, 77, 80, 81, 82].flatMap((base) =>
+      [1, 2, 3, 4, 5, 6].map((count) => [base, count] as const),
+    ),
   )("preserves Explorer data when upgrading %s-based migrations through %s", ([base, count]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -90,7 +94,7 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* saved, before);
       assert.deepStrictEqual(
-        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 82`,
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 97`,
         [{ created_at: "2026-10-30 00:00:00" }],
       );
       const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
@@ -104,10 +108,11 @@ describe("runMigrations", () => {
     [77, "DelegatedRecoveryIndexes"],
     [80, "ScheduledTaskThreadMode"],
     [81, "ProjectionMessageSearchText"],
+    [82, "RepairStaleTitleRegeneration"],
   ] as const)("rolls back a %s-based Explorer upgrade if %s fails", ([base, failing]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* seedExplorer(base, 5);
+      yield* seedExplorer(base, 6);
       const before = yield* history;
       yield* sql.unsafe(
         `CREATE TRIGGER fail_explorer_upgrade BEFORE INSERT ON effect_sql_migrations WHEN NEW.name = '${failing}' BEGIN SELECT RAISE(FAIL, 'injected failure'); END`,
@@ -121,15 +126,15 @@ describe("runMigrations", () => {
   );
 
   it.effect.each(
-    [73, 77, 80, 81].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+    [73, 77, 80, 81, 82].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
   )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* seedExplorer(base, 5);
+      yield* seedExplorer(base, 6);
       if (problem === "gap") {
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${base + 1}`;
       } else {
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 5}, 'UnknownMigration')`;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${base + 6}, 'UnknownMigration')`;
       }
       const before = yield* history;
       const exit = yield* Effect.exit(runMigrations());
@@ -179,16 +184,24 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([54, 76, 79, 80])("upgrades a database at exactly %s", (id) =>
-    Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: id });
-      assert.deepStrictEqual(
-        yield* runMigrations(),
-        migrationManifest.filter(([next]) => next > id),
-      );
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.isAbove(yield* v2TableCount, 0);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each([54, 76, 79, 80])(
+    "upgrades a database at exactly %s, then rechecks it without a write lock",
+    (id) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: id });
+        assert.deepStrictEqual(
+          yield* runMigrations(),
+          migrationManifest.filter(([next]) => next > id),
+        );
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.isAbove(yield* v2TableCount, 0);
+
+        // query_only rejects BEGIN IMMEDIATE, which CLI startup would otherwise take on the live database.
+        yield* sql`PRAGMA query_only = ON`;
+        assert.deepStrictEqual(yield* runMigrations(), []);
+        assert.deepStrictEqual(yield* history, migrationManifest);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("drops the unused correlation index and keeps correlation values", () =>
@@ -267,7 +280,7 @@ describe("runMigrations", () => {
   it.effect("keeps QA runs saved before suites ran per device readable", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 86 });
+      yield* runMigrations({ toMigrationInclusive: 101 });
       const suite = {
         id: "maestro",
         name: "Maestro",
@@ -309,6 +322,36 @@ describe("runMigrations", () => {
       assert.strictEqual(savedLegacy?.suite.runPer, undefined);
       assert.notProperty(JSON.parse(rows[1]!.run_json), "platform");
       assert.strictEqual(savedCurrent?.suite.runPer, "device");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("keeps the migrations that finished before a later one failed", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 81 });
+      yield* sql`CREATE TABLE orchestration_v2_projection_turn_item_counts (thread_id TEXT)`;
+
+      const exit = yield* Effect.exit(runMigrations());
+
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepStrictEqual(
+        yield* history,
+        migrationManifest.filter(([id]) => id <= 84),
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("reapplies peer link migrations whose ledger rows are missing", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 72 });
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 70 AND 72`;
+
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 70),
+      );
+      assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
