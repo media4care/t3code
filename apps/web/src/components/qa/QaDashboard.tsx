@@ -546,7 +546,7 @@ function LaneMatrix({
         aria-label="Lanes"
         className="mt-3 grid items-center gap-x-2 gap-y-1.5 rounded-lg border border-border p-2"
         style={{
-          gridTemplateColumns: `minmax(0, max-content) repeat(${columns.length || 1}, minmax(0, 1fr))`,
+          gridTemplateColumns: `minmax(5rem, 1fr) repeat(${columns.length || 1}, minmax(0, max-content))`,
         }}
       >
         {columns.length ? (

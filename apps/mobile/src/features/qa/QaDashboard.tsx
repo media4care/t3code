@@ -306,6 +306,12 @@ function SuiteCard({
   const [showCommand, setShowCommand] = useState(false);
   const running = run?.status === "running";
   const separate = lanes.length > 0;
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const chosen = lanes.flatMap(({ lane }) => (selected.has(lane.key) ? [lane.key] : []));
+  const runLanes = (keys?: ReadonlyArray<string>) => {
+    setSelected(new Set());
+    onRun(suite.id, keys);
+  };
   return (
     <View
       className={`gap-3 rounded-2xl border bg-card p-4 ${running ? "border-primary" : "border-border-subtle"}`}
@@ -350,13 +356,23 @@ function SuiteCard({
             disabled={!canCancel}
             onPress={() => onCancel(run.id)}
           />
+        ) : chosen.length ? (
+          <Button
+            label={`Run ${chosen.length}`}
+            accessibilityLabel={`Run ${chosen.length} selected`}
+            icon="play"
+            tone="primary"
+            size="compact"
+            disabled={!canRun}
+            onPress={() => runLanes(chosen)}
+          />
         ) : (
           <IconButton
             accessibilityLabel={!separate ? "Run" : lanes.length === 2 ? "Run both" : "Run all"}
             icon="play"
             variant="tonal"
             disabled={!canRun}
-            onPress={() => onRun(suite.id)}
+            onPress={() => runLanes()}
           />
         )}
       </View>
@@ -364,7 +380,14 @@ function SuiteCard({
         <LaneRows
           lanes={lanes}
           canRun={canRun}
-          onRun={(lane) => onRun(suite.id, [lane])}
+          selected={selected}
+          onSelect={(key) => {
+            const next = new Set(selected);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            setSelected(next);
+          }}
+          onRun={(lane) => runLanes([lane])}
           onView={onView}
         />
       ) : null}
@@ -447,11 +470,15 @@ const LANE_TEXT: Record<QaLaneOutcome, string> = {
 function LaneRows({
   lanes,
   canRun,
+  selected,
+  onSelect,
   onRun,
   onView,
 }: {
   lanes: ReadonlyArray<QaLaneResult>;
   canRun: boolean;
+  selected: ReadonlySet<string>;
+  onSelect: (lane: string) => void;
   onRun: (lane: string) => void;
   onView: (id: string) => void;
 }) {
@@ -472,6 +499,23 @@ function LaneRows({
             className={`gap-2 p-3 ${index > 0 ? "border-t border-border-subtle" : ""}`}
           >
             <View className="flex-row items-center gap-3">
+              {busy ? null : (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={`Select ${label}`}
+                  accessibilityState={{ checked: selected.has(lane.key), disabled: !canRun }}
+                  disabled={!canRun}
+                  hitSlop={8}
+                  onPress={() => onSelect(lane.key)}
+                  className={canRun ? "" : "opacity-40"}
+                >
+                  <SymbolView
+                    name={selected.has(lane.key) ? "checkmark.circle.fill" : "circle"}
+                    size={20}
+                    tintColorClassName="accent-primary-text"
+                  />
+                </Pressable>
+              )}
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`${label}: ${headline}`}
@@ -518,7 +562,7 @@ function LaneRows({
                   className={`size-11 items-center justify-center rounded-full bg-subtle ${canRun ? "" : "opacity-40"}`}
                 >
                   <SymbolView
-                    name="arrow.clockwise"
+                    name={run ? "arrow.clockwise" : "play"}
                     size={14}
                     tintColorClassName="accent-foreground"
                   />
