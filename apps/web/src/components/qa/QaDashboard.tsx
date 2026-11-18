@@ -40,6 +40,7 @@ import {
   type QaLaneOutcome,
   type QaLaneResult,
   type QaResultFilter,
+  qaRunDeviceNames,
 } from "@t3tools/client-runtime/qa";
 import type { qaDashboard } from "@t3tools/client-runtime/qa";
 import { qaDeviceAssignments } from "@t3tools/shared/qaDevices";
@@ -364,9 +365,7 @@ function SuiteCard({
                   : "Each device runs on its own"
                 : null,
               run && !separate ? qaWhen(run.startedAt) : null,
-              run?.devices?.length && !separate
-                ? `On ${run.devices.map((device) => device.name).join(", ")}`
-                : null,
+              run?.devices?.length && !separate ? `On ${qaRunDeviceNames(run)}` : null,
               run?.repositoryFile ? qaRunSource(run) : null,
             ]
               .filter(Boolean)

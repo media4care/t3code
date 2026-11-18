@@ -407,6 +407,11 @@ export const QA_STEP_STATUS_LABELS: Record<QaRunStep["status"], string> = {
   skipped: "skipped",
 };
 
+/** The devices a run got, by name; empty until its devices are ready. */
+export function qaRunDeviceNames(run: QaRun) {
+  return (run.devices ?? []).map((device) => device.name).join(", ");
+}
+
 /** A run's steps; one left running by a run that ended is where that run stopped. */
 export function qaRunSteps(run: QaRun): ReadonlyArray<QaRunStep> {
   const steps = run.steps ?? [];

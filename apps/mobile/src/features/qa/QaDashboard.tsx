@@ -19,6 +19,7 @@ import {
   type QaGrouping,
   type QaResultFilter,
   type qaDashboard,
+  qaRunDeviceNames,
 } from "@t3tools/client-runtime/qa";
 import type { EnvironmentId, ProjectId, QaRunStatus } from "@t3tools/contracts";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -498,7 +499,7 @@ function LaneRows({
                     {run?.devices?.length ? (
                       <Text className="font-sans text-xs text-foreground-muted">
                         {" "}
-                        · {run.devices.map((device) => device.name).join(", ")}
+                        · {qaRunDeviceNames(run)}
                       </Text>
                     ) : null}
                   </Text>
