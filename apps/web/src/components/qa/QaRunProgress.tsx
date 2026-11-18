@@ -5,6 +5,7 @@ import {
   QA_STEP_LABELS,
   QA_STEP_STATUS_LABELS,
   qaOutputTail,
+  qaRunDeviceNames,
   qaRunSteps,
   qaStepDuration,
 } from "@t3tools/client-runtime/qa";
@@ -55,6 +56,7 @@ function RunningDuration({ step }: { step: QaRunStep }) {
 /** What a run does in order: done steps checked, the current one spinning, the rest still to come. */
 export function QaRunSteps({ run }: { run: QaRun }) {
   const steps = qaRunSteps(run);
+  const devices = qaRunDeviceNames(run);
   if (steps.length === 0) return null;
   return (
     <ol aria-label="Run steps" className="grid gap-1.5 text-sm">
@@ -78,6 +80,9 @@ export function QaRunSteps({ run }: { run: QaRun }) {
           >
             {QA_STEP_LABELS[step.id]}
           </span>
+          {step.id === "devices" && devices ? (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">{devices}</span>
+          ) : null}
           <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
             {step.status === "skipped" ? (
               "Skipped"

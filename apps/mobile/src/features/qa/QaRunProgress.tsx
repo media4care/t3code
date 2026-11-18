@@ -5,6 +5,7 @@ import {
   QA_STEP_LABELS,
   QA_STEP_STATUS_LABELS,
   qaOutputTail,
+  qaRunDeviceNames,
   qaRunSteps,
   qaStepDuration,
 } from "@t3tools/client-runtime/qa";
@@ -41,6 +42,7 @@ const ICONS = {
 export function QaRunSteps({ run }: { run: QaRun }) {
   const steps = qaRunSteps(run);
   const now = useVisibleSecondClock(run.status === "running");
+  const devices = qaRunDeviceNames(run);
   if (steps.length === 0) return null;
   return (
     <View accessibilityLabel="Run steps" className="gap-1.5">
@@ -79,6 +81,9 @@ export function QaRunSteps({ run }: { run: QaRun }) {
             }`}
           >
             {QA_STEP_LABELS[step.id]}
+            {step.id === "devices" && devices ? (
+              <Text className="font-sans text-xs text-foreground-muted"> · {devices}</Text>
+            ) : null}
           </Text>
           <Text className="text-xs text-foreground-muted" style={{ fontVariant: ["tabular-nums"] }}>
             {step.status === "skipped" ? "Skipped" : qaStepDuration(step, now)}
