@@ -81,6 +81,24 @@ describe("qaDeviceAssignments", () => {
     ]);
   });
 
+  it("takes only devices on a required OS version, and says which versions are missing", () => {
+    const android13 = device({ key: "a13", name: "Tablet_API_33", version: "Android 13" });
+    const android15 = device({ key: "a15", name: "Tablet_API_35", version: "Android 15" });
+    const [tablet] = qaDeviceAssignments(suite([{ platform: "android", os: ["15"] }]), [
+      runningAvd,
+      android13,
+      android15,
+    ]);
+    expect(tablet?.candidates.map(({ name }) => name)).toEqual(["Tablet_API_35"]);
+    const [missing] = qaDeviceAssignments(suite([{ platform: "android", os: ["12", "14"] }]), [
+      runningAvd,
+      android13,
+    ]);
+    expect(qaDeviceUnavailableReason(missing!)).toMatch(
+      /^No Android device on Android 12 or Android 14 is available\./,
+    );
+  });
+
   it("gives each requirement its own device and blocks the one left without", () => {
     const pair = suite([
       { id: "host", platform: "android" },

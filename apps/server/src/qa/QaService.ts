@@ -35,6 +35,8 @@ import {
   type QaDeviceAssignment,
   qaDeviceRequirementLabel,
   qaDeviceUnavailableReason,
+  qaOsLabel,
+  qaOsMajor,
 } from "@t3tools/shared/qaDevices";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Cause from "effect/Cause";
@@ -78,6 +80,7 @@ import { makeQaCheckouts, type QaCheckoutListener, type QaCheckoutTarget } from 
 import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import { leaseFromSimlock } from "./simlockLease.ts";
+import { makeRepositoryIconReader } from "../workspace/repositoryIcons.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   nextScheduledRunAt,
@@ -152,6 +155,18 @@ function laneOf(run: Pick<QaRun, "suite" | "lane">) {
   return run.lane === undefined
     ? undefined
     : qaSuiteLanes(run.suite).find((lane) => lane.key === run.lane);
+}
+
+/** The suite as one run of it sees it: a lane's device narrowed to the lane's OS version. */
+function runSuiteOf(run: Pick<QaRun, "suite" | "lane">): QaSuite {
+  const lane = laneOf(run);
+  if (!lane?.os || !run.suite.devices) return run.suite;
+  return {
+    ...run.suite,
+    devices: run.suite.devices.map((requirement, index) =>
+      qaDeviceRequirementKey(requirement, index) === lane.device ? lane.requirement : requirement,
+    ),
+  };
 }
 
 /** A run of one lane uses only that lane's device; `key` is a device requirement's key. */
@@ -243,6 +258,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const scheduler = yield* Scheduler.Scheduler;
   const fs = yield* FileSystem.FileSystem;
+  const readRepositoryIcons = yield* makeRepositoryIconReader;
   const path = yield* Path.Path;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const identities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -556,6 +572,7 @@ const make = Effect.gen(function* () {
       passed.map((row) => [passedKey(row.suite_id, row.lane), row.finished_at]),
     );
     const suites = config._tag === "Success" ? config.success.suites : [];
+    const apps = config._tag === "Success" ? (config.success.apps ?? []) : [];
     // A suite shows the runs of how it runs now: once, or once per lane.
     const shown = (run: QaRun) => {
       const suite = suites.find((candidate) => candidate.id === run.suite.id);
@@ -656,6 +673,11 @@ const make = Effect.gen(function* () {
       ref: scope.ref,
       checkout,
       refs,
+      apps,
+      icons: yield* readRepositoryIcons(
+        root,
+        apps.flatMap((app) => (app.icon ? [[app.id, app.icon] as const] : [])),
+      ),
     };
   }, Effect.mapError(storageError));
 
@@ -875,7 +897,8 @@ const make = Effect.gen(function* () {
     entry: ActiveRun,
     stop: (note: string) => null,
   ) {
-    const { suite, id } = entry.details.run;
+    const { id } = entry.details.run;
+    const suite = runSuiteOf(entry.details.run);
     const devices: Array<QaRunDevice> = [];
     const leaseEnvironment: Record<string, string> = {};
     const used = usedBy(entry.details.run);
@@ -897,6 +920,12 @@ const make = Effect.gen(function* () {
       if (leased._tag === "Failure") return stop(`Not run. ${leased.failure.message}`);
       const leasedDevice = leased.success.device;
       appendOutput(entry, `[T3 QA] ${label}: ${leasedDevice.name} (${leasedDevice.deviceId})\n`);
+      // `simlock lease` takes no OS version, so a lane for one checks what it got.
+      const os = qaOsMajor(leasedDevice.version);
+      if (requirement.os && (os === null || !requirement.os.includes(os)))
+        return stop(
+          `Not run. Simlock leased ${leasedDevice.name} on ${leasedDevice.version || "an unknown OS version"}, but this lane needs ${requirement.os.map((version) => qaOsLabel(requirement.platform, version)).join(" or ")}. Simlock cannot lease by OS version, so use This machine's devices for it in Settings → Devices.`,
+        );
       // Leased from this machine's worker, so this machine's host can show it.
       const watchable = yield* devicePool.attachStream({
         hostId: LOCAL_DEVICE_HOST_ID,
@@ -911,7 +940,7 @@ const make = Effect.gen(function* () {
 
   /** Starts the run's devices; none when it cannot get them, which leaves the run incomplete. */
   const prepareDevices = Effect.fn("QaService.prepareDevices")(function* (entry: ActiveRun) {
-    const suite = entry.details.run.suite;
+    const suite = runSuiteOf(entry.details.run);
     const used = usedBy(entry.details.run);
     if (
       !suite.devices?.some((requirement, index) => used(qaDeviceRequirementKey(requirement, index)))

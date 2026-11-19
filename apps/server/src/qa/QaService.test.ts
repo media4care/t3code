@@ -303,10 +303,17 @@ describe("QA runs", () => {
               runOnWorktreeCreate: true,
             },
           ],
-          qa: { suites: [suite] },
+          qa: {
+            apps: [{ id: "web", name: "Web", icon: "icon.png" }],
+            suites: [{ ...suite, apps: ["web"] }],
+          },
         }),
       );
       yield* fs.writeFileString(path.join(root, ".gitignore"), "setup.txt\n");
+      yield* fs.writeFile(
+        path.join(root, "icon.png"),
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
       const main = yield* push("main");
       yield* fs.writeFileString(path.join(root, "run.cjs"), "process.exit(1)");
       const tag = yield* push("v26.10", { tag: true });
@@ -322,6 +329,7 @@ describe("QA runs", () => {
       assert.equal(ready.checkout?.state, "ready");
       assert.equal(ready.checkout?.commit, main);
       assert.notEqual(ready.workspaceRoot, root);
+      assert.deepEqual(ready.icons, { web: "data:image/png;base64,iVBORw0KGgo=" });
       assert.equal(
         yield* fs.readFileString(path.join(ready.workspaceRoot, "setup.txt")),
         yield* fs.realPath(root),
@@ -1878,6 +1886,38 @@ describe("QA devices", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("runs a lane per OS version on a device with that version", () =>
+    Effect.gen(function* () {
+      const versions: QaSuite = {
+        ...flows,
+        runPer: "device",
+        devices: [{ id: "tablet", platform: "android", formFactor: "tablet", os: ["13", "15"] }],
+      };
+      const android13 = poolDevice({
+        key: "a13",
+        deviceId: "API_33",
+        name: "API_33",
+        version: "Android 13",
+      });
+      const android15 = poolDevice({
+        key: "a15",
+        deviceId: "API_35",
+        name: "API_35",
+        version: "Android 15",
+      });
+      const { service } = yield* fixture(script, [versions], {}, { pool: [android15, android13] });
+      const run = yield* completed(
+        service,
+        (yield* service.start({ projectId, suiteId: versions.id, lanes: ["tablet@13"] })).id,
+      );
+      assert.include(run.run, { status: "passed", lane: "tablet@13" });
+      assert.deepEqual(
+        run.run.devices?.map((device) => device.name),
+        ["API_33"],
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   const fakeSimlock = (body: string) => `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(__dirname + "/args.json", JSON.stringify(process.argv.slice(2)));
@@ -1988,6 +2028,39 @@ setInterval(() => {}, 1000);`),
         noCapacity.run.note,
         "Not run. Simlock did not lease a device (exit 11). No device fits.",
       );
+
+      // Simlock leases by model and size, so a lane for one OS version checks what it got.
+      const versions = yield* fixture(
+        ran,
+        [
+          {
+            ...flows,
+            runPer: "device",
+            devices: [{ id: "tablet", platform: "android", os: ["13"] }],
+          },
+        ],
+        {},
+        {},
+        { qaDeviceSource: "simlock" },
+      );
+      const leasing = (yield* withSimlock(
+        versions,
+        fakeSimlock(`process.stdout.write(JSON.stringify({
+  device: { driverDeviceId: "x", address: "emulator-5556", physical: false, spec: { platform: "android", model: "Pixel Tablet", osVersion: "15" } },
+  lease: { id: "lse_2" },
+}) + "\\n");
+setInterval(() => {}, 1000);`),
+      )).service;
+      const wrongOs = yield* completed(
+        leasing,
+        (yield* leasing.start({ projectId, suiteId: flows.id, lanes: ["tablet@13"] })).id,
+      );
+      assert.equal(wrongOs.run.status, "incomplete");
+      assert.match(
+        wrongOs.run.note ?? "",
+        /^Not run\. Simlock leased Pixel Tablet \(Simlock lse_2\) on 15, but this lane needs Android 13\./,
+      );
+      assert.isFalse(yield* versions.fs.exists(versions.path.join(versions.root, "ran.txt")));
       assert.isFalse(yield* setup.fs.exists(setup.path.join(setup.root, "ran.txt")));
     }).pipe(Effect.provide(layer), Effect.scoped),
   );

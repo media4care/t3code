@@ -27,7 +27,8 @@ const state = vi.hoisted(() => ({
   allowed: true,
 }));
 
-vi.mock("../../state/entities", () => ({
+vi.mock("../../state/entities", async (original) => ({
+  ...(await original<object>()),
   readProject: () => null,
   readProjects: () => [],
   readThreadShell: () => null,
@@ -38,6 +39,7 @@ vi.mock("../../state/entities", () => ({
   ],
 }));
 vi.mock("../../state/environments", () => ({
+  usePrimaryEnvironment: () => null,
   useEnvironments: () => ({
     environments: [
       { environmentId: "laptop", label: "Laptop", connection: { phase: "connected" } },
@@ -45,9 +47,11 @@ vi.mock("../../state/environments", () => ({
     ],
   }),
 }));
-vi.mock("../../state/server", async () => {
+vi.mock("../../state/server", async (original) => {
+  const actual = await original<object>();
   const { Atom } = await import("effect/reactivity");
   return {
+    ...actual,
     serverEnvironment: {
       qaLive: (input: unknown) => ({ kind: "snapshot", target: input }),
       qaDetails: (input: unknown) => ({ kind: "details", target: input }),
@@ -264,6 +268,7 @@ it("keeps runs scoped to the selected project and environment when switching the
   await screen.getByRole("button", { name: "Run", exact: true }).click();
   // Starting a suite leaves the page where it is; its run opens when asked for.
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Show details of alpha tests", exact: true }).click();
   await screen.getByRole("button", { name: "View run", exact: true }).click();
   await page.getByText("Run output", { exact: true }).click();
   await expect
@@ -272,11 +277,12 @@ it("keeps runs scoped to the selected project and environment when switching the
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await screen.getByRole("combobox", { name: "QA repository" }).click();
   await page.getByRole("option", { name: "Beta · Remote" }).click();
-  await expect.element(screen.getByRole("heading", { name: "beta tests" })).toBeVisible();
+  await expect.element(screen.getByRole("rowgroup", { name: "beta tests" })).toBeVisible();
   await expect
     .element(screen.getByText("laptop:alpha: alpha tests: captured output", { exact: true }))
     .not.toBeInTheDocument();
   await screen.getByRole("button", { name: "Run", exact: true }).click();
+  await screen.getByRole("button", { name: "Show details of beta tests", exact: true }).click();
   await screen.getByRole("button", { name: "View run", exact: true }).click();
   await page.getByText("Run output", { exact: true }).click();
   await expect
@@ -334,7 +340,7 @@ it("shows a running suite's steps and newest output in its card, and all of it i
     </SidebarProvider>,
     { router: "/qa" },
   );
-  const suite = screen.getByRole("region", { name: started.suite.name, exact: true });
+  const suite = screen.getByRole("rowgroup", { name: started.suite.name, exact: true });
   await expect
     .element(suite.getByRole("listitem", { name: "Update checkout: done", exact: true }))
     .toBeVisible();
@@ -348,6 +354,7 @@ it("shows a running suite's steps and newest output in its card, and all of it i
   await expect
     .element(suite.getByRole("log"))
     .toHaveTextContent(`${lines.slice(-11).join(" ")} newest line`);
+  await suite.getByRole("button", { name: `Show details of ${started.suite.name}` }).click();
   await suite.getByRole("button", { name: "View run", exact: true }).click();
   const details = page.getByRole("dialog", { name: started.suite.name, exact: true });
   await expect
@@ -380,7 +387,8 @@ it("opens failed run output without a report and lets it be collapsed", async ()
     </SidebarProvider>,
     { router: "/qa" },
   );
-  const suite = screen.getByRole("region", { name: run.suite.name, exact: true });
+  const suite = screen.getByRole("rowgroup", { name: run.suite.name, exact: true });
+  await suite.getByRole("button", { name: `Show details of ${run.suite.name}` }).click();
   await expect.element(suite.getByText(failure.outputTail!, { exact: true })).toBeVisible();
   await suite.getByRole("button", { name: "View run", exact: true }).click();
   const details = page.getByRole("dialog", { name: run.suite.name, exact: true });
@@ -572,33 +580,31 @@ it("groups the catalog and combines search with result filters", async () => {
   await expect
     .element(screen.getByRole("heading", { name: "Test suites", exact: true }))
     .toBeVisible();
-  await screen.getByText("Backend", { exact: true }).click();
+  const backend = screen.getByRole("button", { name: /^Backend / });
+  await backend.click();
   await expect
-    .element(
-      screen
-        .getByRole("group", { name: "Backend", exact: true })
-        .getByText("API integration tests", { exact: true }),
-    )
-    .not.toBeVisible();
-  await screen.getByText("Backend", { exact: true }).click();
+    .element(screen.getByRole("rowgroup", { name: "API integration tests", exact: true }))
+    .not.toBeInTheDocument();
+  await backend.click();
   await expect
-    .element(screen.getByRole("heading", { name: "API integration tests", exact: true }))
+    .element(screen.getByRole("rowgroup", { name: "API integration tests", exact: true }))
     .toBeVisible();
   await screen.getByRole("combobox", { name: "Group suites by" }).click();
   await page.getByRole("option", { name: "Test type", exact: true }).click();
   await expect
-    .element(screen.getByRole("group", { name: "Playwright", exact: true }))
+    .element(screen.getByRole("rowgroup", { name: "Playwright", exact: true }))
     .toBeVisible();
   await expect
-    .element(screen.getByRole("group", { name: "Backend", exact: true }))
+    .element(screen.getByRole("rowgroup", { name: "Backend", exact: true }))
     .not.toBeInTheDocument();
   await screen.getByRole("searchbox", { name: "Search suites" }).fill("FAMILY");
-  await screen.getByRole("button", { name: "Needs attention 1", exact: true }).click();
+  await screen.getByRole("combobox", { name: "Filter suite results" }).click();
+  await page.getByRole("option", { name: "Needs attention", exact: true }).click();
   await expect
-    .element(screen.getByRole("heading", { name: "Family browser journeys", exact: true }))
+    .element(screen.getByRole("rowgroup", { name: "Family browser journeys", exact: true }))
     .toBeVisible();
   await expect
-    .element(screen.getByRole("heading", { name: "Family mobile flows", exact: true }))
+    .element(screen.getByRole("rowgroup", { name: "Family mobile flows", exact: true }))
     .not.toBeInTheDocument();
   await expect.element(screen.getByText("1 of 7 suites", { exact: true })).toBeVisible();
   await screen.getByRole("searchbox", { name: "Search suites" }).fill("unknown");
@@ -617,25 +623,26 @@ it("shows freshness separately from results, filters affected suites and control
     </SidebarProvider>,
     { router: "/qa" },
   );
-  const api = screen.getByRole("region", { name: "API integration tests" });
+  const api = screen.getByRole("rowgroup", { name: "API integration tests" });
   await expect
     .element(api.getByText("47 passed · 1 skipped · 1m 42s", { exact: true }))
     .toBeVisible();
+  await api.getByRole("button", { name: "Show details of API integration tests" }).click();
   await expect.element(api.getByText("Needs rerun", { exact: true })).toBeVisible();
   await api.getByText("Changed inputs (1)").click();
   await expect.element(api.getByText("backend/auth.ts")).toBeVisible();
   await screen.getByRole("button", { name: "Show affected", exact: true }).click();
   await expect
-    .element(screen.getByRole("heading", { name: "Backend unit tests" }))
+    .element(screen.getByRole("rowgroup", { name: "Backend unit tests" }))
     .not.toBeInTheDocument();
   await expect
-    .element(screen.getByRole("heading", { name: "Family browser journeys" }))
+    .element(screen.getByRole("rowgroup", { name: "Family browser journeys" }))
     .toBeVisible();
   await screen.getByRole("button", { name: "Run affected suites (5)" }).click();
   await expect
     .element(screen.getByText("5 queued · Runs continue when you leave QA."))
     .toBeVisible();
-  await expect.element(api.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  await expect.element(api.getByRole("button", { name: "Rerun", exact: true })).toBeDisabled();
   await screen.getByRole("button", { name: "Stop queued run" }).click();
   await expect
     .element(screen.getByRole("button", { name: "Run affected suites (5)" }))
@@ -689,6 +696,7 @@ it("lists individual results with paging, search, result filters, and failure de
     </SidebarProvider>,
     { router: "/qa" },
   );
+  await screen.getByRole("button", { name: "Show details of API integration tests" }).click();
   await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
   const results = page.getByRole("region", { name: "Individual tests", exact: true });
   await expect.element(results.getByText("1–50 of 123 tests", { exact: true })).toBeVisible();
@@ -731,6 +739,7 @@ it("lists individual results with paging, search, result filters, and failure de
       <QaPage />
     </SidebarProvider>,
   );
+  await screen.getByRole("button", { name: "Show details of API integration tests" }).click();
   await expect
     .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
     .toBeEnabled();
@@ -742,6 +751,7 @@ it("lists individual results with paging, search, result filters, and failure de
       <QaPage />
     </SidebarProvider>,
   );
+  await screen.getByRole("button", { name: "Show details of API integration tests" }).click();
   await screen.getByRole("button", { name: "View tests (123)", exact: true }).click();
   await expect
     .element(
@@ -766,6 +776,7 @@ it("lists individual results with paging, search, result filters, and failure de
       <QaPage />
     </SidebarProvider>,
   );
+  await screen.getByRole("button", { name: "Show details of API integration tests" }).click();
   await expect
     .element(screen.getByRole("button", { name: "View tests (123)", exact: true }))
     .not.toBeInTheDocument();
@@ -845,7 +856,8 @@ it("picks a device for each suite, lets people choose another, waits for busy on
     </SidebarProvider>,
     { router: "/qa" },
   );
-  const tablet = screen.getByRole("region", { name: "Tablet flows" });
+  const tablet = screen.getByRole("rowgroup", { name: "Tablet flows" });
+  await tablet.getByRole("button", { name: "Show details of Tablet flows" }).click();
   const picker = tablet.getByRole("combobox", { name: "Device for Android tablet" });
   // Emulators come first, and a stopped one starts with the run; one another run holds is skipped.
   await expect.element(picker).toHaveTextContent("Pixel_TabletAuto");
@@ -860,7 +872,8 @@ it("picks a device for each suite, lets people choose another, waits for busy on
     .toContainEqual({ suiteId: "tablet", requirement: "0", deviceKey: "samsung" });
 
   // A chosen device that went offline stays chosen; runs use another until it is back.
-  const phone = screen.getByRole("region", { name: "Phone flows" });
+  const phone = screen.getByRole("rowgroup", { name: "Phone flows" });
+  await phone.getByRole("button", { name: "Show details of Phone flows" }).click();
   await expect
     .element(phone.getByRole("combobox", { name: "Device for Android phone" }))
     .toHaveTextContent("Medium_PhoneAuto");
@@ -868,14 +881,16 @@ it("picks a device for each suite, lets people choose another, waits for busy on
     .element(phone.getByText("Pixel 8 is offline. Runs use Medium_Phone until it is available."))
     .toBeVisible();
 
-  const tv = screen.getByRole("region", { name: "TV playback" });
+  const tv = screen.getByRole("rowgroup", { name: "TV playback" });
   await expect.element(tv.getByText("Blocked", { exact: true })).toBeVisible();
+  await tv.getByRole("button", { name: "Show details of TV playback" }).click();
   await expect.element(tv.getByText(/^No Android TV is available\./)).toBeVisible();
   await expect.element(tv.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
   await expect.element(tablet.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
 
   // A chosen device another suite's run holds is waited for, so the suite is not blocked.
-  const pairing = screen.getByRole("region", { name: "Tablet pairing" });
+  const pairing = screen.getByRole("rowgroup", { name: "Tablet pairing" });
+  await pairing.getByRole("button", { name: "Show details of Tablet pairing" }).click();
   await expect
     .element(pairing.getByRole("combobox", { name: "Device for Android tablet" }))
     .toHaveTextContent("Waiting for Tablet_7");

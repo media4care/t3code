@@ -4,6 +4,7 @@ import {
   qaRemoteOf,
   qaSuiteLanes,
   type EnvironmentId,
+  type QaApp,
   type QaLane,
   type QaCheckout,
   type RepositoryIdentity,
@@ -17,9 +18,8 @@ import {
   type QaTestKind,
   type QaScheduleConfiguration,
   type QaTestCase,
-  type QaVariant,
 } from "@t3tools/contracts";
-import { qaDeviceRequirementLabel } from "@t3tools/shared/qaDevices";
+import { qaDeviceRequirementLabel, qaOsLabel, qaOsMajor } from "@t3tools/shared/qaDevices";
 import * as Schema from "effect/Schema";
 
 export const decodeQaCiReport = Schema.decodeUnknownSync(Schema.fromJsonString(QaCiReport));
@@ -150,7 +150,7 @@ export const QA_KIND_LABELS: Record<QaTestKind, string> = {
 };
 
 export const QA_GROUP_OPTIONS = [
-  { value: "component", label: "Component" },
+  { value: "app", label: "App" },
   { value: "kind", label: "Test type" },
   { value: "none", label: "All suites" },
 ] as const;
@@ -287,30 +287,32 @@ export function qaLaneHeadline({ run, outcome }: QaLaneResult) {
   }
 }
 
-export function qaLaneLabel(lane: QaLane) {
+/** A lane's device and OS version, without its variant: "Android tablet · Android 13". */
+export function qaLaneDeviceLabel(lane: QaLane) {
   const device = qaDeviceRequirementLabel(lane.requirement);
+  return lane.os ? `${device} · ${qaOsLabel(lane.requirement.platform, lane.os)}` : device;
+}
+
+export function qaLaneLabel(lane: QaLane) {
+  const device = qaLaneDeviceLabel(lane);
   return lane.variant ? `${device} · ${lane.variant.name}` : device;
 }
 
-/** A suite's lanes as a grid: a row per device, a column per variant, empty where none runs. */
-export function qaLaneGrid(lanes: ReadonlyArray<QaLaneResult>) {
-  const columns = [
-    ...new Map(
-      lanes.flatMap(({ lane }) => (lane.variant ? [[lane.variant.id, lane.variant]] : [])),
-    ).values(),
-  ] satisfies ReadonlyArray<QaVariant>;
-  const devices = [...new Set(lanes.map(({ lane }) => lane.device))];
-  const rows = devices.map((device) => {
-    const cells = lanes.filter(({ lane }) => lane.device === device);
-    return {
-      device,
-      label: qaDeviceRequirementLabel(cells[0]!.lane.requirement),
-      cells: columns.length
-        ? columns.map((variant) => cells.find(({ lane }) => lane.variant?.id === variant.id))
-        : cells,
-    };
-  });
-  return { columns, rows };
+/** A suite's lanes in rows under their variant's name; one untitled section without variants. */
+export function qaLaneSections(lanes: ReadonlyArray<QaLaneResult>) {
+  const sections = new Map<string, { title: string | null; lanes: QaLaneResult[] }>();
+  for (const result of lanes) {
+    const key = result.lane.variant?.id ?? "";
+    const section = sections.get(key) ?? { title: result.lane.variant?.name ?? null, lanes: [] };
+    section.lanes.push(result);
+    sections.set(key, section);
+  }
+  return [...sections.values()];
+}
+
+/** How a run's device is shown: "Physical", or the kind of virtual device. */
+export function qaDeviceKind(device: { readonly platform: string; readonly physical: boolean }) {
+  return device.physical ? "Physical" : device.platform === "ios" ? "Simulator" : "Emulator";
 }
 
 /** A run's name in lists: its suite, and its lane for a suite run per device. */
@@ -320,14 +322,30 @@ export function qaRunTitle(run: QaRun) {
 }
 export type QaDashboardEntry = ReturnType<typeof qaDashboard>["entries"][number];
 
+export interface QaSuiteGroup {
+  readonly key: string;
+  readonly label: string;
+  /** The apps its suites test, whose icons it shows. */
+  readonly apps: ReadonlyArray<QaApp>;
+  /** Suites that test no app, when others do; it starts closed. */
+  readonly other: boolean;
+  readonly entries: ReadonlyArray<QaDashboardEntry>;
+}
+
+/**
+ * By app, suites go under the app they test, under one group for each set of apps they test
+ * together, and the rest under Other. Without apps, by component.
+ */
 export function groupQaSuites(
   entries: readonly QaDashboardEntry[],
   grouping: QaGrouping,
   search: string,
   filter: QaResultFilter,
-) {
+  apps: ReadonlyArray<QaApp> = [],
+): ReadonlyArray<QaSuiteGroup> {
   const terms = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const groups = new Map<string, QaDashboardEntry[]>();
+  const byApp = grouping === "app" && entries.some((entry) => entry.suite.apps?.length);
+  const groups = new Map<string, { label: string; apps: QaApp[]; entries: QaDashboardEntry[] }>();
   for (const entry of entries) {
     if (
       filter === "affected"
@@ -335,22 +353,182 @@ export function groupQaSuites(
         : filter !== "all" && entry.category !== filter
     )
       continue;
+    const tested = (entry.suite.apps ?? []).flatMap((id) => apps.filter((app) => app.id === id));
     const text =
-      `${entry.suite.name} ${entry.suite.id} ${entry.component} ${QA_KIND_LABELS[entry.kind]} ${entry.suite.command}`.toLowerCase();
+      `${entry.suite.name} ${entry.suite.id} ${entry.component} ${QA_KIND_LABELS[entry.kind]} ${entry.suite.command} ${tested.map((app) => app.name).join(" ")}`.toLowerCase();
     if (!terms.every((term) => text.includes(term))) continue;
-    const label =
-      grouping === "component"
+    const key = !byApp
+      ? grouping === "app"
         ? entry.component
         : grouping === "kind"
           ? QA_KIND_LABELS[entry.kind]
-          : "All suites";
-    const group = groups.get(label) ?? [];
-    group.push(entry);
-    groups.set(label, group);
+          : "All suites"
+      : tested.length
+        ? `app:${tested.map((app) => app.id).join("+")}`
+        : "other";
+    const group = groups.get(key) ?? {
+      label: !byApp
+        ? key
+        : tested.length === 0
+          ? "Other"
+          : tested.length === 1
+            ? tested[0]!.name
+            : `${entry.suite.component ?? tested.map((app) => app.name).join(" + ")} · ${tested.length === 2 ? "both apps" : `${tested.length} apps`}`,
+      apps: byApp ? tested : [],
+      entries: [],
+    };
+    group.entries.push(entry);
+    groups.set(key, group);
   }
+  // Groups keep the catalog's order, so a project lists what matters most first; Other goes last.
   return [...groups]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([label, items]) => ({ label, entries: items }));
+    .map(([key, group]) => ({ key, ...group, other: byApp && key === "other" }))
+    .sort((a, b) => Number(a.other) - Number(b.other));
+}
+
+/** A suite that passed but should run again: its inputs changed or its result expired. */
+export function qaNeedsRerun(entry: QaDashboardEntry) {
+  // Without declared inputs freshness is unknown, which is no reason to call a pass stale.
+  return (
+    entry.category === "passed" &&
+    !!entry.freshness?.needsRun &&
+    entry.freshness.state !== "unknown"
+  );
+}
+
+/** Where each of a group's suites, or its lanes, stands. */
+function qaGroupItems(entries: ReadonlyArray<QaDashboardEntry>) {
+  return entries.flatMap((entry) =>
+    entry.lanes.length
+      ? entry.lanes.map(({ lane, run, outcome }) => ({
+          key: `${entry.suite.id}/${lane.key}`,
+          run,
+          outcome,
+        }))
+      : [{ key: entry.suite.id, run: entry.run, outcome: qaLaneOutcome(entry.run, false) }],
+  );
+}
+
+/**
+ * How a group stands on the commit QA tests: its headline, a cell per suite or lane, and how
+ * many ran on `commit`; null when the commit is unknown.
+ */
+export function qaGroupSummary(entries: ReadonlyArray<QaDashboardEntry>, commit: string | null) {
+  const items = qaGroupItems(entries);
+  const count = (outcome: QaLaneOutcome) => items.filter((item) => item.outcome === outcome).length;
+  const passed = count("passed");
+  const failed = count("failed") + count("not-run");
+  const stale = entries.some(qaNeedsRerun);
+  const tone: QaLaneOutcome | "stale" =
+    count("running") || count("queued")
+      ? "running"
+      : failed
+        ? "failed"
+        : passed === items.length
+          ? stale
+            ? "stale"
+            : "passed"
+          : "never";
+  const headline = {
+    running: count("running") ? "Running" : "Queued",
+    queued: "Queued",
+    failed: `${failed} failed`,
+    "not-run": `${failed} failed`,
+    stale: "Needs rerun",
+    passed: "Passed",
+    never: passed ? `${items.length - passed} not run` : "Not run",
+  }[tone];
+  const latest =
+    commit === null ? null : items.filter((item) => item.run?.commit === commit).length;
+  return {
+    tone,
+    headline,
+    cells: items.map(({ key, outcome }) => ({ key, outcome })),
+    passed,
+    total: items.length,
+    detail: `${passed}/${items.length} passed${latest === null ? "" : latest === items.length ? " · all latest" : ` · ${latest} on latest`}`,
+  };
+}
+
+export interface QaAttentionItem {
+  readonly key: string;
+  readonly entry: QaDashboardEntry;
+  readonly lane?: QaLane;
+  readonly run: QaRun | undefined;
+  readonly reason: "failed" | "not-run" | "stale";
+}
+
+/** What needs someone: failed suites and lanes, ones that could not run, then passed ones whose inputs changed. */
+export function qaAttention(
+  entries: ReadonlyArray<QaDashboardEntry>,
+): ReadonlyArray<QaAttentionItem> {
+  const items = entries.flatMap((entry): ReadonlyArray<QaAttentionItem> => {
+    if (entry.lanes.length)
+      return entry.lanes.flatMap(({ lane, run, outcome }) =>
+        outcome === "failed" || outcome === "not-run"
+          ? [{ key: `${entry.suite.id}/${lane.key}`, entry, lane, run, reason: outcome }]
+          : [],
+      );
+    const outcome = qaLaneOutcome(entry.run, false);
+    if (outcome === "failed" || outcome === "not-run")
+      return [{ key: entry.suite.id, entry, run: entry.run, reason: outcome }];
+    return [];
+  });
+  const stale = entries.flatMap((entry): ReadonlyArray<QaAttentionItem> =>
+    qaNeedsRerun(entry)
+      ? [{ key: `${entry.suite.id}:stale`, entry, run: entry.run, reason: "stale" }]
+      : [],
+  );
+  const order = { failed: 0, "not-run": 1, stale: 2 };
+  return [...items, ...stale].sort((a, b) => order[a.reason] - order[b.reason]);
+}
+
+/** The latest result on one OS version, by the kind of device it ran on. */
+export interface QaCoverageCell {
+  readonly platform: "ios" | "android";
+  readonly os: string;
+  readonly virtual?: QaRun;
+  readonly physical?: QaRun;
+}
+
+const COVERAGE_STATUSES: ReadonlyArray<QaRunStatus> = ["passed", "failed", "running"];
+
+/** The suites whose runs count for a group's devices: those testing all its apps, or its own. */
+export function qaGroupSuiteIds(group: QaSuiteGroup, entries: ReadonlyArray<QaDashboardEntry>) {
+  const suites = group.apps.length
+    ? entries.filter((entry) => group.apps.every((app) => entry.suite.apps?.includes(app.id)))
+    : group.entries;
+  return new Set(suites.map((entry) => entry.suite.id));
+}
+
+/**
+ * The OS versions these suites ran on, with the latest result per version and device kind. Any
+ * run counts, including one on a device someone chose by hand, but not one that never ran its command.
+ */
+export function qaDeviceCoverage(
+  suiteIds: ReadonlySet<string>,
+  runs: ReadonlyArray<QaRun>,
+): ReadonlyArray<QaCoverageCell> {
+  const cells = new Map<
+    string,
+    { platform: "ios" | "android"; os: string; virtual?: QaRun; physical?: QaRun }
+  >();
+  for (const run of runs) {
+    if (!suiteIds.has(run.suite.id) || !COVERAGE_STATUSES.includes(run.status)) continue;
+    for (const device of run.devices ?? []) {
+      const os = qaOsMajor(device.version);
+      if (os === null) continue;
+      const key = `${device.platform}:${os}`;
+      const cell = cells.get(key) ?? { platform: device.platform, os };
+      const kind = device.physical ? "physical" : "virtual";
+      const current = cell[kind];
+      if (!current || Date.parse(run.startedAt) > Date.parse(current.startedAt)) cell[kind] = run;
+      cells.set(key, cell);
+    }
+  }
+  return [...cells.values()].sort(
+    (a, b) => a.platform.localeCompare(b.platform) || Number(a.os) - Number(b.os),
+  );
 }
 
 export function qaFreshnessLabel(freshness: QaFreshness) {

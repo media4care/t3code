@@ -25,6 +25,37 @@ const DEFAULT_DISPLAY_SCREENSHOT = `f=$(mktemp -t t3-screenshot) || exit 1
 trap 'rm -f "$f"' 0
 xcrun simctl io "$1" screenshot --type=png "$f" >/dev/null && base64 -i "$f"`;
 
+// The hub reports an emulator's version as "Android", so the AVD's system image says which.
+const AVD_TARGETS = `d="\${ANDROID_AVD_HOME:-\${ANDROID_USER_HOME:-$HOME/.android}/avd}"
+for f in "$d"/*.ini; do [ -f "$f" ] && printf '%s\\t%s\\n' "$(basename "$f" .ini)" "$(sed -n 's/^target=//p' "$f")"; done; true`;
+// From API 33 on, the Android version is the API level minus 20.
+const OLDER_ANDROID: Partial<Record<number, string>> = {
+  21: "5",
+  22: "5",
+  23: "6",
+  24: "7",
+  25: "7",
+  26: "8",
+  27: "8",
+  28: "9",
+  29: "10",
+  30: "11",
+  31: "12",
+  32: "12",
+};
+
+/** Each AVD's Android version, such as "Android 15", from `name<TAB>android-35` lines. */
+export function avdVersions(output: string) {
+  return new Map(
+    output.split(/\r?\n/).flatMap((line) => {
+      const [name, target] = line.split("\t");
+      const api = Number(/^android-(\d+)/.exec(target?.trim() ?? "")?.[1]);
+      const release = api >= 33 ? String(api - 20) : OLDER_ANDROID[api];
+      return name && release ? [[name, `Android ${release}`] as const] : [];
+    }),
+  );
+}
+
 const HubDevice = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -183,6 +214,14 @@ export const makeDeviceHubOperations = (options: {
             physical: false,
           });
         }
+      }
+    }
+    if (androidAvailable && devices.some((device) => device.version === "Android")) {
+      const targets = yield* run("sh", ["-c", AVD_TARGETS]);
+      const versions = avdVersions(targets.code === 0 ? targets.stdout : "");
+      for (const [index, device] of devices.entries()) {
+        const version = device.version === "Android" ? versions.get(device.name) : undefined;
+        if (version) devices[index] = { ...device, version };
       }
     }
     const simulatorsUnlisted =

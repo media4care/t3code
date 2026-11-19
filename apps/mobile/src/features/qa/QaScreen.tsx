@@ -304,12 +304,13 @@ function ProjectQa({
           }}
         />
       ) : null}
-      {counts.total > 0 ? (
+      {snapshot && counts.total > 0 ? (
         <QaDashboard
           environmentId={environmentId}
           projectId={projectId}
           entries={entries}
           counts={counts}
+          snapshot={snapshot}
           canRun={connected && permission && !busy && !running && !snapshot?.batchRunning}
           canCancel={connected && permission && !busy}
           onRun={(suiteId, lanes) => {

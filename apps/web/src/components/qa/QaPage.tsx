@@ -14,6 +14,7 @@ import {
   QA_FILTER_OPTIONS,
   QA_GROUP_OPTIONS,
   groupQaSuites,
+  qaAttention,
   qaDashboard,
   qaProjects,
   qaRepositories,
@@ -40,7 +41,13 @@ import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../
 import { Input } from "../ui/input";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { QaRunBadge, QaSuiteGroup, QaSummary } from "./QaDashboard";
+import {
+  QaAttentionList,
+  QaGroupTiles,
+  QaRunBadge,
+  QaSuiteTable,
+  type QaDashboardContext,
+} from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaDevicePool, QaSimlockNote } from "./QaDevicePool";
 import { QaCheckoutStatus, QaRefComparison, QaRefPicker } from "./QaRefs";
@@ -157,7 +164,7 @@ function ProjectQa({
   );
   const [busy, setBusy] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  const [grouping, setGrouping] = useState<QaGrouping>("component");
+  const [grouping, setGrouping] = useState<QaGrouping>("app");
   const [filter, setFilter] = useState<QaResultFilter>("all");
   const [search, setSearch] = useState("");
   const snapshot = query.data;
@@ -169,7 +176,9 @@ function ProjectQa({
     snapshot?.queuedLanes,
   );
   const affectedCount = snapshot?.freshness?.filter((item) => item.needsRun).length ?? 0;
-  const groups = groupQaSuites(entries, grouping, search, filter);
+  const apps = snapshot?.apps ?? [];
+  const groups = groupQaSuites(entries, grouping, search, filter, apps);
+  const appGroups = groupQaSuites(entries, "app", "", "all", apps);
   const visibleCount = groups.reduce((total, group) => total + group.entries.length, 0);
   const runSuite = async (suiteId: string, lanes?: ReadonlyArray<string>) => {
     setBusy(true);
@@ -180,6 +189,35 @@ function ProjectQa({
     setBusy(true);
     await cancel({ environmentId, input: { projectId, runId } });
     setBusy(false);
+  };
+  const context: QaDashboardContext = {
+    environmentId,
+    projectId,
+    apps,
+    icons: snapshot?.icons ?? {},
+    commit: snapshot?.checkout?.commit ?? null,
+    devices: {
+      projectId,
+      simlock,
+      pool: pool.data?.entries ?? null,
+      selections: snapshot?.deviceSelections ?? [],
+      canChoose: connected && canSetDevice,
+      onChoose: (suiteId, requirement, deviceKey) => {
+        void setDevice({
+          environmentId,
+          input: { ...scope, suiteId, requirement, deviceKey },
+        });
+      },
+    },
+    canRun: connected && canRun && !busy && !running && !snapshot?.batchRunning,
+    canCancel: connected && canRun && !busy,
+    onRun: (suiteId, lanes) => {
+      void runSuite(suiteId, lanes);
+    },
+    onCancel: (runId) => {
+      void cancelRun(runId);
+    },
+    onView: setSelectedRun,
   };
   return (
     <>
@@ -274,7 +312,12 @@ function ProjectQa({
           </p>
         </div>
       ) : null}
-      {counts.total > 0 ? <QaSummary counts={counts} filter={filter} onFilter={setFilter} /> : null}
+      {counts.total > 0 ? (
+        <>
+          <QaGroupTiles groups={appGroups} context={context} />
+          <QaAttentionList items={qaAttention(entries)} context={context} />
+        </>
+      ) : null}
       {snapshot?.ref && snapshot.refs ? (
         <QaRefComparison
           refs={snapshot.refs}
@@ -373,7 +416,7 @@ function ProjectQa({
               <Input
                 type="search"
                 aria-label="Search suites"
-                placeholder="Search suites, components, or test types…"
+                placeholder="Search suites, apps, or test types…"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -424,40 +467,15 @@ function ProjectQa({
               {visibleCount} of {counts.total} suites
             </span>
           </div>
-          <div className="grid gap-6">
-            {groups.map((group) => (
-              <QaSuiteGroup
-                key={`${grouping}:${group.label}`}
-                environmentId={environmentId}
-                projectId={projectId}
-                label={group.label}
-                entries={group.entries}
-                showComponent={grouping !== "component"}
-                devices={{
-                  projectId,
-                  simlock,
-                  pool: pool.data?.entries ?? null,
-                  selections: snapshot?.deviceSelections ?? [],
-                  canChoose: connected && canSetDevice,
-                  onChoose: (suiteId, requirement, deviceKey) => {
-                    void setDevice({
-                      environmentId,
-                      input: { ...scope, suiteId, requirement, deviceKey },
-                    });
-                  },
-                }}
-                canRun={connected && canRun && !busy && !running && !snapshot?.batchRunning}
-                canCancel={connected && canRun && !busy}
-                onRun={(suiteId, lanes) => {
-                  void runSuite(suiteId, lanes);
-                }}
-                onCancel={(runId) => {
-                  void cancelRun(runId);
-                }}
-                onView={setSelectedRun}
-              />
-            ))}
-          </div>
+          {groups.length ? (
+            <QaSuiteTable
+              groups={groups}
+              entries={entries}
+              runs={[...(snapshot?.latestRuns ?? []), ...(snapshot?.recentRuns ?? [])]}
+              showComponent={grouping !== "app"}
+              context={context}
+            />
+          ) : null}
           {groups.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border p-8 text-center">
               <p className="font-medium">No suites match these filters</p>

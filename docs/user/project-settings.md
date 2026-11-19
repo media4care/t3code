@@ -72,8 +72,7 @@ Open **QA** and choose a repository to run its test suites and inspect previous 
 Clones and worktrees of one remote share their QA, so a repository appears once per
 environment. For a fork, that is its `origin`, not the upstream it tracks. Only
 environments with **Run QA here** on list their repositories.
-On mobile, QA is available in the navigation overflow; use **Settings → Navigation**
-to move it into the tab bar. Web and desktop also offer **Open QA** in the command
+On mobile, QA is in the tab bar; use **Settings → Navigation** to reorder it. Web and desktop also offer **Open QA** in the command
 palette and the configurable `qa.open` keyboard command.
 
 Add suites to the project's checked-in `t3.json`, preserving its other settings:
@@ -105,9 +104,24 @@ its history. Refresh the catalog after editing the configuration.
 
 Add `component` labels such as Backend or Mobile, and a `kind` such as `unit`,
 `integration`, `playwright`, `maestro`, `e2e`, or `tooling` to organize the dashboard.
-Switch between component and test-type groups, search the catalog, or select a
-health total to filter suites by their latest result. **Needs attention** includes
-failed, incomplete, cancelled, and interrupted runs; **Never run** means no QA history.
+To group suites by the apps you ship, list them in `qa.apps` and name them on each suite:
+
+```json
+{
+  "qa": {
+    "apps": [{ "id": "web", "name": "Storefront", "icon": "web/public/icon.png" }],
+    "suites": [{ "id": "web-e2e", "apps": ["web"], "...": "..." }]
+  }
+}
+```
+
+An `icon` is a PNG, JPEG or WebP file of at most 16 KB, relative to `t3.json`. Each app
+gets its own group, suites that test several apps share one, and suites without an app
+go under **Other**. Without apps, suites are grouped by component. **On the latest
+commit** sums up each app, and **Needs attention** lists failed suites and devices,
+ones that could not run, and passed ones whose inputs changed. Search the catalog,
+switch to test-type groups, or filter suites by their latest result. Open a suite's row
+for its devices, failure output, freshness and command.
 
 For a repository with a remote, QA tests pushed code in its own checkout, separate
 from your projects and agent worktrees. Pick a branch or tag next to the repository;
@@ -233,7 +247,8 @@ When a suite needs a device, list it under `devices`:
 
 Each device has a `platform`, `ios` or `android`. Optionally set a `formFactor`
 (`phone`, `tablet`, `tv`, `watch` or `other`), a `type` (`virtual`, `physical`, or the
-default `any`), a `defaultDevice` name such as an AVD name, and an `id`. Up to four
+default `any`), a `defaultDevice` name such as an AVD name, an `id`, and `os`, the
+major OS versions it must run, such as `["13", "15"]`. Up to four
 devices can be listed; each gets a different device. QA picks a running emulator or
 simulator first, then one it can start, then a connected physical device. Choose
 another on the suite to keep using it on this environment. If a chosen device is
@@ -280,9 +295,13 @@ command reads its `id` from `T3_QA_VARIANT`:
 }
 ```
 
-The suite card shows a grid with a row per device and a column per variant. Each cell
-keeps its own result and output. Rerun one cell with its button, or select several
-and run them with the suite's **Run** button. On mobile, the cells are listed one per row.
+Each device with `os` runs once per version, such as on Android 13 and on Android 15;
+QA picks a device on that version. The suite lists each device and version under its
+variant, with the device it ran on and whether that was an emulator, a simulator or a
+physical device. Each keeps its own result and output. Rerun one with its button, or
+select several and run them with the suite's **Run** button. Each app also shows the OS
+versions its suites ran on, with the latest result on virtual and physical devices,
+including runs on devices someone chose by hand.
 
 To let [Simlock](https://incubator.callstack.com/simlock/) hand out the devices, run a
 Simlock worker on the QA machine and set **Settings → Devices → QA → QA devices** to
@@ -290,7 +309,9 @@ Simlock worker on the QA machine and set **Settings → Devices → QA → QA de
 must be on the server's `PATH`. Each run then leases its devices with
 `simlock --local lease`, using the requirement's `platform`, its `defaultDevice` as the
 model or else its `formFactor` as the class, and `--physical` for a `physical` type.
-Simlock queues the request while every device is busy, for up to 30 minutes. The run
+Simlock queues the request while every device is busy, for up to 30 minutes. Simlock
+cannot lease by OS version, so a device with `os` that Simlock leases on another
+version is recorded as not run; use this machine's devices for those. The run
 returns its devices when it ends, and Simlock wipes them. Commands receive the same
 variables, with the simulator's UDID or the emulator's serial as the device ID, plus
 the variables Simlock provides, such as `SIMLOCK_IOS_DEVICE_SET`. Simlock keeps its
