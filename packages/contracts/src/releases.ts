@@ -27,8 +27,12 @@ export const ReleasesConfiguration = Schema.Struct({
 export type ReleasesConfiguration = typeof ReleasesConfiguration.Type;
 
 export const RELEASES_DEFAULT_REFRESH_MINUTES = 15;
-export const RELEASE_ICON_MAX_BYTES = 16 * 1024;
-const RELEASE_ICON_DATA_URL_MAX = Math.ceil(RELEASE_ICON_MAX_BYTES / 3) * 4 + 64;
+export const REPOSITORY_ICON_MAX_BYTES = 16 * 1024;
+/** Icons a project's `t3.json` points at, as data URLs by key. */
+export const RepositoryIcons = Schema.Record(
+  Schema.String,
+  Schema.String.check(Schema.isMaxLength(Math.ceil(REPOSITORY_ICON_MAX_BYTES / 3) * 4 + 64)),
+);
 
 export const ReleaseSource = Schema.Struct({
   id: ShortText,
@@ -248,12 +252,7 @@ export const ReleasesSnapshot = Schema.Struct({
   /** The last document the command produced, kept when a later run fails. */
   document: Schema.NullOr(ReleaseStatusDocument),
   /** Group icons from `groups`, as data URLs by group id. */
-  icons: Schema.optionalKey(
-    Schema.Record(
-      Schema.String,
-      Schema.String.check(Schema.isMaxLength(RELEASE_ICON_DATA_URL_MAX)),
-    ),
-  ),
+  icons: Schema.optionalKey(RepositoryIcons),
 });
 export type ReleasesSnapshot = typeof ReleasesSnapshot.Type;
 

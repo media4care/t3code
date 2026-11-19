@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
-  RELEASE_ICON_MAX_BYTES,
+  REPOSITORY_ICON_MAX_BYTES,
   SecretProviderId,
   type ReleaseStatusDocument,
   type ReleasesSnapshot,
@@ -272,7 +272,7 @@ describe("ReleasesService", () => {
       yield* fs.makeDirectory(path.join(root, "icons"));
       yield* fs.writeFile(path.join(root, "icons/app.png"), new Uint8Array(png));
       yield* fs.writeFileString(path.join(root, "icons/secret.png"), "TOKEN=abc");
-      const large = new Uint8Array(RELEASE_ICON_MAX_BYTES + 1);
+      const large = new Uint8Array(REPOSITORY_ICON_MAX_BYTES + 1);
       large.set(png);
       yield* fs.writeFile(path.join(root, "icons/large.png"), large);
 

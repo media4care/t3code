@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { DeviceFormFactor, DeviceHostId, DevicePlatform, DevicePoolKey } from "./device.ts";
 import type { RepositoryIdentity } from "./environment.ts";
+import { RepositoryIcons } from "./releases.ts";
 import { RecurringSchedule } from "./scheduledTask.ts";
 
 /** QA tests the remote a checkout pushes to: a fork's origin, not the upstream it tracks. */
@@ -66,6 +67,14 @@ export const QaDeviceRequirement = Schema.Struct({
   type: Schema.optionalKey(QaDeviceType),
   /** The name of the device to use when nobody chose one, such as an AVD name. */
   defaultDevice: Schema.optionalKey(ShortText),
+  /** Major OS versions it must run, such as "14"; a suite run per device runs once on each. */
+  os: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isPattern(/^\d{1,3}$/))).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(6),
+      Schema.makeFilter((versions) => new Set(versions).size === versions.length),
+    ),
+  ),
 });
 export type QaDeviceRequirement = typeof QaDeviceRequirement.Type;
 
@@ -86,6 +95,10 @@ export const QaSuite = Schema.Struct({
   id: ShortText.check(Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)),
   name: ShortText,
   component: Schema.optionalKey(ShortText),
+  /** The ids of the apps it tests, from `qa.apps`. */
+  apps: Schema.optionalKey(
+    Schema.Array(Identifier).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+  ),
   kind: Schema.optionalKey(QaTestKind),
   command: TrimmedNonEmptyString.check(Schema.isMaxLength(8000)),
   cwd: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
@@ -133,13 +146,15 @@ export const QaSuite = Schema.Struct({
 );
 export type QaSuite = typeof QaSuite.Type;
 
-/** One device, and variant, of a suite run per device; a run of it uses only that device. */
+/** One device, OS version and variant of a suite run per device; a run of it uses only that device. */
 export interface QaLane {
-  /** Stored on its runs; `<device>` or `<device>/<variant>`. */
+  /** Stored on its runs; `<device>`, then `@<os>` and `/<variant>` when it has them. */
   readonly key: string;
   /** The key of its device requirement. */
   readonly device: string;
+  /** Its device requirement, narrowed to the lane's OS version. */
   readonly requirement: QaDeviceRequirement;
+  readonly os?: string;
   readonly variant?: QaVariant;
 }
 
@@ -148,24 +163,55 @@ export function qaSuiteLanes(suite: QaSuite): ReadonlyArray<QaLane> {
   if (suite.runPer !== "device") return [];
   return (suite.devices ?? []).flatMap((requirement, index): ReadonlyArray<QaLane> => {
     const device = qaDeviceRequirementKey(requirement, index);
-    if (!suite.variants) return [{ key: device, device, requirement }];
-    return suite.variants
-      .filter(
-        (variant) =>
-          !variant.devices ||
-          (requirement.id !== undefined && variant.devices.includes(requirement.id)),
-      )
-      .map((variant) => ({ key: `${device}/${variant.id}`, device, requirement, variant }));
+    const variants = suite.variants?.filter(
+      (variant) =>
+        !variant.devices ||
+        (requirement.id !== undefined && variant.devices.includes(requirement.id)),
+    );
+    return (requirement.os ?? [undefined]).flatMap((os) => {
+      const base = os === undefined ? device : `${device}@${os}`;
+      const lane = {
+        device,
+        requirement: os === undefined ? requirement : { ...requirement, os: [os] },
+        ...(os === undefined ? {} : { os }),
+      };
+      return variants
+        ? variants.map((variant) => ({ ...lane, key: `${base}/${variant.id}`, variant }))
+        : [{ ...lane, key: base }];
+    });
   });
 }
 
+/** An app QA groups suites by, as on the Releases tab. */
+export const QaApp = Schema.Struct({
+  id: Identifier,
+  name: ShortText,
+  /** A PNG, JPEG or WebP file of at most 16 KB, relative to `t3.json`. */
+  icon: Schema.optionalKey(InputPath),
+});
+export type QaApp = typeof QaApp.Type;
+
 export const QaConfiguration = Schema.Struct({
   sharedResults: Schema.optionalKey(Schema.Boolean),
+  apps: Schema.optionalKey(
+    Schema.Array(QaApp).check(
+      Schema.isMaxLength(20),
+      Schema.makeFilter((apps) => new Set(apps.map((app) => app.id)).size === apps.length),
+    ),
+  ),
   suites: Schema.Array(QaSuite).check(
     Schema.isMaxLength(100),
     Schema.makeFilter((suites) => new Set(suites.map((suite) => suite.id)).size === suites.length),
   ),
-});
+}).check(
+  Schema.makeFilter((configuration) => {
+    const ids = new Set(configuration.apps?.map((app) => app.id));
+    const unknown = configuration.suites
+      .flatMap((suite) => suite.apps ?? [])
+      .find((id) => !ids.has(id));
+    return unknown === undefined ? true : `suites name an unknown app "${unknown}"`;
+  }),
+);
 
 export const QaRunStatus = Schema.Literals([
   "running",
@@ -473,6 +519,9 @@ export const QaSnapshot = Schema.Struct({
   ref: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(QaCheckout)),
   refs: Schema.optionalKey(Schema.Array(QaRefSummary)),
+  apps: Schema.optionalKey(Schema.Array(QaApp)),
+  /** App icons as data URLs by app id. */
+  icons: Schema.optionalKey(RepositoryIcons),
 });
 export type QaSnapshot = typeof QaSnapshot.Type;
 

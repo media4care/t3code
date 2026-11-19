@@ -63,14 +63,14 @@ describe("workspace root navigation", () => {
     expect(workspaceUsesColumns("pullRequests")).toBe(true);
   });
 
-  it("includes Insights and preserves existing navigation preferences", () => {
+  it("leads with QA after Git Explorer and preserves existing navigation preferences", () => {
     expect(resolveWorkspaceTabOrder(undefined)).toEqual([
       "threads",
       "pullRequests",
       "gitExplorer",
-      "insights",
-      "usage",
       "qa",
+      "usage",
+      "insights",
       "releases",
     ]);
     expect(resolveWorkspaceTabOrder(["home", "usage", "issues", "threads"])).toEqual([
@@ -78,8 +78,8 @@ describe("workspace root navigation", () => {
       "threads",
       "pullRequests",
       "gitExplorer",
-      "insights",
       "qa",
+      "insights",
       "releases",
     ]);
     const order = resolveWorkspaceTabOrder(["threads", "pullRequests", "usage"]);

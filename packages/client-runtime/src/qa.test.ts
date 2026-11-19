@@ -11,7 +11,11 @@ import {
   groupQaSuites,
   qaDashboard,
   qaOutputTail,
-  qaLaneGrid,
+  qaAttention,
+  qaDeviceCoverage,
+  qaGroupSuiteIds,
+  qaGroupSummary,
+  qaLaneSections,
   qaLanesHeadline,
   qaProjects,
   qaRepositories,
@@ -107,13 +111,14 @@ it("sums up a suite run per device from each lane's latest run, ignoring older s
   expect(finished.run?.id).toBe("ios/swOnly");
   expect(finished.category).toBe("attention");
   expect(qaLanesHeadline(finished.lanes)).toBe("1 of 3 not run");
-  const grid = qaLaneGrid(finished.lanes);
-  expect(grid.columns.map((variant) => variant.name)).toEqual(["SW only", "SW + HW"]);
   expect(
-    grid.rows.map((row) => [row.label, ...row.cells.map((cell) => cell?.lane.key ?? null)]),
+    qaLaneSections(finished.lanes).map((section) => [
+      section.title,
+      ...section.lanes.map(({ lane }) => lane.key),
+    ]),
   ).toEqual([
-    ["Android tablet", "android/swOnly", "android/swAndHw"],
-    ["iOS phone", "ios/swOnly", null],
+    ["SW only", "android/swOnly", "ios/swOnly"],
+    ["SW + HW", "android/swAndHw"],
   ]);
   expect(qaRunTitle(ios)).toBe("Phone flows · iOS phone · SW only");
 
@@ -137,19 +142,120 @@ it("sums up a suite run per device from each lane's latest run, ignoring older s
   expect(qaDashboard([phones], [single]).entries[0]?.category).toBe("never");
 });
 
-it("combines case-insensitive search terms, result filters, and component or type grouping", () => {
+it("combines case-insensitive search terms, result filters, and component or type grouping in catalog order", () => {
   const { entries } = qaDashboard(suites, [run(suites[0]!, "passed"), run(suites[1]!, "failed")]);
-  expect(groupQaSuites(entries, "component", "", "all").map((g) => g.label)).toEqual([
+  expect(groupQaSuites(entries, "app", "", "all").map((g) => g.label)).toEqual([
     "Backend",
+    "Web",
     "Mobile",
     "Project",
-    "Web",
   ]);
   const groups = groupQaSuites(entries, "kind", "  WEB  playwright ", "attention");
   expect(groups.map((g) => g.label)).toEqual(["Playwright"]);
   expect(groups[0]?.entries.map((e) => e.suite.id)).toEqual(["web"]);
-  expect(groupQaSuites(entries, "component", "Web", "passed")).toEqual([]);
-  expect(groupQaSuites([], "component", "", "all")).toEqual([]);
+  expect(groupQaSuites(entries, "app", "Web", "passed")).toEqual([]);
+  expect(groupQaSuites([], "app", "", "all")).toEqual([]);
+});
+
+it("groups suites by the apps they test, sums each app up, and lists what needs attention", () => {
+  const apps = [
+    { id: "pro", name: "Betreuung Pro" },
+    { id: "home", name: "Senioren" },
+  ];
+  const tablets: QaSuite = {
+    id: "tablets",
+    name: "Tablet flows",
+    command: "maestro test",
+    component: "Senior",
+    apps: ["pro"],
+    runPer: "device",
+    devices: [{ id: "tablet", platform: "android", os: ["13", "15"] }],
+  };
+  const shared: QaSuite = { ...suites[0]!, id: "unit", component: "Senior", apps: ["pro", "home"] };
+  const home: QaSuite = { ...suites[1]!, id: "home", apps: ["home"] };
+  const catalog = [suites[3]!, tablets, shared, home];
+  const lane = (key: string, status: QaRunStatus, version: string, physical = false): QaRun => ({
+    ...run(tablets, status),
+    id: key,
+    lane: key,
+    commit: "head",
+    exitCode: status === "failed" ? 1 : 0,
+    devices: [
+      { requirement: "tablet", deviceId: key, name: key, platform: "android", physical, version },
+    ],
+  });
+  const runs = [
+    lane("tablet@13", "passed", "Android 13"),
+    lane("tablet@15", "failed", "Android 15"),
+  ];
+  const { entries } = qaDashboard(
+    catalog,
+    [...runs, { ...run(shared, "passed"), commit: "old" }],
+    [
+      {
+        suiteId: "unit",
+        state: "stale",
+        reason: "Inputs changed",
+        changedPaths: [],
+        changedFileCount: 1,
+        needsRun: true,
+        lastPassedAt: null,
+      },
+    ],
+  );
+  const groups = groupQaSuites(entries, "app", "", "all", apps);
+  expect(groups.map(({ label, other }) => [label, other])).toEqual([
+    ["Betreuung Pro", false],
+    ["Senior · both apps", false],
+    ["Senioren", false],
+    ["Other", true],
+  ]);
+  // Other groupings mix apps, so their groups name none.
+  expect(groupQaSuites(entries, "kind", "", "all", apps).flatMap((group) => group.apps)).toEqual(
+    [],
+  );
+  expect(qaGroupSummary(groups[0]!.entries, "head")).toMatchObject({
+    tone: "failed",
+    headline: "1 failed",
+    cells: [
+      { key: "tablets/tablet@13", outcome: "passed" },
+      { key: "tablets/tablet@15", outcome: "failed" },
+    ],
+    detail: "1/2 passed · all latest",
+  });
+  expect(qaGroupSummary(groups[1]!.entries, "head")).toMatchObject({
+    tone: "stale",
+    detail: "1/1 passed · 0 on latest",
+  });
+  expect(qaAttention(entries).map(({ key, reason }) => [key, reason])).toEqual([
+    ["tablets/tablet@15", "failed"],
+    ["unit:stale", "stale"],
+  ]);
+
+  // A device someone chose by hand counts for the version it runs; the latest run on each wins.
+  const physical = { ...lane("tablet@13", "passed", "Android 14.0", true), id: "hand" };
+  const older = {
+    ...lane("tablet@15", "passed", "Android 15"),
+    id: "older",
+    startedAt: "2026-10-29T10:00:00.000Z",
+  };
+  const coverage = qaDeviceCoverage(qaGroupSuiteIds(groups[0]!, entries), [
+    ...runs,
+    physical,
+    older,
+  ]);
+  expect(
+    coverage.map(({ os, virtual, physical }) => [
+      os,
+      virtual?.status ?? null,
+      physical?.id ?? null,
+    ]),
+  ).toEqual([
+    ["13", "passed", null],
+    ["14", null, "hand"],
+    ["15", "failed", null],
+  ]);
+  expect(qaGroupSuiteIds(groups[1]!, entries)).toEqual(new Set(["unit"]));
 });
 
 it("lists each repository once per environment that runs QA, by a fork's origin, without scratch projects", () => {

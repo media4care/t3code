@@ -46,10 +46,21 @@ export function qaDeviceRequirementLabel(requirement: QaDeviceRequirement) {
   }
 }
 
+/** The major OS version in a device's version, such as "14" in "Android 14.0"; null when unknown. */
+export function qaOsMajor(version: string) {
+  return /\d+/.exec(version)?.[0] ?? null;
+}
+
+export function qaOsLabel(platform: QaDeviceRequirement["platform"], os: string) {
+  return `${PLATFORM_LABELS[platform]} ${os}`;
+}
+
 /** QA commands run on the environment's machine, so only its own devices can serve them. */
 function qaDeviceFits(requirement: QaDeviceRequirement, entry: DevicePoolEntry) {
+  const os = qaOsMajor(entry.version);
   return (
     entry.hostId === LOCAL_DEVICE_HOST_ID &&
+    (requirement.os === undefined || (os !== null && requirement.os.includes(os))) &&
     entry.platform === requirement.platform &&
     (requirement.formFactor === undefined || entry.formFactor === requirement.formFactor) &&
     (requirement.type === "virtual"
@@ -120,8 +131,11 @@ export function qaDeviceUnavailableReason({ requirement, candidates }: QaDeviceA
         : requirement.type === "virtual"
           ? "Create an emulator in Android Studio."
           : "Connect one with USB debugging on, or create an emulator in Android Studio.";
+  const os = requirement.os
+    ? ` on ${requirement.os.map((version) => qaOsLabel(requirement.platform, version)).join(" or ")}`
+    : "";
   return [
-    `No ${qaDeviceRequirementLabel(requirement).replace(/^Physical/, "physical")} is available.`,
+    `No ${qaDeviceRequirementLabel(requirement).replace(/^Physical/, "physical")}${os} is available.`,
     offline.length ? `${offline.join(", ")} ${offline.length === 1 ? "is" : "are"} offline.` : "",
     hint,
   ]
