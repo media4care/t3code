@@ -131,7 +131,7 @@ class T3WorkspaceNavigationView(
   private val onTabSelected by EventDispatcher()
   private val onNewThread by EventDispatcher()
   private val onOverlayChange by EventDispatcher()
-  var tabs by mutableStateOf(listOf("threads", "pullRequests", "gitExplorer", "insights", "usage", "qa", "releases", "settings"))
+  var tabs by mutableStateOf(listOf("threads", "pullRequests", "issues", "gitExplorer", "insights", "usage", "qa", "releases", "settings"))
   var badgedTabs by mutableStateOf(listOf<String>())
   var selectedTab by mutableStateOf("threads")
   var rail by mutableStateOf(false)
@@ -429,6 +429,7 @@ class T3WorkspaceNavigationView(
   private fun tabTitle(tab: String) = when (tab) {
     "threads" -> "Chats"
     "pullRequests" -> "Pulls"
+    "issues" -> "Issues"
     "gitExplorer" -> "Git Explorer"
     "insights" -> "Insights"
     "qa" -> "QA"
@@ -453,6 +454,7 @@ class T3WorkspaceNavigationView(
     when (tab) {
       "threads" -> R.drawable.t3_chats
       "pullRequests" -> R.drawable.t3_pull_requests
+      "issues" -> R.drawable.t3_issues
       "gitExplorer" -> R.drawable.t3_git_explorer
       "insights" -> R.drawable.t3_insights
       "qa" -> R.drawable.t3_qa

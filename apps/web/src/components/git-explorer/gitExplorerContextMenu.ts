@@ -1,6 +1,6 @@
 import { gitExplorerReleaseChannels } from "@t3tools/client-runtime/git-explorer";
 import type { ContextMenuItem, GitExplorerReleaseChannel } from "@t3tools/contracts";
-import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { namedClipboardTarget, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureLocalApi } from "~/localApi";
 import { toastManager } from "../ui/toast";
 
@@ -18,7 +18,7 @@ export async function showGitExplorerContextMenu<T extends string>(
 }
 
 export async function copyGitExplorerValue(value: string, label: string) {
-  if (await writeTextToClipboard(value, label))
+  if (await writeTextToClipboard(value, namedClipboardTarget(label)))
     toastManager.add({ type: "success", title: `Copied ${label}` });
 }
 

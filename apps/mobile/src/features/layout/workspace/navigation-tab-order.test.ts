@@ -5,6 +5,7 @@ import {
   moveNavigationTab,
   overflowNavigationTabs,
   enabledNavigationTabs,
+  sharedSlotAbsentee,
   toggleNavigationTabVisibility,
   resolveSelectedNavigationTab,
   resolveNavigationTabOrder,
@@ -23,9 +24,25 @@ describe("navigation tab order", () => {
 
   it("fills missing sections and drops removed placeholders, duplicates, and Settings", () => {
     expect(
-      resolveNavigationTabOrder(["usage", "home", "issues", "settings", "usage", null]),
-    ).toEqual(["usage", "threads", "pullRequests", "gitExplorer", "qa", "insights", "releases"]);
+      resolveNavigationTabOrder(["usage", "home", "inbox", "settings", "usage", null]),
+    ).toEqual([
+      "usage",
+      "threads",
+      "pullRequests",
+      "issues",
+      "gitExplorer",
+      "qa",
+      "insights",
+      "releases",
+    ]);
     expect(resolveNavigationTabOrder()).toEqual(NAVIGATION_TAB_ORDER);
+  });
+
+  it("gives the shared slot to the open list, or else the one opened last", () => {
+    expect(sharedSlotAbsentee("issues", "pullRequests")).toBe("pullRequests");
+    expect(sharedSlotAbsentee("pullRequests", "issues")).toBe("issues");
+    expect(sharedSlotAbsentee("threads", "issues")).toBe("pullRequests");
+    expect(sharedSlotAbsentee("usage", undefined)).toBe("issues");
   });
 
   it("moves a section without changing the relative order of the others", () => {
@@ -42,9 +59,14 @@ describe("navigation tab order", () => {
 
   it("keeps overflow available and Settings selected during editing", () => {
     expect(visibleNavigationTabs()).toEqual(NAVIGATION_TAB_ORDER.slice(0, 4));
-    expect(overflowNavigationTabs()).toEqual(["usage", "insights", "releases"]);
+    expect(overflowNavigationTabs()).toEqual(["qa", "usage", "insights", "releases"]);
+    expect(overflowNavigationTabs(undefined, ["issues"])).toEqual([
+      "usage",
+      "insights",
+      "releases",
+    ]);
     expect(selectedNavigationTab(undefined, "threads", true)).toBe("settings");
-    expect(selectedNavigationTab(undefined, "qa", false)).toBe("qa");
+    expect(selectedNavigationTab(undefined, "qa", false, ["issues"])).toBe("qa");
     expect(selectedNavigationTab(undefined, "usage", false, [], 2)).toBe("settings");
   });
 
@@ -54,14 +76,15 @@ describe("navigation tab order", () => {
     expect(enabledNavigationTabs(order, hidden)).toEqual([
       "threads",
       "pullRequests",
+      "issues",
       "gitExplorer",
       "qa",
       "insights",
       "releases",
     ]);
     expect(toggleNavigationTabVisibility(hidden, "usage")).toEqual([]);
-    expect(visibleNavigationTabs(order, [], 7)).toEqual(order);
-    expect(enabledNavigationTabs(undefined, ["home", "issues", "settings"])).toEqual(
+    expect(visibleNavigationTabs(order, [], 8)).toEqual(order);
+    expect(enabledNavigationTabs(undefined, ["home", "inbox", "settings"])).toEqual(
       NAVIGATION_TAB_ORDER,
     );
   });

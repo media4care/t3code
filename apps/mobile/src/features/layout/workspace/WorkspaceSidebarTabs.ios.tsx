@@ -14,6 +14,7 @@ import {
   releasesBadgeTab,
   useReleasesRejected,
 } from "../../releases/releaseRejections";
+import { useAdaptiveWorkspaceLayout } from "../adaptive-workspace-context";
 
 const NativeSidebarTabBar = requireNativeView<
   ViewProps & {
@@ -34,6 +35,7 @@ export function WorkspaceSidebarTabs(props: {
   readonly compact?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
+  const { layout } = useAdaptiveWorkspaceLayout();
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const tabs = [...visibleNavigationTabs(order, hidden), "settings" as const];
@@ -69,6 +71,7 @@ export function WorkspaceSidebarTabs(props: {
         position: "absolute",
         bottom: 0,
         left: props.compact ? 8 : 0,
+        maxWidth: layout.variant === "medium" ? 280 : undefined,
         right: props.compact ? 12 : 0,
         height: 128,
       }}

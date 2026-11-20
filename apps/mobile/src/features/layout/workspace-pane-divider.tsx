@@ -1,3 +1,4 @@
+import { useGT } from "gt-react-native";
 import { useEffectEvent, useState } from "react";
 import { Platform, Pressable, StyleSheet, View, type AccessibilityActionEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -19,6 +20,7 @@ interface WorkspacePaneDividerProps {
 
 export function WorkspacePaneDivider(props: WorkspacePaneDividerProps) {
   const vertical = props.axis === "y";
+  const gt = useGT();
   const [dragging, setDragging] = useState(false);
   const handleResizeStart = useEffectEvent(() => {
     setDragging(true);
@@ -65,14 +67,22 @@ export function WorkspacePaneDivider(props: WorkspacePaneDividerProps) {
           vertical ? "-my-[22px] h-[44px]" : "-mx-[22px] w-[44px]",
         )}
         accessibilityActions={[
-          { name: "increment", label: vertical ? "Make pane taller" : "Make pane wider" },
-          { name: "decrement", label: vertical ? "Make pane shorter" : "Make pane narrower" },
+          {
+            name: "increment",
+            label: vertical ? gt("Make pane taller") : gt("Make pane wider"),
+          },
+          {
+            name: "decrement",
+            label: vertical ? gt("Make pane shorter") : gt("Make pane narrower"),
+          },
         ]}
         accessibilityLabel={props.accessibilityLabel}
         accessibilityRole="adjustable"
         accessibilityValue={{
           now: Math.round(props.currentWidth),
-          text: `${Math.round(props.currentWidth)} points ${vertical ? "tall" : "wide"}`,
+          text: vertical
+            ? gt("{height} points tall", { height: Math.round(props.currentWidth) })
+            : gt("{width} points wide", { width: Math.round(props.currentWidth) }),
         }}
         onAccessibilityAction={handleAccessibilityAction}
       >

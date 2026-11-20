@@ -7,7 +7,7 @@ import { UsageRouteScreen } from "../../usage/UsageRouteScreen";
 import { GitRepositoriesScreen } from "../../git-explorer/GitExplorerScreen";
 
 export function WorkspaceExtraTab(props: {
-  tab: Exclude<NavigationTab, "threads" | "pullRequests">;
+  tab: Exclude<NavigationTab, "threads" | "pullRequests" | "issues">;
 }) {
   return (
     <>
