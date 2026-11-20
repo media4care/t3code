@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react-native";
 import {
   WORKSPACE_TAB_LABELS,
   NAVIGATION_TAB_ICONS,
@@ -46,6 +47,7 @@ import {
 } from "../../releases/releaseRejections";
 
 const PULL_REQUEST_ICON = require("../../../../assets/icons/pull-request.png");
+const ISSUE_ICON = require("../../../../assets/icons/issue.png");
 
 /** Retain each native controller tree; removing its root can leave RNS's stack empty. */
 function RetainedWorkspaceTab(props: {
@@ -151,6 +153,8 @@ export function WorkspaceNativeTabs(props: {
   /** The sidebar column draws the tabs itself, so they leave with it. */
   readonly tabsInSidebarColumn?: boolean;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const workspace = useWorkspaceTabs()!;
   const order = useEnabledNavigationTabs();
   const primaryTabs = order.slice(0, 4);
@@ -232,7 +236,7 @@ export function WorkspaceNativeTabs(props: {
             const settings = slot === "settings";
             const tab = settings ? (overflow ?? selectedTab) : primaryTabs[index];
             if (!tab) return null;
-            const label = settings ? "Settings" : WORKSPACE_TAB_LABELS[tab];
+            const label = settings ? gt("Settings") : m(WORKSPACE_TAB_LABELS[tab]);
             const badged = badgedTab === (settings ? "settings" : tab);
             return (
               <Tabs.Screen
@@ -249,7 +253,9 @@ export function WorkspaceNativeTabs(props: {
                     ? { type: "sfSymbol", name: "gearshape" }
                     : tab === "pullRequests"
                       ? { type: "templateSource", templateSource: PULL_REQUEST_ICON }
-                      : { type: "sfSymbol", name: NAVIGATION_TAB_ICONS[tab] },
+                      : tab === "issues"
+                        ? { type: "templateSource", templateSource: ISSUE_ICON }
+                        : { type: "sfSymbol", name: NAVIGATION_TAB_ICONS[tab] },
                   selectedIcon:
                     !settings && tab === "threads"
                       ? { type: "sfSymbol", name: "text.bubble.fill" }
@@ -305,6 +311,7 @@ export function WorkspaceSidebarTabsFooter() {
   const workspace = useWorkspaceTabs()!;
   const { startNewTask } = useAdaptiveWorkspaceLayout();
   const compact = useFloatingWorkspaceTabs();
+  // Compose stays in the first slot on every tab, so the tab icons never shift.
   const handleNewTask = () => {
     Keyboard.dismiss();
     workspace.dispatch({ type: "select", tab: "threads" });

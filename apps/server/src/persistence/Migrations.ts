@@ -1,9 +1,9 @@
-import InsightsMigration from "./Migrations/097_Insights.ts";
-import QaRunsMigration from "./Migrations/098_QaRuns.ts";
-import QaInputsMigration from "./Migrations/099_QaInputs.ts";
-import QaAutomationMigration from "./Migrations/100_QaAutomation.ts";
-import QaRepositoriesMigration from "./Migrations/101_QaRepositories.ts";
-import QaRunLanesMigration from "./Migrations/102_QaRunLanes.ts";
+import InsightsMigration from "./Migrations/103_Insights.ts";
+import QaRunsMigration from "./Migrations/104_QaRuns.ts";
+import QaInputsMigration from "./Migrations/105_QaInputs.ts";
+import QaAutomationMigration from "./Migrations/106_QaAutomation.ts";
+import QaRepositoriesMigration from "./Migrations/107_QaRepositories.ts";
+import QaRunLanesMigration from "./Migrations/108_QaRunLanes.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -110,6 +110,12 @@ import Migration0093 from "./Migrations/093_ProviderTurnAttemptIndex.ts";
 import Migration0094 from "./Migrations/094_TurnItemMessageOrdinalIndex.ts";
 import Migration0095 from "./Migrations/095_TurnItemInlineWorkOutput.ts";
 import Migration0096 from "./Migrations/096_RepairStaleTitleRegeneration.ts";
+import Migration0097 from "./Migrations/097_IssueTrackerBindings.ts";
+import Migration0098 from "./Migrations/098_ActiveShellIndexIndexes.ts";
+import Migration0099 from "./Migrations/099_BackgroundRecoveryIndexes.ts";
+import Migration0100 from "./Migrations/100_TurnStartReadIndexes.ts";
+import Migration0101 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
+import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -209,12 +215,18 @@ const migrationEntries = [
   [94, "TurnItemMessageOrdinalIndex", Migration0094],
   [95, "TurnItemInlineWorkOutput", Migration0095],
   [96, "RepairStaleTitleRegeneration", Migration0096],
-  [97, "Insights", InsightsMigration],
-  [98, "QaRuns", QaRunsMigration],
-  [99, "QaInputs", QaInputsMigration],
-  [100, "QaAutomation", QaAutomationMigration],
-  [101, "QaRepositories", QaRepositoriesMigration],
-  [102, "QaRunLanes", QaRunLanesMigration],
+  [97, "IssueTrackerBindings", Migration0097],
+  [98, "ActiveShellIndexIndexes", Migration0098],
+  [99, "BackgroundRecoveryIndexes", Migration0099],
+  [100, "TurnStartReadIndexes", Migration0100],
+  [101, "DelegatedTaskReadIndexes", Migration0101],
+  [102, "ThreadItemCounts", Migration0102],
+  [103, "Insights", InsightsMigration],
+  [104, "QaRuns", QaRunsMigration],
+  [105, "QaInputs", QaInputsMigration],
+  [106, "QaAutomation", QaAutomationMigration],
+  [107, "QaRepositories", QaRepositoriesMigration],
+  [108, "QaRunLanes", QaRunLanesMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -294,7 +306,7 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
 
 const run = Migrator.make({});
 
-const FIRST_EXPLORER_MIGRATION_ID = 97;
+const FIRST_EXPLORER_MIGRATION_ID = 103;
 const EXPLORER_MIGRATION_NAMES = [
   "Insights",
   "QaRuns",
@@ -304,7 +316,7 @@ const EXPLORER_MIGRATION_NAMES = [
   "QaRunLanes",
 ];
 
-// Explorer shipped its migrations at 73, 77, 80, 81, then 82 before upstream claimed those ids; move them
+// Explorer shipped its migrations at 73, 77, 80, 81, 82, then 97 before upstream claimed those ids; move them
 // past upstream's, keeping their tables and timestamps, and run the upstream migrations they hid.
 const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;

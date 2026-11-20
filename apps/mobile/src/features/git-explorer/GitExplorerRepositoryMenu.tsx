@@ -1,7 +1,6 @@
-import { useAtomSet } from "@effect/atom-react";
-
 import { useProjects } from "../../state/entities";
-import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 
@@ -30,7 +29,7 @@ export function GitExplorerRepositoryMenu(props: {
 }) {
   const projects = useProjects().filter((project) => !project.isScratch);
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const idOf = (project: ProjectRef) => JSON.stringify([project.environmentId, project.projectId]);
   const selectedId = idOf(props.selected);
   const multipleEnvironments = new Set(projects.map((project) => project.environmentId)).size > 1;
@@ -53,7 +52,7 @@ export function GitExplorerRepositoryMenu(props: {
       onSelect={(id) => {
         const next = choices.find((choice) => idOf(choice.ref) === id)?.ref;
         if (!next) return;
-        savePreferences({ gitExplorerProject: next });
+        void savePreferences({ gitExplorerProject: next });
         props.onSelect?.(next);
       }}
     />

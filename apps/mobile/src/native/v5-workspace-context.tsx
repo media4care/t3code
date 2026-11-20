@@ -49,6 +49,7 @@ export const NativePrimaryColumnContext = createContext<{
   readonly selectedPullRequestKey: string | null;
   /** The Git Explorer page open beside the list; its branches show in the list column. */
   readonly gitExplorerRoute: { readonly key: string; readonly params: object | undefined } | null;
+  readonly selectedIssueKey: string | null;
 } | null>(null);
 export const NativeWorkspaceInspectorContext = createContext<{
   readonly content: InspectorContent | undefined;

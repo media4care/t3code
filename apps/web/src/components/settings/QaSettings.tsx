@@ -3,7 +3,7 @@ import { QaDeviceSource } from "@t3tools/contracts";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -17,6 +17,7 @@ const SOURCES = {
 
 /** Which environment runs QA, and where its runs get devices. */
 export function QaSettings() {
+  const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const sourceMixed = useScopedSettingsMixed(["qaDeviceSource"]);

@@ -3,14 +3,13 @@ import {
   respondToThreadApproval,
   respondToThreadUserInput,
 } from "@t3tools/client-runtime/operations";
-import { createEnvironmentCommand, executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
+import { createEnvironmentCommand, runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { CommandId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/reactivity";
 import * as Crypto from "expo-crypto";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -56,18 +55,14 @@ export async function sendAgentNotificationAnswer(
     JSON.stringify(answer),
   );
   signal.throwIfAborted();
-  const atom = Atom.make(
-    Effect.promise(() =>
-      command.run(appAtomRegistry, {
-        environmentId: answer.environmentId,
-        input: { answer, commandId: CommandId.make(`notification-${digest}`), signal, expiresAt },
-      }),
-    ),
-  ).pipe(Atom.setIdleTTL(0));
-  const result = await executeAtomQuery(appAtomRegistry, atom, {
-    signal,
-    reportDefect: false,
-    reportFailure: false,
-  });
-  return result._tag === "Success" && result.value._tag === "Success";
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    command,
+    {
+      environmentId: answer.environmentId,
+      input: { answer, commandId: CommandId.make(`notification-${digest}`), signal, expiresAt },
+    },
+    { signal, reportDefect: false, reportFailure: false },
+  );
+  return result._tag === "Success";
 }

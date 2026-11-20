@@ -11,12 +11,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import Insights from "./Migrations/097_Insights.ts";
-import QaRuns from "./Migrations/098_QaRuns.ts";
-import QaInputs from "./Migrations/099_QaInputs.ts";
-import QaAutomation from "./Migrations/100_QaAutomation.ts";
-import QaRepositories from "./Migrations/101_QaRepositories.ts";
-import QaRunLanes from "./Migrations/102_QaRunLanes.ts";
+import Insights from "./Migrations/103_Insights.ts";
+import QaRuns from "./Migrations/104_QaRuns.ts";
+import QaInputs from "./Migrations/105_QaInputs.ts";
+import QaAutomation from "./Migrations/106_QaAutomation.ts";
+import QaRepositories from "./Migrations/107_QaRepositories.ts";
+import QaRunLanes from "./Migrations/108_QaRunLanes.ts";
 
 const explorerMigrations = [
   ["Insights", Insights],
@@ -27,7 +27,7 @@ const explorerMigrations = [
   ["QaRunLanes", QaRunLanes],
 ] as const;
 
-// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, 80, and 81.
+// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, 80, 81, and 96.
 const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, count: number) {
   yield* runMigrations({ toMigrationInclusive: base - 1 });
   yield* Migrator.make({})({
@@ -64,7 +64,7 @@ const v2TableCount = Effect.gen(function* () {
 
 describe("runMigrations", () => {
   it.effect.each(
-    [73, 77, 80, 81, 82].flatMap((base) =>
+    [73, 77, 80, 81, 82, 97].flatMap((base) =>
       [1, 2, 3, 4, 5, 6].map((count) => [base, count] as const),
     ),
   )("preserves Explorer data when upgrading %s-based migrations through %s", ([base, count]) =>
@@ -94,7 +94,7 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* saved, before);
       assert.deepStrictEqual(
-        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 97`,
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 103`,
         [{ created_at: "2026-10-30 00:00:00" }],
       );
       const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
@@ -109,6 +109,7 @@ describe("runMigrations", () => {
     [80, "ScheduledTaskThreadMode"],
     [81, "ProjectionMessageSearchText"],
     [82, "RepairStaleTitleRegeneration"],
+    [97, "ThreadItemCounts"],
   ] as const)("rolls back a %s-based Explorer upgrade if %s fails", ([base, failing]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -126,7 +127,7 @@ describe("runMigrations", () => {
   );
 
   it.effect.each(
-    [73, 77, 80, 81, 82].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+    [73, 77, 80, 81, 82, 97].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
   )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -280,7 +281,7 @@ describe("runMigrations", () => {
   it.effect("keeps QA runs saved before suites ran per device readable", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 101 });
+      yield* runMigrations({ toMigrationInclusive: 107 });
       const suite = {
         id: "maestro",
         name: "Maestro",

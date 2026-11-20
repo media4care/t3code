@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react-native";
 import {
   enabledNavigationTabs,
   selectedNavigationTab,
@@ -24,8 +25,11 @@ import {
 
 const PULL_REQUEST_ICON = require("../../../../assets/icons/pull-request.png");
 const REJECTED_BADGE = { value: RELEASES_REJECTED_BADGE };
+const ISSUE_ICON = require("../../../../assets/icons/issue.png");
 
 export function WorkspaceTabToolbarButtons() {
+  const gt = useGT();
+  const m = useMessages();
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const workspace = useWorkspaceTabs()!;
@@ -49,14 +53,16 @@ export function WorkspaceTabToolbarButtons() {
           identifier={`workspace-tab-${tab}`}
           accessibilityLabel={
             badgedTab === tab
-              ? rejectedTabLabel(WORKSPACE_TAB_LABELS[tab])
-              : WORKSPACE_TAB_LABELS[tab]
+              ? rejectedTabLabel(m(WORKSPACE_TAB_LABELS[tab]))
+              : m(WORKSPACE_TAB_LABELS[tab])
           }
           badge={badgedTab === tab ? REJECTED_BADGE : undefined}
           icon={
             tab === "pullRequests"
               ? { type: "image", source: PULL_REQUEST_ICON, tinted: true }
-              : NAVIGATION_TAB_ICONS[tab]
+              : tab === "issues"
+                ? { type: "image", source: ISSUE_ICON, tinted: true }
+                : NAVIGATION_TAB_ICONS[tab]
           }
           tintColor={selected === tab ? selectedTint : undefined}
           onPress={() => selectTab(tab)}
@@ -64,7 +70,9 @@ export function WorkspaceTabToolbarButtons() {
       ))}
       <Toolbar.Button
         identifier="workspace-tab-settings"
-        accessibilityLabel={badgedTab === "settings" ? rejectedTabLabel("Settings") : "Settings"}
+        accessibilityLabel={
+          badgedTab === "settings" ? rejectedTabLabel(gt("Settings")) : gt("Settings")
+        }
         badge={badgedTab === "settings" ? REJECTED_BADGE : undefined}
         icon="gearshape"
         tintColor={selected === "settings" ? selectedTint : undefined}
@@ -81,6 +89,7 @@ export function WorkspaceSectionToolbar({
   readonly onNewTask: () => void;
   readonly showCompose?: boolean;
 }) {
+  const gt = useGT();
   const sidebarTabs = useSidebarWorkspaceTabs();
   const compactTabs = useCompactWorkspaceTabs();
   const deviceType = useDeviceType();
@@ -89,7 +98,7 @@ export function WorkspaceSectionToolbar({
       {showCompose && sidebarTabs !== "picker" && deviceType !== "duo-unfolded" && !compactTabs ? (
         <Toolbar placement="right">
           <Toolbar.Button
-            accessibilityLabel="New chat"
+            accessibilityLabel={gt("New chat")}
             icon="square.and.pencil"
             onPress={onNewTask}
           />
