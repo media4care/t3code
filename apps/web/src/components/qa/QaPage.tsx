@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
@@ -47,6 +48,7 @@ import {
   QaRunBadge,
   QaSuiteTable,
   type QaDashboardContext,
+  type QaSuiteTableHandle,
 } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaDevicePool, QaSimlockNote } from "./QaDevicePool";
@@ -167,6 +169,7 @@ function ProjectQa({
   const [grouping, setGrouping] = useState<QaGrouping>("app");
   const [filter, setFilter] = useState<QaResultFilter>("all");
   const [search, setSearch] = useState("");
+  const suiteTable = useRef<QaSuiteTableHandle>(null);
   const snapshot = query.data;
   const running = snapshot?.latestRuns.find((run) => run.status === "running");
   const { entries, counts } = qaDashboard(
@@ -315,7 +318,17 @@ function ProjectQa({
       {counts.total > 0 ? (
         <>
           <QaGroupTiles groups={appGroups} context={context} />
-          <QaAttentionList items={qaAttention(entries)} context={context} />
+          <QaAttentionList
+            items={qaAttention(entries)}
+            context={context}
+            onJump={(suiteId) => {
+              flushSync(() => {
+                setSearch("");
+                setFilter("all");
+              });
+              suiteTable.current?.reveal(suiteId);
+            }}
+          />
         </>
       ) : null}
       {snapshot?.ref && snapshot.refs ? (
@@ -469,6 +482,7 @@ function ProjectQa({
           </div>
           {groups.length ? (
             <QaSuiteTable
+              ref={suiteTable}
               groups={groups}
               entries={entries}
               runs={[...(snapshot?.latestRuns ?? []), ...(snapshot?.recentRuns ?? [])]}
