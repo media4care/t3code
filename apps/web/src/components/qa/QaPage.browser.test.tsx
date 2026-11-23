@@ -580,7 +580,7 @@ it("groups the catalog and combines search with result filters", async () => {
   await expect
     .element(screen.getByRole("heading", { name: "Test suites", exact: true }))
     .toBeVisible();
-  const backend = screen.getByRole("button", { name: /^Backend / });
+  const backend = screen.getByRole("button", { name: /^Backend \d/ });
   await backend.click();
   await expect
     .element(screen.getByRole("rowgroup", { name: "API integration tests", exact: true }))
@@ -613,6 +613,31 @@ it("groups the catalog and combines search with result filters", async () => {
     .toBeVisible();
   await screen.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect.element(screen.getByText("7 of 7 suites", { exact: true })).toBeVisible();
+});
+
+it("jumps from attention entries to filtered and collapsed suites, including repeated visits", async () => {
+  dashboardFixture();
+  await using screen = await render(
+    <SidebarProvider>
+      <QaPage />
+    </SidebarProvider>,
+    { router: "/qa" },
+  );
+  await screen.getByRole("button", { name: /^Backend \d/ }).click();
+  await screen.getByRole("searchbox", { name: "Search suites" }).fill("Family");
+  const entry = screen.getByRole("region", { name: "Needs attention" }).getByRole("button", {
+    name: /Backend · API integration tests/,
+  });
+  await entry.click();
+  const suite = screen.getByRole("rowgroup", { name: "API integration tests", exact: true });
+  const toggle = suite.getByRole("button", { name: "Show details of API integration tests" });
+  await expect.element(toggle).toHaveFocus();
+  await expect.element(screen.getByRole("searchbox", { name: "Search suites" })).toHaveValue("");
+  const main = suite.element().closest("main")!;
+  expect(main.scrollTop).toBeGreaterThan(0);
+  await screen.getByRole("button", { name: /^Backend \d/ }).click();
+  await entry.click();
+  await expect.element(toggle).toHaveFocus();
 });
 
 it("shows freshness separately from results, filters affected suites and controls the server queue", async () => {

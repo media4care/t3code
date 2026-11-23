@@ -22,7 +22,8 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useImperativeHandle, useRef, useState, type Ref } from "react";
+import { flushSync } from "react-dom";
 import type {
   DevicePoolEntry,
   EnvironmentId,
@@ -241,7 +242,7 @@ export function QaGroupTiles({
           ) : null}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 @xl/qa:grid-cols-3 @4xl/qa:grid-cols-5">
         {shown.map((group, index) => {
           const summary = summaries[index]!;
           return (
@@ -284,7 +285,9 @@ function attentionDetail({ reason, run, entry }: QaAttentionItem) {
 export function QaAttentionList({
   items,
   context,
+  onJump,
 }: {
+  onJump: (suiteId: string) => void;
   items: ReadonlyArray<QaAttentionItem>;
   context: QaDashboardContext;
 }) {
@@ -313,10 +316,14 @@ export function QaAttentionList({
                 className={`size-2 shrink-0 rounded-full ${reason === "failed" ? "bg-destructive" : "bg-warning"}`}
               />
               <AppIcons apps={apps} icons={context.icons} />
-              <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={() => onJump(entry.suite.id)}
+                className="min-w-0 flex-1 cursor-pointer rounded-sm text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+              >
                 <p className="truncate text-sm font-medium">{title}</p>
                 <p className="truncate text-xs text-muted-foreground">{attentionDetail(item)}</p>
-              </div>
+              </button>
               {run ? (
                 <Button variant="outline" size="compact" onClick={() => context.onView(run.id)}>
                   View
@@ -341,14 +348,20 @@ export function QaAttentionList({
 
 const COLUMNS = 5;
 
+export interface QaSuiteTableHandle {
+  reveal: (suiteId: string) => void;
+}
+
 /** Every suite, a table section per app, with each suite's lanes below it. */
 export function QaSuiteTable({
+  ref,
   groups,
   entries,
   runs,
   showComponent,
   context,
 }: {
+  ref?: Ref<QaSuiteTableHandle>;
   groups: ReadonlyArray<QaSuiteGroup>;
   /** Every suite, for the runs that count for a group's devices. */
   entries: ReadonlyArray<QaDashboardEntry>;
@@ -359,8 +372,28 @@ export function QaSuiteTable({
 }) {
   // Groups are open unless they are Other; toggling flips that.
   const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
+  const table = useRef<HTMLDivElement>(null);
+  useImperativeHandle(ref, () => ({
+    reveal(suiteId) {
+      const group = groups.find((item) => item.entries.some((entry) => entry.suite.id === suiteId));
+      if (!group) return;
+      flushSync(() => {
+        setToggled((current) => {
+          const next = new Set(current);
+          if (group.other) next.add(group.key);
+          else next.delete(group.key);
+          return next;
+        });
+      });
+      const row = Array.from(
+        table.current?.querySelectorAll<HTMLElement>("[data-suite-id]") ?? [],
+      ).find((element) => element.dataset.suiteId === suiteId);
+      row?.scrollIntoView({ block: "start", inline: "nearest" });
+      row?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+    },
+  }));
   return (
-    <div className="overflow-x-auto rounded-xl border border-border bg-card">
+    <div ref={table} className="overflow-x-auto rounded-xl border border-border bg-card">
       <table className="w-full min-w-[40rem] text-left text-sm">
         <thead className="text-xs text-muted-foreground">
           <tr className="border-b border-border">
@@ -579,7 +612,7 @@ function SuiteRows({
         .toSorted((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0]
     : run;
   return (
-    <tbody aria-label={suite.name}>
+    <tbody aria-label={suite.name} data-suite-id={suite.id} className="scroll-mt-4">
       <tr className={`border-t border-border/60 ${tone === "failed" ? "bg-error/5" : ""}`}>
         <td className="py-1.5 pr-2 pl-3">
           <div className="flex min-w-0 items-center gap-1.5 pl-1">
@@ -592,7 +625,7 @@ function SuiteRows({
             >
               <ChevronRightIcon className={expanded ? "rotate-90" : ""} />
             </Button>
-            <span className="truncate font-medium">{suite.name}</span>
+            <span className="font-medium wrap-anywhere">{suite.name}</span>
             <TestKind kind={kind} />
             {showComponent ? (
               <span className="shrink-0 text-xs text-muted-foreground">{component}</span>
@@ -744,7 +777,7 @@ function LaneRow({
           <span className="whitespace-nowrap font-medium">{qaLaneDeviceLabel(lane)}</span>
           {device ? (
             <>
-              <span className="min-w-0 truncate text-xs text-muted-foreground">
+              <span className="min-w-0 text-xs wrap-anywhere text-muted-foreground">
                 {device.name}
                 {device.version && !lane.os ? ` · ${device.version}` : ""}
               </span>

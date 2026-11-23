@@ -80,7 +80,7 @@ export function QaAutomation({
     }
   };
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid gap-4 @3xl/qa:grid-cols-2">
       <section
         aria-label="QA schedule"
         className="min-w-0 rounded-xl border border-border bg-card p-5"

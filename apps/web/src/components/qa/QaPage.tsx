@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
@@ -47,6 +48,7 @@ import {
   QaRunBadge,
   QaSuiteTable,
   type QaDashboardContext,
+  type QaSuiteTableHandle,
 } from "./QaDashboard";
 import { QaAutomation } from "./QaAutomation";
 import { QaDevicePool, QaSimlockNote } from "./QaDevicePool";
@@ -100,7 +102,7 @@ export function QaPage() {
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <WorkspacePageContainer width="expanded" className="gap-6">
+        <WorkspacePageContainer width="full" className="@container/qa">
           {repository && project ? (
             <ProjectQa
               key={repository.key}
@@ -167,6 +169,7 @@ function ProjectQa({
   const [grouping, setGrouping] = useState<QaGrouping>("app");
   const [filter, setFilter] = useState<QaResultFilter>("all");
   const [search, setSearch] = useState("");
+  const suiteTable = useRef<QaSuiteTableHandle>(null);
   const snapshot = query.data;
   const running = snapshot?.latestRuns.find((run) => run.status === "running");
   const { entries, counts } = qaDashboard(
@@ -315,7 +318,17 @@ function ProjectQa({
       {counts.total > 0 ? (
         <>
           <QaGroupTiles groups={appGroups} context={context} />
-          <QaAttentionList items={qaAttention(entries)} context={context} />
+          <QaAttentionList
+            items={qaAttention(entries)}
+            context={context}
+            onJump={(suiteId) => {
+              flushSync(() => {
+                setSearch("");
+                setFilter("all");
+              });
+              suiteTable.current?.reveal(suiteId);
+            }}
+          />
         </>
       ) : null}
       {snapshot?.ref && snapshot.refs ? (
@@ -350,7 +363,7 @@ function ProjectQa({
           aria-label="Input freshness"
           className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-4"
         >
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 grow basis-64">
             <h3 className="font-semibold">
               {affectedCount} {affectedCount === 1 ? "suite needs" : "suites need"} a rerun
             </h3>
@@ -469,6 +482,7 @@ function ProjectQa({
           </div>
           {groups.length ? (
             <QaSuiteTable
+              ref={suiteTable}
               groups={groups}
               entries={entries}
               runs={[...(snapshot?.latestRuns ?? []), ...(snapshot?.recentRuns ?? [])]}
