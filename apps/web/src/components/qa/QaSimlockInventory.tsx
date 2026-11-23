@@ -121,7 +121,7 @@ export function QaSimlockNote({
             Last checked {qaWhen(inventory.scannedAt)}
             {query.error ? " · Showing previous results" : ""}
           </p>
-          <div className="mt-4 grid gap-5 lg:grid-cols-2">
+          <div className="mt-4 grid gap-5 @3xl/qa:grid-cols-2">
             <section aria-label="Physical devices">
               <h4 className="text-sm font-semibold">Physical devices ({physical.length})</h4>
               <DeviceRows devices={physical} />

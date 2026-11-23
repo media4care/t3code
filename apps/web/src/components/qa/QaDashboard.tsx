@@ -241,7 +241,7 @@ export function QaGroupTiles({
           ) : null}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 @xl/qa:grid-cols-3 @4xl/qa:grid-cols-5">
         {shown.map((group, index) => {
           const summary = summaries[index]!;
           return (
@@ -592,7 +592,7 @@ function SuiteRows({
             >
               <ChevronRightIcon className={expanded ? "rotate-90" : ""} />
             </Button>
-            <span className="truncate font-medium">{suite.name}</span>
+            <span className="font-medium wrap-anywhere">{suite.name}</span>
             <TestKind kind={kind} />
             {showComponent ? (
               <span className="shrink-0 text-xs text-muted-foreground">{component}</span>
@@ -744,7 +744,7 @@ function LaneRow({
           <span className="whitespace-nowrap font-medium">{qaLaneDeviceLabel(lane)}</span>
           {device ? (
             <>
-              <span className="min-w-0 truncate text-xs text-muted-foreground">
+              <span className="min-w-0 text-xs wrap-anywhere text-muted-foreground">
                 {device.name}
                 {device.version && !lane.os ? ` · ${device.version}` : ""}
               </span>

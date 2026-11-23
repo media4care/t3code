@@ -100,7 +100,7 @@ export function QaPage() {
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <WorkspacePageContainer width="expanded" className="gap-6">
+        <WorkspacePageContainer width="full" className="@container/qa">
           {repository && project ? (
             <ProjectQa
               key={repository.key}
@@ -350,7 +350,7 @@ function ProjectQa({
           aria-label="Input freshness"
           className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-4"
         >
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 grow basis-64">
             <h3 className="font-semibold">
               {affectedCount} {affectedCount === 1 ? "suite needs" : "suites need"} a rerun
             </h3>
