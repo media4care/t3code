@@ -1,4 +1,4 @@
-import type { DeviceSimlockInventory } from "@t3tools/contracts";
+import type { DeviceSession, DeviceSimlockInventory } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -8,6 +8,7 @@ const Platform = Schema.Literals(["ios", "android"]);
 const Devices = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
+      id: Schema.String,
       driverDeviceId: Schema.String,
       spec: Schema.Struct({
         platform: Platform,
@@ -33,11 +34,31 @@ const Catalog = Schema.fromJsonString(
   }),
 );
 
+const Leases = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      deviceId: Schema.String,
+      requesterId: Schema.String,
+      label: Schema.optionalKey(Schema.String),
+    }),
+  ),
+);
+
+/** QA runs lease with `--agent-id` starting with this, so the inventory can name them. */
+export const QA_SIMLOCK_REQUESTER_PREFIX = "t3-qa-";
+
 const decodeDevices = Schema.decodeUnknownEffect(Devices);
+const decodeLeases = Schema.decodeUnknownEffect(Leases);
 const decodeCatalog = Schema.decodeUnknownEffect(Catalog);
 
-/** Only inventory commands; never boots, leases, enrolls, authorizes, or deletes devices. */
-export const readSimlockInventory = Effect.gen(function* () {
+/**
+ * Only inventory commands; never boots, leases, enrolls, authorizes, or deletes devices.
+ * `sessions` are this server's open devices, which name the thread holding a lease.
+ */
+export const readSimlockInventory = Effect.fn("DevicePool.readSimlockInventory")(function* (
+  sessions: ReadonlyArray<Pick<DeviceSession, "threadId" | "deviceId">>,
+) {
   const runner = yield* ProcessRunner.ProcessRunner;
   const issues: string[] = [];
   const read = Effect.fn("DevicePool.readInventorySource")(function* (
@@ -73,13 +94,14 @@ export const readSimlockInventory = Effect.gen(function* () {
         }),
       );
   });
-  const [deviceText, catalogText, adbText] = yield* Effect.all(
+  const [deviceText, leaseText, catalogText, adbText] = yield* Effect.all(
     [
       read("Simlock devices", "simlock", ["--local", "list"]),
+      read("Simlock leases", "simlock", ["--local", "list", "--leases"]),
       read("Simlock models", "simlock", ["--local", "catalog", "--json"]),
       read("Android connections", "adb", ["devices", "-l"]),
     ],
-    { concurrency: 3 },
+    { concurrency: 4 },
   );
   const records =
     deviceText === null
@@ -90,6 +112,32 @@ export const readSimlockInventory = Effect.gen(function* () {
             return Effect.succeed(null);
           }),
         );
+  const leases =
+    leaseText === null
+      ? []
+      : yield* decodeLeases(leaseText).pipe(
+          Effect.catch(() => {
+            issues.push("Simlock leases: response could not be read. Holders are unknown.");
+            return Effect.succeed([]);
+          }),
+        );
+  const leaseOf = (simlockDeviceId: string): DeviceSimlockInventory["devices"][number]["lease"] => {
+    const lease = leases.find((candidate) => candidate.deviceId === simlockDeviceId);
+    if (!lease) return undefined;
+    // A gateway names a worker's lease `<worker id>.<lease id>`; this worker knows only its part.
+    const session = sessions.find(
+      (candidate) => candidate.deviceId === lease.id || candidate.deviceId.endsWith(`.${lease.id}`),
+    );
+    return {
+      id: lease.id,
+      label: lease.label ?? null,
+      holder: session
+        ? { type: "thread", threadId: session.threadId }
+        : lease.requesterId.startsWith(QA_SIMLOCK_REQUESTER_PREFIX)
+          ? { type: "qa-run" }
+          : { type: "requester", requesterId: lease.requesterId },
+    };
+  };
   const catalog =
     catalogText === null
       ? null
@@ -101,24 +149,28 @@ export const readSimlockInventory = Effect.gen(function* () {
         );
   const devices: Array<DeviceSimlockInventory["devices"][number]> = (records ?? [])
     .filter((device) => device.state !== "deleted")
-    .map((device) => ({
-      id: device.driverDeviceId,
-      name: device.spec.model,
-      platform: device.spec.platform,
-      version: device.spec.osVersion ?? "",
-      physical: device.physical,
-      enrolled: true,
-      simlockState: device.state,
-      state: device.state,
-      detail:
-        device.absentReason === "not-present"
-          ? "Simlock cannot detect this device. Check its connection."
-          : device.absentReason === "untrusted"
-            ? "Trust this computer on the device."
-            : device.absentReason === "locked"
-              ? "Unlock the device so Simlock can use it."
-              : (device.absentReason ?? ""),
-    }));
+    .map((device) => {
+      const lease = leaseOf(device.id);
+      return {
+        ...(lease ? { lease } : {}),
+        id: device.driverDeviceId,
+        name: device.spec.model,
+        platform: device.spec.platform,
+        version: device.spec.osVersion ?? "",
+        physical: device.physical,
+        enrolled: true,
+        simlockState: device.state,
+        state: device.state,
+        detail:
+          device.absentReason === "not-present"
+            ? "Simlock cannot detect this device. Check its connection."
+            : device.absentReason === "untrusted"
+              ? "Trust this computer on the device."
+              : device.absentReason === "locked"
+                ? "Unlock the device so Simlock can use it."
+                : (device.absentReason ?? ""),
+      };
+    });
   if (adbText !== null) {
     if (!adbText.includes("List of devices attached"))
       issues.push("Android connections: response could not be read.");
@@ -151,6 +203,7 @@ export const readSimlockInventory = Effect.gen(function* () {
           simlockState: previous?.simlockState ?? null,
           state,
           detail,
+          ...(previous?.lease ? { lease: previous.lease } : {}),
         };
         if (existing < 0) devices.push(entry);
         else devices[existing] = entry;

@@ -444,7 +444,8 @@ const make = Effect.gen(function* () {
   return DevicePool.of({
     stream: SubscriptionRef.changes(pool),
     refresh,
-    simlockInventory: readSimlockInventory.pipe(
+    simlockInventory: deviceService.state.pipe(
+      Effect.flatMap(({ sessions }) => readSimlockInventory(sessions)),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
     ),
     prepare,

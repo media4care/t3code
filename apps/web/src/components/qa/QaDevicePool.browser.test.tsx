@@ -118,7 +118,24 @@ it("keeps the catalogue collapsed and searches it without mixing QA environments
   state.inventories = {
     laptop: {
       scannedAt: "2026-11-14T10:00:00.000Z",
-      devices: [],
+      devices: [
+        {
+          id: "simlock_tv",
+          name: "Television (1080p)",
+          platform: "android",
+          version: "34",
+          physical: false,
+          enrolled: true,
+          simlockState: "leased",
+          state: "leased",
+          detail: "",
+          lease: {
+            id: "lse_1",
+            label: "checkout",
+            holder: { type: "requester", requesterId: "claude-code:abc" },
+          },
+        },
+      ],
       hiddenDeletedCount: 5,
       issues: [],
       models: [
@@ -139,6 +156,8 @@ it("keeps the catalogue collapsed and searches it without mixing QA environments
     // The inventory has no routes; the selected environment is supplied by the QA page.
     { router: false },
   );
+  await expect.element(screen.getByText("claude-code:abc", { exact: false })).toBeVisible();
+  await expect.element(screen.getByText("· checkout", { exact: false })).toBeVisible();
   await expect.element(screen.getByLabelText("Search device models")).not.toBeVisible();
   await screen.getByText("Models available to create (2)").click();
   await screen.getByRole("textbox", { name: "Search device models" }).fill("ipad");

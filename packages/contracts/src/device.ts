@@ -244,6 +244,20 @@ export const DeviceSimlockInventory = Schema.Struct({
       simlockState: Schema.NullOr(Schema.String),
       state: Schema.String,
       detail: Schema.String,
+      /** Absent from servers that predate lease holders. */
+      lease: Schema.optionalKey(
+        Schema.Struct({
+          id: Schema.String,
+          label: Schema.NullOr(Schema.String),
+          holder: Schema.Union([
+            /** A thread on this environment holds it through a device it opened. */
+            Schema.Struct({ type: Schema.Literal("thread"), threadId: ThreadId }),
+            Schema.Struct({ type: Schema.Literal("qa-run") }),
+            /** Anyone else Simlock knows by its requester id, such as an agent's own CLI. */
+            Schema.Struct({ type: Schema.Literal("requester"), requesterId: Schema.String }),
+          ]),
+        }),
+      ),
     }),
   ),
   models: Schema.Array(
