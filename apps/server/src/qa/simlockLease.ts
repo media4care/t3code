@@ -14,7 +14,8 @@ export const SIMLOCK_NOT_INSTALLED =
 const Grant = Schema.Struct({
   device: Schema.Struct({
     driverDeviceId: Schema.String,
-    address: Schema.String,
+    // Simlock sets it only for a device it boots; a USB device is reached by its serial.
+    address: Schema.optionalKey(Schema.String),
     physical: Schema.Boolean,
     spec: Schema.Struct({
       platform: Schema.Literals(["ios", "android"]),
@@ -134,7 +135,10 @@ export const leaseFromSimlock = Effect.fn("QaService.leaseFromSimlock")(function
     device: {
       requirement: options.key,
       // adb reaches an emulator by its serial; simulator tools by its UDID.
-      deviceId: device.spec.platform === "android" ? device.address : device.driverDeviceId,
+      deviceId:
+        device.spec.platform === "android"
+          ? (device.address ?? device.driverDeviceId)
+          : device.driverDeviceId,
       name: `${device.spec.model} (Simlock ${lease.id})`,
       platform: device.spec.platform,
       physical: device.physical,
