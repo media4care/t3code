@@ -2002,6 +2002,35 @@ setInterval(() => {}, 1000);`),
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("runs on a physical Android device Simlock leases without an address", () =>
+    Effect.gen(function* () {
+      const setup = yield* fixture(
+        "console.log('ANDROID_SERIAL=' + process.env.ANDROID_SERIAL);",
+        [flows],
+        {},
+        {},
+        { qaDeviceSource: "simlock" },
+      );
+      const { service } = yield* withSimlock(
+        setup,
+        fakeSimlock(`process.stdout.write(JSON.stringify({
+  device: { id: "dev_2", driverDeviceId: "R52N51B9Y0L", physical: true,
+    spec: { physical: true, platform: "android", model: "SM-T515", osVersion: "11", class: "tablet" } },
+  environment: { ANDROID_ADB_SERVER_PORT: "5037", ANDROID_SERIAL: "R52N51B9Y0L" },
+  lease: { id: "lse_3" },
+}) + "\\n");
+setInterval(() => {}, 1000);`),
+      );
+      const finished = yield* completed(
+        service,
+        (yield* service.start({ projectId, suiteId: flows.id })).id,
+      );
+      assert.equal(finished.run.status, "passed");
+      assert.include(finished.output, "ANDROID_SERIAL=R52N51B9Y0L");
+      assert.deepInclude(finished.run.devices?.[0], { deviceId: "R52N51B9Y0L", physical: true });
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("records a run as not run when Simlock is missing or cannot lease a device", () =>
     Effect.gen(function* () {
       const ran = "require('node:fs').writeFileSync('ran.txt', '')";
