@@ -59,6 +59,7 @@ describe("workspace root navigation", () => {
     expect(workspaceUsesColumns("usage")).toBe(false);
     expect(workspaceUsesColumns("issues")).toBe(true);
     expect(workspaceUsesColumns("qa")).toBe(false);
+    expect(workspaceUsesColumns("workflows")).toBe(false);
     expect(workspaceUsesColumns("usage", true)).toBe(true);
     expect(workspaceUsesColumns("gitExplorer")).toBe(true);
     expect(workspaceUsesColumns("threads")).toBe(true);

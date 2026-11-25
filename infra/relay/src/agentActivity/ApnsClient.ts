@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Headers from "effect/http/Headers";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ApnsEnvironment, type ApnsCredentials } from "../Config.ts";
 import { MAX_SUMMARY_TEXT_LENGTH, truncateText } from "./agentActivityPayloads.ts";
@@ -266,6 +267,16 @@ function makePushNotificationRequest(input: {
   };
 }
 
+// The request URL ends in the device token. The client span records the URL,
+// and so does an HTTP client error's message, so neither reaches telemetry.
+const withoutClientSpan = Effect.provideService(HttpClient.TracerDisabledWhen, () => true);
+
+function causeWithoutRequestUrl(cause: unknown): unknown {
+  return HttpClientError.isHttpClientError(cause)
+    ? new Error(cause.reason._tag, { cause: cause.reason.cause })
+    : cause;
+}
+
 function apnsReasonFromBody(body: string): string | undefined {
   if (body.trim().length === 0) {
     return undefined;
@@ -319,6 +330,7 @@ const make = Effect.gen(function* () {
       }),
       HttpClientRequest.bodyJson(input.request.payload),
       Effect.flatMap(httpClient.execute),
+      withoutClientSpan,
       Effect.timeout(APNS_HTTP_STAGE_TIMEOUT),
       Effect.mapError(
         (cause) =>
@@ -330,7 +342,7 @@ const make = Effect.gen(function* () {
             tokenSuffix: input.request.token.slice(-8),
             stage: "send",
             status: null,
-            cause,
+            cause: causeWithoutRequestUrl(cause),
           }),
       ),
     );
@@ -346,7 +358,7 @@ const make = Effect.gen(function* () {
             tokenSuffix: input.request.token.slice(-8),
             stage: "read-response",
             status: response.status,
-            cause,
+            cause: causeWithoutRequestUrl(cause),
           }),
       ),
     );
@@ -381,6 +393,7 @@ const make = Effect.gen(function* () {
         }),
         HttpClientRequest.bodyJson(input.request.payload),
         Effect.flatMap(httpClient.execute),
+        withoutClientSpan,
         Effect.timeout(APNS_HTTP_STAGE_TIMEOUT),
         Effect.mapError(
           (cause) =>
@@ -392,7 +405,7 @@ const make = Effect.gen(function* () {
               tokenSuffix: input.request.token.slice(-8),
               stage: "send",
               status: null,
-              cause,
+              cause: causeWithoutRequestUrl(cause),
             }),
         ),
       );
@@ -408,7 +421,7 @@ const make = Effect.gen(function* () {
               tokenSuffix: input.request.token.slice(-8),
               stage: "read-response",
               status: response.status,
-              cause,
+              cause: causeWithoutRequestUrl(cause),
             }),
         ),
       );

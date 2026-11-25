@@ -28,9 +28,11 @@ import { cn } from "../../lib/cn";
 import { environmentThreadDetails, threadAgentMaps, useThreadFamily } from "../../state/threads";
 import { useServerConfigs } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { useLinkedThreadReach } from "../../state/linkedThread";
 import { useEnvironmentQuery } from "../../state/query";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
+import { subagentThreadTarget, type SubagentThreadTarget } from "./threadAgentsPresentation";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const STATUS_CLASSES = {
@@ -98,7 +100,7 @@ function AgentSkills({ skills }: { skills: ReadonlyArray<string> }) {
 
 export function ThreadAgentMap(props: {
   target: ScopedThreadRef;
-  onOpen: (target: ScopedThreadRef) => void;
+  onOpen: (target: SubagentThreadTarget, title?: string | null) => void;
 }) {
   useThreadFamily(props.target.environmentId, props.target.threadId);
   const projection = useAtomValue(
@@ -194,7 +196,7 @@ function AgentMapRow(props: {
   childCount: number;
   onSelect: () => void;
   onCollapse: () => void;
-  onOpen: (target: ScopedThreadRef) => void;
+  onOpen: (target: SubagentThreadTarget, title?: string | null) => void;
 }) {
   const node = useAtomValue(threadAgentMaps.nodeAtom(props.target, props.node.id)) ?? props.node;
   const configs = useServerConfigs();
@@ -304,7 +306,7 @@ function AgentInspector(props: {
   node: ThreadAgentMapNode;
   target: ScopedThreadRef;
   provider: ServerProvider | undefined;
-  onOpen: (target: ScopedThreadRef) => void;
+  onOpen: (target: SubagentThreadTarget, title?: string | null) => void;
 }) {
   const [tab, setTab] = useState<"output" | "prompt" | "details">("output");
   const node = props.node;
@@ -314,7 +316,24 @@ function AgentInspector(props: {
   const skills = useThreadSkills(node.target);
   const loop = useThreadLoop(node.target).data?.tickets ?? [];
   const missing = node.detailsState === "loading" ? "Loading…" : "Unavailable";
-  const canOpen = node.target !== null && presentationById.has(node.target.environmentId);
+  const remote = node.kind === "Workflow agent" ? undefined : node.source?.remoteChild;
+  const reach = useLinkedThreadReach(
+    props.target.environmentId,
+    remote && node.source ? [node.source] : [],
+  );
+  // A delegated task this app can't reach directly still reads through the environment linking it.
+  const linked =
+    remote && node.source
+      ? subagentThreadTarget(
+          node.source,
+          props.target.environmentId,
+          reach.ownConnection,
+          reach.isLinked,
+        )?.linked
+      : undefined;
+  const canOpen =
+    node.target !== null &&
+    (linked !== undefined || presentationById.has(node.target.environmentId));
   const workflow =
     node.kind === "Workflow" && node.source && !node.source.remoteChild
       ? deriveWorkflowGroups(projectedSubagentsToRuntime([node.source]))[0]
@@ -412,7 +431,8 @@ function AgentInspector(props: {
           label="Conversation"
           disabled={!canOpen}
           onPress={() => {
-            if (canOpen && node.target) props.onOpen(node.target);
+            if (canOpen && node.target)
+              props.onOpen(linked ? { ...node.target, linked } : node.target, node.source?.title);
           }}
         />
         {node.source && node.kind !== "Workflow agent" && !(tab === "details" && workflow) ? (

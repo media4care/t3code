@@ -65,6 +65,7 @@ export function WorkspaceToolbar(props: {
   const searchLabel = m(
     SEARCH_LABELS[
       selectedTab === "usage" ||
+      selectedTab === "workflows" ||
       selectedTab === "gitExplorer" ||
       selectedTab === "insights" ||
       selectedTab === "qa" ||

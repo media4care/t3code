@@ -57,6 +57,7 @@ const fixture = Effect.gen(function* () {
               faviconPath: null,
               projectIcon: null,
               scripts: [],
+              trackedFolders: [],
               createdAt: "2026-01-01T00:00:00.000Z",
               updatedAt: "2026-01-01T00:00:00.000Z",
               deletedAt: null,

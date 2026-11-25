@@ -1,12 +1,15 @@
-import InsightsMigration from "./Migrations/103_Insights.ts";
-import QaRunsMigration from "./Migrations/104_QaRuns.ts";
-import QaInputsMigration from "./Migrations/105_QaInputs.ts";
-import QaAutomationMigration from "./Migrations/106_QaAutomation.ts";
-import QaRepositoriesMigration from "./Migrations/107_QaRepositories.ts";
-import QaRunLanesMigration from "./Migrations/108_QaRunLanes.ts";
+import InsightsMigration from "./Migrations/118_Insights.ts";
+import QaRunsMigration from "./Migrations/119_QaRuns.ts";
+import QaInputsMigration from "./Migrations/120_QaInputs.ts";
+import QaAutomationMigration from "./Migrations/121_QaAutomation.ts";
+import QaRepositoriesMigration from "./Migrations/122_QaRepositories.ts";
+import QaRunLanesMigration from "./Migrations/123_QaRunLanes.ts";
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as DatabaseMigrationProgress from "./DatabaseMigrationProgress.ts";
 import {
   DATABASE_MIGRATION_PROGRESS_MESSAGE,
   DATABASE_MIGRATIONS_FINISHED_MESSAGE,
@@ -116,6 +119,21 @@ import Migration0099 from "./Migrations/099_BackgroundRecoveryIndexes.ts";
 import Migration0100 from "./Migrations/100_TurnStartReadIndexes.ts";
 import Migration0101 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
 import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
+import Migration0103 from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
+import Migration0104 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
+import Migration0105 from "./Migrations/105_TaskFolders.ts";
+import Migration0106 from "./Migrations/106_WorktreePathKeyIndex.ts";
+import Migration0107 from "./Migrations/107_DeferredSlashCommandIndex.ts";
+import Migration0108 from "./Migrations/108_AgentFeedback.ts";
+import Migration0109 from "./Migrations/109_IssueTrackerAccounts.ts";
+import Migration0110 from "./Migrations/110_Workflows.ts";
+import Migration0111 from "./Migrations/111_SupersededRunAttemptIndex.ts";
+import Migration0112 from "./Migrations/112_LayoutCommandApprovals.ts";
+import Migration0113 from "./Migrations/113_WorkflowSkippedRuns.ts";
+import Migration0114 from "./Migrations/114_WorkflowRunIndexes.ts";
+import Migration0115 from "./Migrations/115_WorkflowRunTags.ts";
+import Migration0116 from "./Migrations/116_ForkHistoryMembership.ts";
+import Migration0117 from "./Migrations/117_WorkflowMailSender.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -221,12 +239,27 @@ const migrationEntries = [
   [100, "TurnStartReadIndexes", Migration0100],
   [101, "DelegatedTaskReadIndexes", Migration0101],
   [102, "ThreadItemCounts", Migration0102],
-  [103, "Insights", InsightsMigration],
-  [104, "QaRuns", QaRunsMigration],
-  [105, "QaInputs", QaInputsMigration],
-  [106, "QaAutomation", QaAutomationMigration],
-  [107, "QaRepositories", QaRepositoriesMigration],
-  [108, "QaRunLanes", QaRunLanesMigration],
+  [103, "IssueTrackerAdditionalScopes", Migration0103],
+  [104, "ProjectionProjectsTrackedFolders", Migration0104],
+  [105, "TaskFolders", Migration0105],
+  [106, "WorktreePathKeyIndex", Migration0106],
+  [107, "DeferredSlashCommandIndex", Migration0107],
+  [108, "AgentFeedback", Migration0108],
+  [109, "IssueTrackerAccounts", Migration0109],
+  [110, "Workflows", Migration0110],
+  [111, "SupersededRunAttemptIndex", Migration0111],
+  [112, "LayoutCommandApprovals", Migration0112],
+  [113, "WorkflowSkippedRuns", Migration0113],
+  [114, "WorkflowRunIndexes", Migration0114],
+  [115, "WorkflowRunTags", Migration0115],
+  [116, "ForkHistoryMembership", Migration0116],
+  [117, "WorkflowMailSender", Migration0117],
+  [118, "Insights", InsightsMigration],
+  [119, "QaRuns", QaRunsMigration],
+  [120, "QaInputs", QaInputsMigration],
+  [121, "QaAutomation", QaAutomationMigration],
+  [122, "QaRepositories", QaRepositoriesMigration],
+  [123, "QaRunLanes", QaRunLanesMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -306,7 +339,7 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
 
 const run = Migrator.make({});
 
-const FIRST_EXPLORER_MIGRATION_ID = 103;
+const FIRST_EXPLORER_MIGRATION_ID = 118;
 const EXPLORER_MIGRATION_NAMES = [
   "Insights",
   "QaRuns",
@@ -316,7 +349,7 @@ const EXPLORER_MIGRATION_NAMES = [
   "QaRunLanes",
 ];
 
-// Explorer shipped its migrations at 73, 77, 80, 81, 82, then 97 before upstream claimed those ids; move them
+// Explorer shipped its migrations at 73, 77, 80, 81, 82, 97, then 103 before upstream claimed those ids; move them
 // past upstream's, keeping their tables and timestamps, and run the upstream migrations they hid.
 const reconcileExplorerMigrations = Effect.fn("reconcileExplorerMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -377,6 +410,7 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  const progress = yield* Effect.serviceOption(DatabaseMigrationProgress.DatabaseMigrationProgress);
   // The desktop waits past its readiness budget until the finished line follows this one.
   const hasPending = yield* hasPendingMigrations();
   if (hasPending) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
@@ -413,17 +447,26 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ...previewMigrations,
     ...explorerMigrations,
   ];
-  for (const [index, [id, name]] of pending.entries()) {
-    if (latestRecordedId > 0) {
-      yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
-        Effect.annotateLogs({
-          migration: `${id}_${name}`,
-          progress: `${index + 1} of ${pending.length}`,
-        }),
-      );
+  yield* Effect.gen(function* () {
+    for (const [index, [id, name]] of pending.entries()) {
+      if (Option.isSome(progress)) {
+        yield* Ref.set(progress.value.current, { current: index + 1, total: pending.length });
+      }
+      if (latestRecordedId > 0) {
+        yield* Effect.log(
+          `${DATABASE_MIGRATION_PROGRESS_MESSAGE} (${index + 1} of ${pending.length})`,
+        ).pipe(
+          Effect.annotateLogs({
+            migration: `${id}_${name}`,
+            progress: `${index + 1} of ${pending.length}`,
+          }),
+        );
+      }
+      executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
     }
-    executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
-  }
+  }).pipe(
+    Effect.ensuring(Option.isSome(progress) ? Ref.set(progress.value.current, null) : Effect.void),
+  );
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

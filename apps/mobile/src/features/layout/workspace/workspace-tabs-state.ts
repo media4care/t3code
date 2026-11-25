@@ -61,6 +61,7 @@ export function initialWorkspaceTabsState(
       pullRequests: emptyTab(),
       issues: emptyTab(),
       gitExplorer: emptyTab(),
+      workflows: emptyTab(),
       usage: emptyTab(),
       insights: emptyTab(),
       qa: emptyTab(),

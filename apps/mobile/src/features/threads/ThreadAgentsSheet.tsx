@@ -11,9 +11,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { environmentThreadDetails } from "../../state/threads";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import type { SubagentThreadTarget } from "./threadAgentsPresentation";
 
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
 import { ThreadAgentMap } from "./ThreadAgentMap";
+import { useOpenLinkedThreadRead } from "./useOpenLinkedThread";
 
 type AgentsTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 
@@ -41,10 +43,15 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
   const target = route.params;
   const navigation = useNavigation();
   const openInspector = useOpenThreadInspector();
+  const openLinkedRead = useOpenLinkedThreadRead();
   const insets = useSafeAreaInsets();
   const gt = useGT();
-  const openChildThread = (child: { environmentId: EnvironmentId; threadId: ThreadId }) => {
+  const openChildThread = (child: SubagentThreadTarget, title: string | null = null) => {
     void Haptics.selectionAsync();
+    if (child.linked !== undefined) {
+      openLinkedRead(child, child.linked, title, { source: target, replace: true });
+      return;
+    }
     if (
       openInspector(target, {
         type: "thread",

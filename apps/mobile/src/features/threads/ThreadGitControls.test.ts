@@ -14,6 +14,10 @@ vi.mock("@react-navigation/native", () => ({
 }));
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("../../state/entities", () => ({ useQuietThreadShell: () => state.thread }));
+vi.mock("gt-react-native", async (importOriginal) => {
+  const gt = await importOriginal<typeof import("gt-react-native")>();
+  return { ...gt, useGT: () => gt.mFallback, useMessages: () => gt.mFallback };
+});
 
 import { useThreadGitMenuDefinition, type ThreadGitMenuProps } from "./ThreadGitControls";
 import type { AppBarMenu } from "../../components/ui/AppBar.types";

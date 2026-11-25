@@ -9,14 +9,24 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
+import * as Ref from "effect/Ref";
+import * as Logger from "effect/Logger";
+import * as Console from "effect/Console";
+import * as NodeUtil from "node:util";
+import type { DatabaseMigrationProgress as Progress } from "@t3tools/contracts";
+import {
+  databaseMigrationProgress,
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+} from "@t3tools/shared/databaseMigrationLog";
+import * as DatabaseMigrationProgress from "./DatabaseMigrationProgress.ts";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import Insights from "./Migrations/103_Insights.ts";
-import QaRuns from "./Migrations/104_QaRuns.ts";
-import QaInputs from "./Migrations/105_QaInputs.ts";
-import QaAutomation from "./Migrations/106_QaAutomation.ts";
-import QaRepositories from "./Migrations/107_QaRepositories.ts";
-import QaRunLanes from "./Migrations/108_QaRunLanes.ts";
+import Insights from "./Migrations/118_Insights.ts";
+import QaRuns from "./Migrations/119_QaRuns.ts";
+import QaInputs from "./Migrations/120_QaInputs.ts";
+import QaAutomation from "./Migrations/121_QaAutomation.ts";
+import QaRepositories from "./Migrations/122_QaRepositories.ts";
+import QaRunLanes from "./Migrations/123_QaRunLanes.ts";
 
 const explorerMigrations = [
   ["Insights", Insights],
@@ -27,7 +37,7 @@ const explorerMigrations = [
   ["QaRunLanes", QaRunLanes],
 ] as const;
 
-// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, 80, 81, and 96.
+// Explorer builds recorded their migrations right after upstream's 72, then after its 76, 79, 80, 81, 96, and 102.
 const seedExplorer = Effect.fn("test.seedExplorer")(function* (base: number, count: number) {
   yield* runMigrations({ toMigrationInclusive: base - 1 });
   yield* Migrator.make({})({
@@ -64,7 +74,7 @@ const v2TableCount = Effect.gen(function* () {
 
 describe("runMigrations", () => {
   it.effect.each(
-    [73, 77, 80, 81, 82, 97].flatMap((base) =>
+    [73, 77, 80, 81, 82, 97, 103].flatMap((base) =>
       [1, 2, 3, 4, 5, 6].map((count) => [base, count] as const),
     ),
   )("preserves Explorer data when upgrading %s-based migrations through %s", ([base, count]) =>
@@ -94,7 +104,7 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* saved, before);
       assert.deepStrictEqual(
-        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 103`,
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 118`,
         [{ created_at: "2026-10-30 00:00:00" }],
       );
       const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_projects)`;
@@ -110,6 +120,7 @@ describe("runMigrations", () => {
     [81, "ProjectionMessageSearchText"],
     [82, "RepairStaleTitleRegeneration"],
     [97, "ThreadItemCounts"],
+    [103, "WorkflowMailSender"],
   ] as const)("rolls back a %s-based Explorer upgrade if %s fails", ([base, failing]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -127,7 +138,7 @@ describe("runMigrations", () => {
   );
 
   it.effect.each(
-    [73, 77, 80, 81, 82, 97].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+    [73, 77, 80, 81, 82, 97, 103].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
   )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -191,10 +202,45 @@ describe("runMigrations", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* runMigrations({ toMigrationInclusive: id });
+        const expected = migrationManifest.filter(([next]) => next > id);
+        const current = yield* Ref.make<Progress | null>(null);
+        const steps: Array<Progress | null> = [];
+        const loggedSteps: Array<Progress | null> = [];
+        let output = "";
+        const pretty = Logger.consolePretty({ mode: "tty", colors: false });
+        const logger = Logger.make((options) => {
+          pretty.log(options);
+          if (String(options.message).startsWith(DATABASE_MIGRATION_PROGRESS_MESSAGE)) {
+            steps.push(Ref.getUnsafe(current));
+            loggedSteps.push(databaseMigrationProgress(output.slice(-4_000)));
+          }
+        });
         assert.deepStrictEqual(
-          yield* runMigrations(),
-          migrationManifest.filter(([next]) => next > id),
+          yield* runMigrations().pipe(
+            Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+            Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+            Effect.provideService(Console.Console, {
+              ...globalThis.console,
+              log: (...args) => {
+                output += `${NodeUtil.format(...args)}\n`;
+              },
+            }),
+          ),
+          expected,
         );
+        assert.deepStrictEqual(
+          steps,
+          expected.map((_, index) => ({ current: index + 1, total: expected.length })),
+        );
+        assert.deepStrictEqual(loggedSteps, steps);
+        assert.isNull(yield* Ref.get(current));
+        assert.deepStrictEqual(
+          yield* runMigrations().pipe(
+            Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+          ),
+          [],
+        );
+        assert.isNull(yield* Ref.get(current));
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.isAbove(yield* v2TableCount, 0);
 
@@ -281,7 +327,7 @@ describe("runMigrations", () => {
   it.effect("keeps QA runs saved before suites ran per device readable", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 107 });
+      yield* runMigrations({ toMigrationInclusive: 122 });
       const suite = {
         id: "maestro",
         name: "Maestro",
@@ -332,9 +378,15 @@ describe("runMigrations", () => {
       yield* runMigrations({ toMigrationInclusive: 81 });
       yield* sql`CREATE TABLE orchestration_v2_projection_turn_item_counts (thread_id TEXT)`;
 
-      const exit = yield* Effect.exit(runMigrations());
+      const current = yield* Ref.make<Progress | null>(null);
+      const exit = yield* Effect.exit(
+        runMigrations().pipe(
+          Effect.provideService(DatabaseMigrationProgress.DatabaseMigrationProgress, { current }),
+        ),
+      );
 
       assert.isTrue(Exit.isFailure(exit));
+      assert.isNull(yield* Ref.get(current));
       assert.deepStrictEqual(
         yield* history,
         migrationManifest.filter(([id]) => id <= 84),

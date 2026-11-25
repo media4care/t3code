@@ -31,6 +31,7 @@ export const NAVIGATION_TAB_ICONS = {
   pullRequests: PullRequestGlyph.pullRequest,
   issues: "git.issue",
   gitExplorer: "point.topleft.down.curvedto.point.bottomright.up",
+  workflows: "point.3.connected.trianglepath.dotted",
   usage: "chart.bar.xaxis",
   insights: "lightbulb",
   qa: "checkmark.circle",
