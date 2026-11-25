@@ -80,6 +80,7 @@ import { makeQaCheckouts, type QaCheckoutListener, type QaCheckoutTarget } from 
 import { makeDeviceSelections } from "./deviceSelections.ts";
 import { makeSharedResults, SHARED_RESULT_DETAILS } from "./sharedResults.ts";
 import { leaseFromSimlock } from "./simlockLease.ts";
+import { QA_SIMLOCK_REQUESTER_PREFIX } from "../device/simlockInventory.ts";
 import { makeRepositoryIconReader } from "../workspace/repositoryIcons.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
@@ -909,7 +910,7 @@ const make = Effect.gen(function* () {
       appendOutput(entry, `[T3 QA] Leasing ${label} from Simlock…\n`);
       const leased = yield* leaseFromSimlock(requirement, {
         key,
-        agentId: `t3-qa-${id}-${key}`,
+        agentId: `${QA_SIMLOCK_REQUESTER_PREFIX}${id}-${key}`,
         timeout: `${Duration.toMinutes(DEVICE_WAIT)}m`,
         path: environment.PATH,
         onProgress: (line) => Effect.sync(() => appendOutput(entry, `[Simlock] ${line}\n`)),

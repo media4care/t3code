@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  androidReleaseForApiLevel,
   qaDeviceAssignments,
   qaDeviceRequirementLabel,
   qaDeviceUnavailableReason,
@@ -147,5 +148,17 @@ describe("qaDeviceUnavailableReason", () => {
     );
     expect(qaDeviceRequirementLabel({ platform: "ios", type: "virtual" })).toBe("iOS simulator");
     expect(qaDeviceRequirementLabel({ platform: "ios", formFactor: "tablet" })).toBe("iOS tablet");
+  });
+});
+
+describe("androidReleaseForApiLevel", () => {
+  it("names the release Simlock's API levels stand for, and none for an unknown level", () => {
+    expect(["28", "30", "32", "35"].map(androidReleaseForApiLevel)).toEqual([
+      "9",
+      "11",
+      "12L",
+      "15",
+    ]);
+    expect(androidReleaseForApiLevel("99")).toBeNull();
   });
 });

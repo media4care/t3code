@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
+import { ThreadId } from "@t3tools/contracts";
 import * as ProcessRunner from "../processRunner.ts";
 import { readSimlockInventory } from "./simlockInventory.ts";
 
@@ -17,6 +18,8 @@ const scan = (
   adb: string,
   catalog: unknown = { platforms: [] },
   simlockOutput: Partial<ProcessRunner.ProcessRunOutput> = {},
+  leases: unknown = [],
+  sessions: Parameters<typeof readSimlockInventory>[0] = [],
 ) => {
   const calls: string[][] = [];
   const layer = Layer.mock(ProcessRunner.ProcessRunner)({
@@ -24,7 +27,11 @@ const scan = (
       calls.push([command, ...args]);
       return Effect.succeed({
         stdout:
-          command === "adb" ? adb : JSON.stringify(args.includes("catalog") ? catalog : devices),
+          command === "adb"
+            ? adb
+            : JSON.stringify(
+                args.includes("catalog") ? catalog : args.includes("--leases") ? leases : devices,
+              ),
         stderr: "",
         code: ChildProcessSpawner.ExitCode(0),
         timedOut: false,
@@ -36,7 +43,7 @@ const scan = (
       });
     },
   });
-  return readSimlockInventory.pipe(
+  return readSimlockInventory(sessions).pipe(
     Effect.provide(layer),
     Effect.map((result) => ({ result, calls })),
   );
@@ -68,6 +75,7 @@ it.effect(
       expect(calls).toEqual(
         expect.arrayContaining([
           ["simlock", "--local", "list"],
+          ["simlock", "--local", "list", "--leases"],
           ["simlock", "--local", "catalog", "--json"],
           ["adb", "devices", "-l"],
         ]),
@@ -119,13 +127,87 @@ it.effect("reports failed or truncated sources without losing physical connectio
       expect(result.devices).toEqual([
         expect.objectContaining({ id: "usb", state: "offline", enrolled: null }),
       ]);
-      expect(result.issues).toHaveLength(2);
+      expect(result.issues).toHaveLength(3);
       expect(result.issues).toEqual(
         expect.arrayContaining([
           expect.stringContaining("Simlock devices"),
+          expect.stringContaining("Simlock leases"),
           expect.stringContaining("Simlock models"),
         ]),
       );
     }
+  }),
+);
+
+it.effect("names who holds each leased device: a thread here, a QA run, or the requester", () =>
+  Effect.gen(function* () {
+    const { result } = yield* scan(
+      [
+        record("thread-tv", "leased", false),
+        record("qa-tablet", "leased", false),
+        record("cli-phone", "leased"),
+        record("free", "ready"),
+      ],
+      "List of devices attached\n",
+      { platforms: [] },
+      {},
+      [
+        { id: "lse_tv", deviceId: "dev-thread-tv", requesterId: "gw:a:token", label: "checkout" },
+        { id: "lse_qa", deviceId: "dev-qa-tablet", requesterId: "t3-qa-run1-android-0" },
+        { id: "lse_cli", deviceId: "dev-cli-phone", requesterId: "claude-code:abc" },
+      ],
+      [{ threadId: ThreadId.make("thread-1"), deviceId: "worker-1.lse_tv" }],
+    );
+    expect(result.devices.map((device) => [device.id, device.lease])).toEqual([
+      [
+        "thread-tv",
+        {
+          id: "lse_tv",
+          label: "checkout",
+          holder: { type: "thread", threadId: "thread-1" },
+        },
+      ],
+      ["qa-tablet", { id: "lse_qa", label: null, holder: { type: "qa-run" } }],
+      [
+        "cli-phone",
+        {
+          id: "lse_cli",
+          label: null,
+          holder: { type: "requester", requesterId: "claude-code:abc" },
+        },
+      ],
+      ["free", undefined],
+    ]);
+    expect(result.issues).toEqual([]);
+  }),
+);
+
+it.effect("classes devices: a physical one by its own class, an instance by its model", () =>
+  Effect.gen(function* () {
+    const { result } = yield* scan(
+      [
+        { ...record("tab", "ready"), class: "tablet" },
+        { ...record("tv", "leased", false), spec: { platform: "android", model: "Television" } },
+        { ...record("car", "ready", false), spec: { platform: "android", model: "Automotive" } },
+        record("unknown", "ready", false),
+      ],
+      "List of devices attached\n",
+      {
+        platforms: [
+          {
+            platform: "android",
+            models: ["Television", "Automotive"],
+            modelRuntimes: {},
+            modelClasses: { Television: "tv", Automotive: "auto" },
+          },
+        ],
+      },
+    );
+    expect(result.devices.map((device) => [device.id, device.formFactor])).toEqual([
+      ["tab", "tablet"],
+      ["tv", "tv"],
+      ["car", "other"],
+      ["unknown", undefined],
+    ]);
   }),
 );
