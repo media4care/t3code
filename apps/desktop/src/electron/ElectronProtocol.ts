@@ -24,6 +24,10 @@ export function getDesktopScheme(isDevelopment: boolean): string {
   return new URL(getDesktopUrl(isDevelopment)).protocol.slice(0, -1);
 }
 
+export function getDesktopOrigin(isDevelopment: boolean): string {
+  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
+}
+
 export function getDesktopUrl(isDevelopment: boolean): string {
   return DESKTOP_URLS[isDevelopment ? "development" : "production"];
 }

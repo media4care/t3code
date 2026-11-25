@@ -10,7 +10,9 @@ export const NAVIGATION_TAB_ORDER = [
   "insights",
   "releases",
 ] as const;
-export type NavigationTab = (typeof NAVIGATION_TAB_ORDER)[number];
+/** Built, but left out of the tab bar while workflows are a soft launch on web. */
+type UnlistedTab = "workflows";
+export type NavigationTab = (typeof NAVIGATION_TAB_ORDER)[number] | UnlistedTab;
 
 const SHARED_SLOT_TABS = ["pullRequests", "issues"] as const;
 export type SharedSlotTab = (typeof SHARED_SLOT_TABS)[number];
@@ -39,6 +41,7 @@ export const NAVIGATION_TAB_LABELS: Readonly<Record<NavigationTab, string>> = {
   pullRequests: msg("Pulls", { $context: "navigation tab, pull requests" }),
   issues: msg("Issues", { $context: "navigation tab, issues from an issue tracker" }),
   gitExplorer: msg("Git Explorer", { $context: "navigation tab, git repository browser" }),
+  workflows: msg("Workflows", { $context: "navigation tab, durable workflow runs" }),
   usage: msg("Usage", { $context: "navigation tab, provider usage limits" }),
   insights: msg("Insights", { $context: "navigation tab, agent workflow insights" }),
   qa: msg("QA", { $context: "navigation tab, test suites and runs" }),

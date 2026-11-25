@@ -169,14 +169,19 @@ export function ThreadDetailsPrRow({
     checks: detail?.checks ?? [],
   });
 
+  const [armedMergeHead, setArmedMergeHead] = useState<string>();
   const { actionPending, pendingAction, perform } = usePullRequestActionRunner({
     environmentId,
     reference,
+    // The row shows no diff, so a merge lands the head it had when the confirmation opened.
+    headSha: armedMergeHead ?? detail?.headSha,
     terminology,
     onSuccess: () => {
       checksQuery.refresh();
       onActed?.();
     },
+    // A refused merge usually means the row is stale, so show what the host has now.
+    onFailure: () => detailQuery.refresh(),
   });
   const { handoff, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
   const rebaseLaunch = usePullRequestRebaseLaunch({
@@ -233,7 +238,8 @@ export function ThreadDetailsPrRow({
       (await perform("update-branch", undefined, "rebase"))
     ) {
       if (rowAction === "rebase-and-merge") {
-        await perform("enable-auto-merge", selectedMergeMethod);
+        // The rebase just moved the head, so a pin to the one on screen would be refused.
+        await perform("enable-auto-merge", selectedMergeMethod, undefined, { pinHead: false });
       }
       return;
     }
@@ -492,7 +498,10 @@ export function ThreadDetailsPrRow({
                       method: mergeMethodKey,
                     },
                   ),
-                  onClick: () => setConfirmingMerge(true),
+                  onClick: () => {
+                    setArmedMergeHead(detail?.headSha);
+                    setConfirmingMerge(true);
+                  },
                 }
               : null;
 

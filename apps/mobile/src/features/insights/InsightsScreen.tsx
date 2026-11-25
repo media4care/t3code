@@ -37,12 +37,12 @@ import {
   Linking,
   Platform,
   Pressable,
-  RefreshControl,
   Switch,
   TextInput,
   View,
   type TextInputInstance,
 } from "react-native";
+import { RefreshControl } from "../../components/ui/RefreshControl";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText as Text } from "../../components/ui/AppText";

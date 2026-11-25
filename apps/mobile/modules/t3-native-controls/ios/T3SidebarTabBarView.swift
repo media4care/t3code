@@ -15,7 +15,7 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   private let composeItem = UITabBarItem(title: nil, image: nil, tag: -1)
   private var itemsByTab: [String: UITabBarItem] = [:]
   private var labelsByTab: [String: String] = [:]
-  var tabs = ["threads", "pullRequests", "issues", "gitExplorer", "insights", "usage", "qa", "releases", "settings"] {
+  var tabs = ["threads", "pullRequests", "issues", "workflows", "gitExplorer", "insights", "usage", "qa", "releases", "settings"] {
     didSet { if tabs != oldValue { updateItems() } }
   }
   var badgedTabs: [String] = [] {
@@ -57,9 +57,17 @@ final class T3SidebarTabBarView: ExpoView, UITabBarDelegate {
   private func prepareItems() {
     let iconBundle = Bundle(for: Self.self).url(forResource: "T3NativeControlIcons", withExtension: "bundle").flatMap(Bundle.init(url:))
     let pullRequestIcon = UIImage(named: "pull-request", in: iconBundle, compatibleWith: nil)?.withRenderingMode(.alwaysTemplate)
-    let labels = ["threads": "Chats", "pullRequests": "PRs", "issues": "Issues", "gitExplorer": "Git Explorer", "usage": "Usage", "insights": "Insights", "qa": "QA", "releases": "Releases", "settings": "Settings"]
+    let labels = [
+      "threads": "Chats", "pullRequests": "PRs", "issues": "Issues", "workflows": "Workflows",
+      "gitExplorer": "Git Explorer", "usage": "Usage", "insights": "Insights", "qa": "QA",
+      "releases": "Releases", "settings": "Settings",
+    ]
     let issueIcon = UIImage(named: "issue", in: iconBundle, compatibleWith: nil)?.withRenderingMode(.alwaysTemplate)
-    let symbols = ["threads": "text.bubble", "gitExplorer": "point.topleft.down.curvedto.point.bottomright.up", "usage": "chart.bar.xaxis", "insights": "lightbulb", "qa": "checkmark.seal", "releases": "shippingbox", "settings": "gearshape"]
+    let symbols = [
+      "threads": "text.bubble", "workflows": "point.3.connected.trianglepath.dotted",
+      "gitExplorer": "point.topleft.down.curvedto.point.bottomright.up", "usage": "chart.bar.xaxis",
+      "insights": "lightbulb", "qa": "checkmark.seal", "releases": "shippingbox", "settings": "gearshape",
+    ]
     for (tab, label) in labels {
       let icon = tab == "pullRequests" ? pullRequestIcon : tab == "issues" ? issueIcon : UIImage(systemName: symbols[tab] ?? "circle")
       let item = UITabBarItem(title: nil, image: tabIcon(icon), tag: 0)

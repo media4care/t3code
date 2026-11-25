@@ -1,9 +1,11 @@
 import {
+  NAVIGATION_TAB_LABELS,
   enabledNavigationTabs,
   selectedNavigationTab,
   visibleNavigationTabs,
 } from "./navigation-tab-order";
 import { requireNativeView } from "expo";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { CommonActions, useNavigation } from "@react-navigation/native";
 import {
   Keyboard,
@@ -46,6 +48,9 @@ interface NativeNavigationProps extends ViewProps {
   readonly tabs: readonly string[];
   /** Tabs drawn with a review-rejected badge. */
   readonly badgedTabs: readonly string[];
+  readonly tabTitles: Readonly<Record<string, string>>;
+  readonly expandedTabTitles: Readonly<Record<string, string>>;
+  readonly newThreadTitle: string;
   readonly selectedTab: AndroidWorkspaceNavigationTab;
   readonly dark: boolean;
   readonly textScale: number;
@@ -66,6 +71,12 @@ interface NativeNavigationProps extends ViewProps {
   readonly onOverlayChange: (event: NativeSyntheticEvent<{ readonly overlay: boolean }>) => void;
 }
 
+const TAB_TITLES = {
+  ...NAVIGATION_TAB_LABELS,
+  threads: msg("Chats", { $context: "navigation tab, list of chat threads" }),
+  settings: msg("Settings"),
+};
+
 const NativeNavigation = requireNativeView<NativeNavigationProps>("T3WorkspaceNavigation");
 
 function nativeColor(value: string) {
@@ -84,6 +95,8 @@ export function AndroidWorkspaceNavigation(props: {
   readonly onOverlayChange?: (overlay: boolean) => void;
 }) {
   const workspace = useWorkspaceTabs()!;
+  const gt = useGT();
+  const m = useMessages();
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const root = useAndroidWorkspaceRoot();
@@ -98,7 +111,7 @@ export function AndroidWorkspaceNavigation(props: {
   const window = useWindowDimensions();
   const rail = Boolean(props.rail);
   const floating = !rail && Boolean(props.floating);
-  const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings"];
+  const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings" as const];
   // Settings lists the overflow tabs except beside a split view.
   const badgedTab = useReleasesRejected()
     ? releasesBadgeTab(tabs, layout.usesSplitView ? tabs : enabledNavigationTabs(order, hidden))
@@ -136,6 +149,9 @@ export function AndroidWorkspaceNavigation(props: {
         floating={floating}
         tabs={tabs}
         badgedTabs={badgedTabs(badgedTab)}
+        tabTitles={Object.fromEntries(tabs.map((tab) => [tab, m(TAB_TITLES[tab])]))}
+        expandedTabTitles={{ pullRequests: gt("Pull requests") }}
+        newThreadTitle={gt("New thread")}
         selectedTab={selectedTab}
         dark={themeAppearance === "dark"}
         textScale={scale}
