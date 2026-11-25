@@ -129,6 +129,7 @@ it("keeps the catalogue collapsed and searches it without mixing QA environments
           simlockState: "leased",
           state: "leased",
           detail: "",
+          formFactor: "tv",
           lease: {
             id: "lse_1",
             label: "checkout",
@@ -157,6 +158,8 @@ it("keeps the catalogue collapsed and searches it without mixing QA environments
     { router: false },
   );
   await expect.element(screen.getByText("claude-code:abc", { exact: false })).toBeVisible();
+  await expect.element(screen.getByRole("img", { name: "TV" })).toBeVisible();
+  await expect.element(screen.getByText("Android 14 · API 34", { exact: false })).toBeVisible();
   await expect.element(screen.getByText("· checkout", { exact: false })).toBeVisible();
   await expect.element(screen.getByLabelText("Search device models")).not.toBeVisible();
   await screen.getByText("Models available to create (2)").click();

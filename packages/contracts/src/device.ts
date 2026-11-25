@@ -244,6 +244,8 @@ export const DeviceSimlockInventory = Schema.Struct({
       simlockState: Schema.NullOr(Schema.String),
       state: Schema.String,
       detail: Schema.String,
+      /** Absent when Simlock does not say, such as for a phone it has not enrolled. */
+      formFactor: Schema.optionalKey(DeviceFormFactor),
       /** Absent from servers that predate lease holders. */
       lease: Schema.optionalKey(
         Schema.Struct({

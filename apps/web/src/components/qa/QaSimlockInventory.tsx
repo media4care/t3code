@@ -3,11 +3,13 @@ import { MonitorSmartphoneIcon, RefreshCwIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import type { DeviceSimlockInventory, EnvironmentId } from "@t3tools/contracts";
 import { qaWhen } from "@t3tools/client-runtime/qa";
+import { androidReleaseForApiLevel } from "@t3tools/shared/qaDevices";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ThreadContextChip } from "../ThreadContextChip";
+import { DEVICE_FORM_FACTOR_ICONS } from "./deviceIcons";
 
 const stateLabels: Record<string, string> = {
   ready: msg("Available", { $context: "device state" }),
@@ -22,9 +24,25 @@ const stateLabels: Record<string, string> = {
   offline: msg("Offline", { $context: "device state" }),
   "no permissions": msg("No permission", { $context: "device state" }),
 };
-const platformLabel = (platform: string) => (platform === "ios" ? "iOS" : "Android");
-
 type InventoryDevice = DeviceSimlockInventory["devices"][number];
+
+const platformLabel = (platform: string) => (platform === "ios" ? "iOS" : "Android");
+const formFactorLabels = {
+  phone: msg("Phone"),
+  tablet: msg("Tablet"),
+  tv: msg("TV"),
+  watch: msg("Watch"),
+  other: msg("Other device"),
+};
+
+/** Simlock reports an Android version as its API level; people know the release. */
+function osVersionLabel(device: InventoryDevice) {
+  if (device.platform === "ios") return device.version ? `iOS ${device.version}` : "iOS";
+  if (!device.version) return "Android";
+  const release = androidReleaseForApiLevel(device.version);
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- platform names and "API" stay English
+  return release ? `Android ${release} · API ${device.version}` : `Android API ${device.version}`;
+}
 
 function LeaseHolder({
   lease,
@@ -57,6 +75,17 @@ function LeaseHolder({
   );
 }
 
+function FormFactorIcon({
+  formFactor,
+}: {
+  formFactor: NonNullable<InventoryDevice["formFactor"]>;
+}) {
+  const m = useMessages();
+  const Icon = DEVICE_FORM_FACTOR_ICONS[formFactor];
+  const label = m(formFactorLabels[formFactor]);
+  return <Icon role="img" aria-label={label} className="size-4 shrink-0 text-muted-foreground" />;
+}
+
 function DeviceRows({
   devices,
   environmentId,
@@ -70,6 +99,7 @@ function DeviceRows({
       {devices.map((device) => (
         <li key={`${device.platform}:${device.id}`} className="py-3">
           <div className="flex flex-wrap items-center gap-2">
+            {device.formFactor && <FormFactorIcon formFactor={device.formFactor} />}
             <span className="font-medium">{device.name}</span>
             <Badge
               variant={device.state === "ready" && device.enrolled === true ? "success" : "outline"}
@@ -90,7 +120,7 @@ function DeviceRows({
             )}
           </div>
           <p className="mt-1 break-all text-xs text-muted-foreground">
-            {platformLabel(device.platform)} {device.version} · {device.id}
+            {osVersionLabel(device)} · {device.id}
           </p>
           {device.lease && <LeaseHolder lease={device.lease} environmentId={environmentId} />}
           {device.detail && <p className="mt-1 text-sm text-muted-foreground">{device.detail}</p>}

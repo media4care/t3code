@@ -181,3 +181,33 @@ it.effect("names who holds each leased device: a thread here, a QA run, or the r
     expect(result.issues).toEqual([]);
   }),
 );
+
+it.effect("classes devices: a physical one by its own class, an instance by its model", () =>
+  Effect.gen(function* () {
+    const { result } = yield* scan(
+      [
+        { ...record("tab", "ready"), class: "tablet" },
+        { ...record("tv", "leased", false), spec: { platform: "android", model: "Television" } },
+        { ...record("car", "ready", false), spec: { platform: "android", model: "Automotive" } },
+        record("unknown", "ready", false),
+      ],
+      "List of devices attached\n",
+      {
+        platforms: [
+          {
+            platform: "android",
+            models: ["Television", "Automotive"],
+            modelRuntimes: {},
+            modelClasses: { Television: "tv", Automotive: "auto" },
+          },
+        ],
+      },
+    );
+    expect(result.devices.map((device) => [device.id, device.formFactor])).toEqual([
+      ["tab", "tablet"],
+      ["tv", "tv"],
+      ["car", "other"],
+      ["unknown", undefined],
+    ]);
+  }),
+);

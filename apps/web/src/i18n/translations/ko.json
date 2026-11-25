@@ -13015,5 +13015,9 @@
     ")"
   ],
   "67f13ef29c764c33": "Model definitions, not connected devices. Models without an installed runtime cannot be created yet.",
-  "98aa7256024c0da2": "No matching models reported."
+  "98aa7256024c0da2": "No matching models reported.",
+  "de7466f6cf38b24b": "태블릿",
+  "f399eb1891b5ef3e": "TV",
+  "653eaf37ca3c39db": "워치",
+  "202a77bae0bf7738": "기타 기기"
 }

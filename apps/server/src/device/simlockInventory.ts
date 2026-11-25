@@ -1,4 +1,4 @@
-import type { DeviceSession, DeviceSimlockInventory } from "@t3tools/contracts";
+import type { DeviceFormFactor, DeviceSession, DeviceSimlockInventory } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -17,6 +17,7 @@ const Devices = Schema.fromJsonString(
       }),
       state: Schema.String,
       physical: Schema.Boolean,
+      class: Schema.optionalKey(Schema.String),
       absentReason: Schema.optionalKey(Schema.String),
     }),
   ),
@@ -49,6 +50,14 @@ const Leases = Schema.fromJsonString(
 export const QA_SIMLOCK_REQUESTER_PREFIX = "t3-qa-";
 
 const decodeDevices = Schema.decodeUnknownEffect(Devices);
+// Simlock's classes also include vision and auto, which T3 shows as other devices.
+const formFactorOf = (deviceClass: string): DeviceFormFactor =>
+  deviceClass === "phone" ||
+  deviceClass === "tablet" ||
+  deviceClass === "tv" ||
+  deviceClass === "watch"
+    ? deviceClass
+    : "other";
 const decodeLeases = Schema.decodeUnknownEffect(Leases);
 const decodeCatalog = Schema.decodeUnknownEffect(Catalog);
 
@@ -151,8 +160,15 @@ export const readSimlockInventory = Effect.fn("DevicePool.readSimlockInventory")
     .filter((device) => device.state !== "deleted")
     .map((device) => {
       const lease = leaseOf(device.id);
+      // A physical device carries its class; an instance is classed by its model in the catalog.
+      const deviceClass =
+        device.class ??
+        catalog?.platforms.find((entry) => entry.platform === device.spec.platform)?.modelClasses?.[
+          device.spec.model
+        ];
       return {
         ...(lease ? { lease } : {}),
+        ...(deviceClass ? { formFactor: formFactorOf(deviceClass) } : {}),
         id: device.driverDeviceId,
         name: device.spec.model,
         platform: device.spec.platform,
@@ -204,6 +220,7 @@ export const readSimlockInventory = Effect.fn("DevicePool.readSimlockInventory")
           state,
           detail,
           ...(previous?.lease ? { lease: previous.lease } : {}),
+          ...(previous?.formFactor ? { formFactor: previous.formFactor } : {}),
         };
         if (existing < 0) devices.push(entry);
         else devices[existing] = entry;
