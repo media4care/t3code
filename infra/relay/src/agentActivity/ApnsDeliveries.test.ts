@@ -781,81 +781,84 @@ describe("ApnsDeliveries", () => {
       mode: "async",
       activityRecheckFails: true,
     },
-  ] as const)("processes signed push notification jobs: $name", ({ mode, activityRecheckFails }) => {
-    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
-    let apnsRequests = 0;
-    const payload = makeApnsDeliveryJobPayload({
-      kind: "push_notification",
-      userId: target.user_id,
-      deviceId: target.device_id,
-      token: "apns-device-token",
-      aggregate: null,
-      notification: {
-        title: "Thread",
-        body: "Input: Project",
-        environmentId: "env",
-        threadId: "thread",
-        deepLink: "/",
-        ...(mode === "async"
-          ? {
-              phase: "running" as const,
-              updatedAt: state.updatedAt,
-              notificationKind: "user_input" as const,
-            }
-          : {}),
-      },
-      createdAt: "1970-01-01T00:00:00.000Z",
-      expiresAt: "1970-01-01T00:10:00.000Z",
-      jobId: "job-push-1",
-    });
-    const signed = signApnsDeliveryJob({
-      secret: config.apnsDeliveryJobSigningSecret,
-      payload,
-    });
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.sync(() => {
-        apnsRequests += 1;
-        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
-      });
-
-    return Effect.gen(function* () {
-      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
-      const result = yield* deliveries.processSignedJob(yield* signed);
-
-      expect(result.kind).toBe("push_notification");
-      expect(result.ok).toBe(true);
-      expect(apnsRequests).toBe(activityRecheckFails ? 0 : 1);
-      expect(attempts).toMatchObject([
-        {
-          kind: "push_notification",
-          sourceJobId: "job-push-1",
-          token: "apns-device-token",
+  ] as const)(
+    "processes signed push notification jobs: $name",
+    ({ mode, activityRecheckFails }) => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      let apnsRequests = 0;
+      const payload = makeApnsDeliveryJobPayload({
+        kind: "push_notification",
+        userId: target.user_id,
+        deviceId: target.device_id,
+        token: "apns-device-token",
+        aggregate: null,
+        notification: {
+          title: "Thread",
+          body: "Input: Project",
           environmentId: "env",
           threadId: "thread",
-          deviceId: target.device_id,
-          ...(activityRecheckFails
-            ? { apnsReason: "Stale agent activity state skipped." }
-            : { apnsStatus: 200 }),
+          deepLink: "/",
+          ...(mode === "async"
+            ? {
+                phase: "running" as const,
+                updatedAt: state.updatedAt,
+                notificationKind: "user_input" as const,
+              }
+            : {}),
         },
-      ]);
-    }).pipe(
-      Effect.provide(
-        layerFor({
-          attempts,
-          currentActivityStates: [{ ...state, phase: "running" }],
-          activityRecheckFails,
-          currentTargets: [
-            {
-              ...target,
-              push_token: "apns-device-token",
-            },
-          ],
-          config: signingConfig,
-          execute,
-        }),
-      ),
-    );
-  });
+        createdAt: "1970-01-01T00:00:00.000Z",
+        expiresAt: "1970-01-01T00:10:00.000Z",
+        jobId: "job-push-1",
+      });
+      const signed = signApnsDeliveryJob({
+        secret: config.apnsDeliveryJobSigningSecret,
+        payload,
+      });
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.sync(() => {
+          apnsRequests += 1;
+          return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+        });
+
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.processSignedJob(yield* signed);
+
+        expect(result.kind).toBe("push_notification");
+        expect(result.ok).toBe(true);
+        expect(apnsRequests).toBe(activityRecheckFails ? 0 : 1);
+        expect(attempts).toMatchObject([
+          {
+            kind: "push_notification",
+            sourceJobId: "job-push-1",
+            token: "apns-device-token",
+            environmentId: "env",
+            threadId: "thread",
+            deviceId: target.device_id,
+            ...(activityRecheckFails
+              ? { apnsReason: "Stale agent activity state skipped." }
+              : { apnsStatus: 200 }),
+          },
+        ]);
+      }).pipe(
+        Effect.provide(
+          layerFor({
+            attempts,
+            currentActivityStates: [{ ...state, phase: "running" }],
+            activityRecheckFails,
+            currentTargets: [
+              {
+                ...target,
+                push_token: "apns-device-token",
+              },
+            ],
+            config: signingConfig,
+            execute,
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("delivers to other devices without reordering a device's queued jobs", () =>
     Effect.gen(function* () {

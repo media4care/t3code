@@ -138,7 +138,10 @@ describe("runMigrations", () => {
   );
 
   it.effect.each(
-    [73, 77, 80, 81, 82, 97, 103].flatMap((base) => [[base, "gap"] as const, [base, "unknown"] as const]),
+    [73, 77, 80, 81, 82, 97, 103].flatMap((base) => [
+      [base, "gap"] as const,
+      [base, "unknown"] as const,
+    ]),
   )("refuses a %s-based Explorer history with a %s", ([base, problem]) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
