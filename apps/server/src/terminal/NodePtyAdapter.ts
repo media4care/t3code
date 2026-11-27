@@ -46,8 +46,6 @@ export const NodePtyModuleLoaderRef = Context.Reference<NodePtyModuleLoader>(
   { defaultValue: () => loadNodePty },
 );
 
-let didEnsureSpawnHelperExecutable = false;
-
 const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
@@ -75,14 +73,11 @@ const ensureNodePtySpawnHelperExecutable = Effect.fn(function* () {
   const fs = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
   if (platform === "win32") return;
-  if (didEnsureSpawnHelperExecutable) return;
 
   const helperPath = yield* resolveNodePtySpawnHelperPath;
   if (helperPath && (yield* fs.exists(helperPath))) {
     yield* fs.chmod(helperPath, 0o755).pipe(Effect.orElseSucceed(() => undefined));
   }
-  // Set only after the repair finishes, so a check cut off by the spawn deadline runs again.
-  didEnsureSpawnHelperExecutable = true;
 });
 
 // node-pty has no public readiness event; ready_datapipe sets pid before our listener.
@@ -242,7 +237,8 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
       }),
   }).pipe(Effect.orDie);
 
-  const ensureSpawnHelperExecutable = ensureNodePtySpawnHelperExecutable().pipe(
+  let spawnHelperEnsured = false;
+  const repairSpawnHelper = ensureNodePtySpawnHelperExecutable().pipe(
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),
     Effect.provideService(HostProcess.Platform, platform),
@@ -250,7 +246,16 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
     Effect.orElseSucceed(() => undefined),
     // Terminal startup runs uninterruptibly; a stalled helper check must not hold its locks.
     Effect.interruptible,
+    // Marked only once the repair finishes, so a check cut off by the deadline runs again.
+    Effect.andThen(
+      Effect.sync(() => {
+        spawnHelperEnsured = true;
+      }),
+    ),
     Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.void }),
+  );
+  const ensureSpawnHelperExecutable = Effect.suspend(() =>
+    spawnHelperEnsured ? Effect.void : repairSpawnHelper,
   );
 
   return PtyAdapter.PtyAdapter.of({
