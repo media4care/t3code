@@ -2,7 +2,7 @@
 
 Track token usage, cache hit rates, estimated API-equivalent costs, and pooled subscription quotas across all connected environments.
 
-- **Open Usage**: Click **Usage** in the sidebar, press `mod+u` (web/desktop outside terminals), or pick **Usage** on mobile.
+- **Open Usage**: Click **Usage** at the top of **Settings**, press `mod+u` (web/desktop outside terminals), or pick **Usage** on mobile.
 - **Quick shortcuts** (web/desktop on Usage): `C` (Cost), `T` (Tokens), `L` (Limits), `mod+Shift+1/2/3/4` (24h / 7d / 30d / 90d), `Esc` (back).
 
 ## Understand your usage
