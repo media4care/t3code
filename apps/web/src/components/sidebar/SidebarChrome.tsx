@@ -1,10 +1,7 @@
 import {
-  LightbulbIcon,
   FlaskConicalIcon,
-  PackageIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
-  ChartNoAxesColumnIcon,
   GitForkIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -43,7 +40,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { rejectedReleaseProjectsAtom } from "../releases/releaseRejections";
 import { readIssueListPreferences } from "../issue/issueListPreferences";
@@ -54,6 +50,7 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -153,29 +150,30 @@ function HistoryNavigationButton({
   );
   const Icon = direction === "back" ? ArrowLeftIcon : ArrowRightIcon;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            aria-label={label}
-            className={cn(
-              "[-webkit-app-region:no-drag]",
-              onBackdrop && "relative top-auto translate-y-0",
-            )}
-            disabled={!enabled}
-            onClick={() => navigateHistory(direction)}
-            size="icon-sm"
-            variant={onBackdrop ? "media-navigation" : "ghost"}
-          />
-        }
-      >
-        <Icon className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipPopup side="bottom">
-        {label}
-        {shortcutLabel ? ` (${shortcutLabel})` : ""}
-      </TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger
+      render={
+        <Button
+          aria-label={label}
+          className={cn(
+            "[-webkit-app-region:no-drag]",
+            onBackdrop && "relative top-auto translate-y-0",
+          )}
+          disabled={!enabled}
+          onClick={() => navigateHistory(direction)}
+          size="icon-sm"
+          variant={onBackdrop ? "media-navigation" : "ghost"}
+        />
+      }
+      label={
+        <>
+          {label}
+          {shortcutLabel ? ` (${shortcutLabel})` : ""}
+        </>
+      }
+      side="bottom"
+    >
+      <Icon className="size-3.5" />
+    </SharedTooltipTrigger>
   );
 }
 
@@ -227,16 +225,14 @@ function SidebarUtilityItem({
 }) {
   return (
     <SidebarMenuItem className="shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
-              {icon}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="top">{tooltip}</TooltipPopup>
-      </Tooltip>
+      <SharedTooltipTrigger
+        render={
+          <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            {icon}
+          </SidebarMenuButton>
+        }
+        label={tooltip}
+      />
       {badge ? (
         <span
           aria-hidden="true"
@@ -284,13 +280,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/git", search: resolveGitExplorerSearch(threadContext) });
   };
 
-  const handleUsageClick = () => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/usage" });
-  };
-
   const handleBackClick = () => {
     closeMobileSidebar();
     void navigateToMainApp();
@@ -309,9 +298,12 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          {/* Releases, Insights and Usage live in Settings, so Releases' badge shows here. */}
           <SidebarUtilityItem
             icon={<SettingsIcon />}
-            label={gt("Settings")}
+            label={releasesRejected ? gt("Settings, Releases review rejected") : gt("Settings")}
+            tooltip={releasesRejected ? gt("Settings · Releases review rejected") : gt("Settings")}
+            badge={releasesRejected}
             onClick={handleSettingsClick}
           />
           {pullRequestsSupported ? (
@@ -330,7 +322,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<GitForkIcon />}
-            label="Git Explorer"
+            label={gt("Git Explorer")}
             onClick={handleGitExplorerClick}
           />
           <SidebarUtilityItem
@@ -340,29 +332,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               closeMobileSidebar();
               void navigate({ to: "/qa" });
             }}
-          />
-          <SidebarUtilityItem
-            icon={<PackageIcon />}
-            label={releasesRejected ? "Releases, review rejected" : "Releases"}
-            tooltip={releasesRejected ? "Releases · review rejected" : "Releases"}
-            badge={releasesRejected}
-            onClick={() => {
-              closeMobileSidebar();
-              void navigate({ to: "/releases" });
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<LightbulbIcon />}
-            label="Insights"
-            onClick={() => {
-              closeMobileSidebar();
-              void navigate({ to: "/insights" });
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label={gt("Usage")}
-            onClick={handleUsageClick}
           />
         </>
       )}

@@ -1,6 +1,6 @@
 # Workflow insights
 
-Open **Insights** in the sidebar or command palette to review how your agents work. On mobile, use the Insights tab; it may be under More if you have customized your tabs. Choose the environment whose threads you want to analyze.
+Open **Insights** at the top of **Settings** or from the command palette to review how your agents work. On mobile, use the Insights tab; it may be under More if you have customized your tabs. Choose the environment whose threads you want to analyze.
 
 In Insights settings, choose a project for the analyst to work from, an available Codex Astra model, the projects to review, and a daily time. The review runs at max reasoning effort. **Model for applying changes** picks the model for the threads that apply a recommendation; left alone, they use the analysis model at its default effort. Times use the server's local timezone, and the server must be running. Pause or resume the schedule anytime, or use **Refresh insights** to run a review immediately and display its results, including while the daily schedule is paused. Analyses consume your provider's normal usage allowance. **Reload saved reports** on web and desktop, or pull to refresh on mobile, reloads saved reports without starting an analysis.
 

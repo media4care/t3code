@@ -15,6 +15,24 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
 }));
 vi.mock("../chat/GlobalVoiceInputIndicator", () => ({ GlobalVoiceInputIndicator: () => null }));
 
+const APP_LINKS = ["Releases", "Insights", "Usage"];
+
+it("lists the pages that do not fit the sidebar footer first", async () => {
+  await page.viewport(1280, 800);
+  await using screen = await renderNav();
+
+  const apps = page.getByRole("group", { name: "Apps" });
+  expect(
+    Array.from(
+      apps.element().querySelectorAll("[data-settings-section]"),
+      (link) => link.textContent,
+    ),
+  ).toEqual(APP_LINKS);
+
+  await userEvent.click(apps.getByRole("button", { name: "Insights" }));
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/insights"));
+});
+
 it("ignores composing keys in the search", async () => {
   await using screen = await render(
     <SidebarProvider defaultOpen>
@@ -114,9 +132,12 @@ it("moves Tab through every settings section", async () => {
   await using _screen = await renderNav();
   await userEvent.click(page.getByRole("combobox", { name: "Search settings" }));
 
-  const sections = settingsNavGroups(false)
-    .flatMap((group) => group.paths)
-    .map((to) => SETTINGS_SECTION_LABELS[to]);
+  const sections = [
+    ...APP_LINKS,
+    ...settingsNavGroups(false)
+      .flatMap((group) => group.paths)
+      .map((to) => SETTINGS_SECTION_LABELS[to]),
+  ];
   const tabbed: string[] = [];
   for (let step = 0; step < sections.length; step += 1) {
     await userEvent.tab();
@@ -141,7 +162,7 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
     );
   }
   const groups = page.getByRole("group").elements();
-  expect(groups).toHaveLength(settingsNavGroups(false).length);
+  expect(groups).toHaveLength(settingsNavGroups(false).length + 1);
   for (const group of groups) {
     const first = group.querySelector("[data-settings-section]")?.textContent;
     const heading = document.getElementById(group.getAttribute("aria-labelledby") ?? "");

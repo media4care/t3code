@@ -11,6 +11,7 @@ import {
   ArchiveIcon,
   FlaskConicalIcon,
   BotIcon,
+  ChartNoAxesColumnIcon,
   createLucideIcon,
   CalendarClockIcon,
   FileDiffIcon,
@@ -23,7 +24,9 @@ import {
   PanelsTopLeftIcon,
   KeyboardIcon,
   KeyRoundIcon,
+  LightbulbIcon,
   MicIcon,
+  PackageIcon,
   PaletteIcon,
   SearchIcon,
   ServerIcon,
@@ -35,6 +38,7 @@ import {
 } from "lucide-react";
 import { resolveEventKeys } from "@t3tools/shared/keybindings";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
 import { T, useGT, useMessages } from "gt-react";
 
 import { cn } from "../../lib/utils";
@@ -50,6 +54,7 @@ import {
   SidebarInput,
 } from "../ui/sidebar";
 import { scrollToSettingsTarget } from "./settingsLayout";
+import { useSettingsSectionPrefetch } from "./useSettingsSectionPrefetch";
 import {
   searchSettings,
   revealSettingsSearchTarget,
@@ -65,6 +70,7 @@ import {
 } from "./useAvailableSettingsSearchItems";
 import { handleSettingsSectionKeyDown } from "./settingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
+import { rejectedReleaseProjectsAtom } from "../releases/releaseRejections";
 
 const SnapShotIcon = createLucideIcon("snap-shot", [
   [
@@ -138,6 +144,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const m = useMessages();
   const navArea = workspaceAreaProps("settings-nav", 0, gt("Settings sections"));
   const navigate = useNavigate();
+  const preloadSection = useSettingsSectionPrefetch();
   const currentHash = useLocation({ select: (location) => location.hash });
   const activePath = SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname;
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +154,18 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const searchableItems = useAvailableSettingsSearchItems();
   const navGroups = settingsNavGroups(useHasSecretProvidersEnvironment());
+  const releasesRejected = useAtomValue(rejectedReleaseProjectsAtom).length > 0;
+  // Pages that do not fit the sidebar footer row, listed first like mobile's Settings screen.
+  const appLinks = [
+    {
+      to: "/releases",
+      icon: PackageIcon,
+      label: gt("Releases"),
+      badge: releasesRejected ? gt("Review rejected") : null,
+    },
+    { to: "/insights", icon: LightbulbIcon, label: gt("Insights"), badge: null },
+    { to: "/usage", icon: ChartNoAxesColumnIcon, label: gt("Usage"), badge: null },
+  ] as const;
   const results = searchSettings(query, searchableItems, m);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -243,12 +262,18 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     if (results.length === 0) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveResultIndex((activeResultIndex + 1) % results.length);
+      const next = (activeResultIndex + 1) % results.length;
+      setActiveResultIndex(next);
+      const result = results[next];
+      if (result) preloadSection(result.to);
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveResultIndex((activeResultIndex - 1 + results.length) % results.length);
+      const next = (activeResultIndex - 1 + results.length) % results.length;
+      setActiveResultIndex(next);
+      const result = results[next];
+      if (result) preloadSection(result.to);
       return;
     }
     if (event.key === "Enter") {
@@ -353,6 +378,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       isActive={index === activeResultIndex}
                       className="h-auto min-h-10 items-start"
                       onMouseMove={() => setActiveResultIndex(index)}
+                      onPointerEnter={() => preloadSection(item.to)}
                       onClick={() => handleSearchResultClick(item)}
                     >
                       <SettingsSectionIcon to={item.to} />
@@ -383,6 +409,49 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                   </SidebarMenu>
                 )}
                 <div onKeyDown={handleSettingsSectionKeyDown} className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1 max-md:first:border-t-0 max-md:first:pt-0">
+                    <h3 id="settings-nav-apps" className="sr-only">
+                      <T>Apps</T>
+                    </h3>
+                    <div role="group" aria-labelledby="settings-nav-apps">
+                      <SidebarMenu>
+                        {appLinks.map(({ to, icon: Icon, label, badge }) => (
+                          <SidebarMenuItem key={to}>
+                            <SidebarMenuButton
+                              data-settings-section={to}
+                              aria-label={badge ? `${label}, ${badge}` : undefined}
+                              onClick={() => void navigate({ to })}
+                            >
+                              <span className="relative inline-flex shrink-0">
+                                <Icon className="size-4" />
+                                {badge ? (
+                                  <span
+                                    aria-hidden
+                                    className="absolute -end-0.5 -top-0.5 size-1.5 rounded-full bg-destructive"
+                                  />
+                                ) : null}
+                              </span>
+                              <span
+                                className={cn("truncate", !compactSearchOpen && "max-md:sr-only")}
+                              >
+                                {label}
+                              </span>
+                              {badge ? (
+                                <span
+                                  className={cn(
+                                    "ms-auto shrink-0 text-2xs text-destructive-foreground",
+                                    !compactSearchOpen && "max-md:hidden",
+                                  )}
+                                >
+                                  {badge}
+                                </span>
+                              ) : null}
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </div>
+                  </div>
                   {navGroups.map((group, index) => (
                     <div
                       key={group.heading}
@@ -409,6 +478,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                                   data-settings-section={to}
                                   aria-current={isActive ? "page" : undefined}
                                   isActive={isActive}
+                                  onPointerEnter={() => preloadSection(to)}
+                                  onFocus={() => preloadSection(to)}
                                   onClick={() => handleSectionClick(to)}
                                 >
                                   <Icon />
