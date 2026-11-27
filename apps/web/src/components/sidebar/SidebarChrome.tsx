@@ -1,10 +1,7 @@
 import {
-  LightbulbIcon,
   FlaskConicalIcon,
-  PackageIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
-  ChartNoAxesColumnIcon,
   GitForkIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -283,13 +280,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/git", search: resolveGitExplorerSearch(threadContext) });
   };
 
-  const handleUsageClick = () => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/usage" });
-  };
-
   const handleBackClick = () => {
     closeMobileSidebar();
     void navigateToMainApp();
@@ -308,9 +298,12 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          {/* Releases, Insights and Usage live in Settings, so Releases' badge shows here. */}
           <SidebarUtilityItem
             icon={<SettingsIcon />}
-            label={gt("Settings")}
+            label={releasesRejected ? gt("Settings, Releases review rejected") : gt("Settings")}
+            tooltip={releasesRejected ? gt("Settings · Releases review rejected") : gt("Settings")}
+            badge={releasesRejected}
             onClick={handleSettingsClick}
           />
           {pullRequestsSupported ? (
@@ -329,7 +322,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<GitForkIcon />}
-            label="Git Explorer"
+            label={gt("Git Explorer")}
             onClick={handleGitExplorerClick}
           />
           <SidebarUtilityItem
@@ -339,29 +332,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               closeMobileSidebar();
               void navigate({ to: "/qa" });
             }}
-          />
-          <SidebarUtilityItem
-            icon={<PackageIcon />}
-            label={releasesRejected ? "Releases, review rejected" : "Releases"}
-            tooltip={releasesRejected ? "Releases · review rejected" : "Releases"}
-            badge={releasesRejected}
-            onClick={() => {
-              closeMobileSidebar();
-              void navigate({ to: "/releases" });
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<LightbulbIcon />}
-            label="Insights"
-            onClick={() => {
-              closeMobileSidebar();
-              void navigate({ to: "/insights" });
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label={gt("Usage")}
-            onClick={handleUsageClick}
           />
         </>
       )}

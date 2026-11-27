@@ -340,9 +340,10 @@ it, and the tester build, plus approvals waiting in its pipeline and the version
 deployed to each environment. Pick a release to highlight it and see which
 builds carry it. The project list shows only projects with a `releases` command,
 marks those with a rejected store review, and opens on the first; with none set
-up, it shows every project. On mobile,
-Releases is in the navigation overflow. Web and desktop also offer **Open Releases** in the command
-palette and the configurable `releases.open` keyboard command.
+up, it shows every project. Releases is at the top of **Settings** on web and
+desktop, and in the navigation overflow on mobile. Web and desktop also offer
+**Open Releases** in the command palette and the configurable `releases.open`
+keyboard command.
 
 The project supplies this status itself. Add a command to its `t3.json` that
 prints a release status document as JSON on stdout:
@@ -386,8 +387,8 @@ the page keeps the last status and shows the error.
 
 **Apps** shows a build that is waiting for review, in review, approved or
 rejected under the live store build. A rejected review is listed in **Waiting on
-you** with the store's message and puts a badge on **Releases** in the sidebar
-and on the mobile tab bar (on **Settings** while Releases is in the overflow).
+you** with the store's message and puts a badge on **Settings** in the sidebar
+and on the mobile tab bar (on Releases itself when it has its own mobile tab).
 The badge clears when the store state changes, such as after you resubmit.
 
 **Waiting on you** lists pipeline approvals, failed steps, rejected store

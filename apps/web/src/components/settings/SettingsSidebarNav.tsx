@@ -11,6 +11,7 @@ import {
   ArchiveIcon,
   FlaskConicalIcon,
   BotIcon,
+  ChartNoAxesColumnIcon,
   createLucideIcon,
   CalendarClockIcon,
   FileDiffIcon,
@@ -23,7 +24,9 @@ import {
   PanelsTopLeftIcon,
   KeyboardIcon,
   KeyRoundIcon,
+  LightbulbIcon,
   MicIcon,
+  PackageIcon,
   PaletteIcon,
   SearchIcon,
   ServerIcon,
@@ -35,6 +38,7 @@ import {
 } from "lucide-react";
 import { resolveEventKeys } from "@t3tools/shared/keybindings";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
 import { T, useGT, useMessages } from "gt-react";
 
 import { cn } from "../../lib/utils";
@@ -66,6 +70,7 @@ import {
 } from "./useAvailableSettingsSearchItems";
 import { handleSettingsSectionKeyDown } from "./settingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
+import { rejectedReleaseProjectsAtom } from "../releases/releaseRejections";
 
 const SnapShotIcon = createLucideIcon("snap-shot", [
   [
@@ -149,6 +154,18 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const searchableItems = useAvailableSettingsSearchItems();
   const navGroups = settingsNavGroups(useHasSecretProvidersEnvironment());
+  const releasesRejected = useAtomValue(rejectedReleaseProjectsAtom).length > 0;
+  // Pages that do not fit the sidebar footer row, listed first like mobile's Settings screen.
+  const appLinks = [
+    {
+      to: "/releases",
+      icon: PackageIcon,
+      label: gt("Releases"),
+      badge: releasesRejected ? gt("Review rejected") : null,
+    },
+    { to: "/insights", icon: LightbulbIcon, label: gt("Insights"), badge: null },
+    { to: "/usage", icon: ChartNoAxesColumnIcon, label: gt("Usage"), badge: null },
+  ] as const;
   const results = searchSettings(query, searchableItems, m);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -392,6 +409,49 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                   </SidebarMenu>
                 )}
                 <div onKeyDown={handleSettingsSectionKeyDown} className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1 max-md:first:border-t-0 max-md:first:pt-0">
+                    <h3 id="settings-nav-apps" className="sr-only">
+                      <T>Apps</T>
+                    </h3>
+                    <div role="group" aria-labelledby="settings-nav-apps">
+                      <SidebarMenu>
+                        {appLinks.map(({ to, icon: Icon, label, badge }) => (
+                          <SidebarMenuItem key={to}>
+                            <SidebarMenuButton
+                              data-settings-section={to}
+                              aria-label={badge ? `${label}, ${badge}` : undefined}
+                              onClick={() => void navigate({ to })}
+                            >
+                              <span className="relative inline-flex shrink-0">
+                                <Icon className="size-4" />
+                                {badge ? (
+                                  <span
+                                    aria-hidden
+                                    className="absolute -end-0.5 -top-0.5 size-1.5 rounded-full bg-destructive"
+                                  />
+                                ) : null}
+                              </span>
+                              <span
+                                className={cn("truncate", !compactSearchOpen && "max-md:sr-only")}
+                              >
+                                {label}
+                              </span>
+                              {badge ? (
+                                <span
+                                  className={cn(
+                                    "ms-auto shrink-0 text-2xs text-destructive-foreground",
+                                    !compactSearchOpen && "max-md:hidden",
+                                  )}
+                                >
+                                  {badge}
+                                </span>
+                              ) : null}
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </div>
+                  </div>
                   {navGroups.map((group, index) => (
                     <div
                       key={group.heading}
