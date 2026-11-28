@@ -14,6 +14,7 @@ import {
   qaCombinedStatus,
   type QaSetScheduleInput,
   type QaSetDeviceInput,
+  type QaDeviceRequirement,
   type QaImportInput,
   type QaProjectInput,
   type QaStartInput,
@@ -184,14 +185,19 @@ interface QueuedRun {
 function queuedRuns(
   suites: ReadonlyArray<QaSuite>,
   ids: ReadonlyArray<string>,
-  only?: ReadonlyArray<string>,
+  options: { readonly only?: ReadonlyArray<string> | undefined; readonly physicalOnly?: boolean },
 ) {
+  const fits = (requirement: QaDeviceRequirement) =>
+    !options.physicalOnly || requirement.type === "physical";
   return ids.flatMap((suiteId): ReadonlyArray<QueuedRun> => {
     const suite = suites.find((candidate) => candidate.id === suiteId);
     const lanes = (suite ? qaSuiteLanes(suite) : []).filter(
-      (lane) => !only || only.includes(lane.key),
+      (lane) => !options.only || options.only.includes(lane.key),
     );
-    return lanes.length ? lanes.map((lane) => ({ suiteId, lane: lane.key })) : [{ suiteId }];
+    if (!lanes.length) return (suite?.devices ?? []).every(fits) ? [{ suiteId }] : [];
+    return lanes
+      .filter((lane) => fits(lane.requirement))
+      .map((lane) => ({ suiteId, lane: lane.key }));
   });
 }
 
@@ -1412,13 +1418,18 @@ const make = Effect.gen(function* () {
         (options.suiteId
           ? { type: "suite" as const, suiteId: options.suiteId }
           : { type: "affected" });
-      const ids =
+      const wanted =
         target.type === "suite"
           ? [target.suiteId]
           : target.type === "all"
             ? current.suites.map((suite) => suite.id)
             : current.freshness.filter((item) => item.needsRun).map((item) => item.suiteId);
-      const queue = queuedRuns(current.suites, ids, options.lanes);
+      const queue = queuedRuns(current.suites, wanted, {
+        only: options.lanes,
+        physicalOnly: scheduled?.configuration.physicalOnly === true,
+      });
+      // A schedule for physical devices leaves out the suites that have no run on one.
+      const ids = wanted.filter((id) => queue.some((run) => run.suiteId === id));
       const batch: NonNullable<ReturnType<typeof batches.get>> = {
         ref: scope.ref,
         pending: [...queue],

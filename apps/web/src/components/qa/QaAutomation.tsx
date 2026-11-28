@@ -10,6 +10,7 @@ import type {
 import {
   decodeQaCiReport,
   QA_CI_REPORT_EXAMPLE,
+  QA_PHYSICAL_ONLY_HINT,
   qaDefaultSchedule,
   qaScheduleLabel,
   qaRunSource,
@@ -108,6 +109,7 @@ export function QaAutomation({
                   ? "All suites"
                   : "Affected suites"}{" "}
               · <span className="font-mono">{schedule.configuration.branch}</span>
+              {schedule.configuration.physicalOnly ? " · Physical devices only" : ""}
             </p>
             <p className="text-muted-foreground">
               Next: {schedule.nextRunAt ? qaWhen(schedule.nextRunAt) : "Paused"}
@@ -341,6 +343,18 @@ function ScheduleEditor({
           ))}
         </SelectPopup>
       </Select>
+      <label className="flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={value.physicalOnly ?? false}
+          onChange={(event) => setValue({ ...value, physicalOnly: event.target.checked })}
+        />
+        <span>
+          Physical devices only
+          <span className="block text-muted-foreground">{QA_PHYSICAL_ONLY_HINT}</span>
+        </span>
+      </label>
       <Select
         value={value.timing.type}
         onValueChange={(type) => {
