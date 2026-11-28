@@ -206,7 +206,7 @@ When a suite needs a device, list it under `devices`:
 Each device has a `platform`, `ios` or `android`. Optionally set a `formFactor`
 (`phone`, `tablet`, `tv`, `watch` or `other`), a `type` (`virtual`, `physical`, or the
 default `any`), a `defaultDevice` name such as an AVD name, an `id`, and `os`, the
-major OS versions it must run, such as `["13", "15"]`. Up to four
+major OS versions it must run, such as `["13", "15"]`. Up to twelve
 devices can be listed; each gets a different device. QA picks a running emulator or
 simulator first, then one it can start, then a connected physical device. Choose
 another on the suite to keep using it on this environment. If a chosen device is
@@ -294,6 +294,9 @@ eligible for a rerun. Recurring schedules are not configured by this action.
 
 To run tests regularly, use **Recurring runs → Add schedule** in QA. Choose all
 suites, affected suites, or one suite, then set an interval or a time and weekdays.
+Turn on **Physical devices only** to leave out every run that would use an emulator
+or simulator: a suite run per device keeps the devices marked `"type": "physical"`,
+and a suite that needs any other device is skipped. Suites without devices still run.
 Fixed times use the time zone you enter. Each branch or tag has its own schedule,
 so you can run `main` and a release tag nightly. Schedules stay on that environment
 across restarts; they are not copied with the repository. The environment's server

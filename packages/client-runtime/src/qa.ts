@@ -118,6 +118,9 @@ export const QA_OFF_EVERYWHERE =
 export const QA_SHARED_RESULTS_NOTICE =
   "Run summaries are saved in t3.qa-results/. Commit and share these files with your changes so other checkouts can reuse matching results. Full logs and reports stay on the execution environment.";
 
+export const QA_PHYSICAL_ONLY_HINT =
+  "Skips every run that would use an emulator or simulator. Suites without devices still run.";
+
 export function qaDefaultSchedule(branch: string): QaScheduleConfiguration {
   return {
     enabled: true,

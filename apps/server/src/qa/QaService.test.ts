@@ -1887,6 +1887,62 @@ describe("QA devices", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("runs a schedule for physical devices only where a suite declares one", () =>
+    Effect.gen(function* () {
+      const suites: ReadonlyArray<QaSuite> = [
+        { id: "unit", name: "Unit", command: "node run.cjs" },
+        {
+          id: "tablets",
+          name: "Tablet flows",
+          command: "node run.cjs",
+          runPer: "device",
+          devices: [
+            { id: "emulator", platform: "android", formFactor: "tablet" },
+            { id: "samsung", platform: "android", formFactor: "tablet", type: "physical" },
+          ],
+        },
+        { ...flows, id: "anyDevice" },
+        {
+          ...flows,
+          id: "virtualOnly",
+          runPer: "device",
+          devices: [{ id: "emulator", platform: "android", type: "virtual" }],
+        },
+      ];
+      const { service, tick, sql, git } = yield* fixture(
+        "",
+        suites,
+        {},
+        { pool: [tablet, emulator] },
+      );
+      yield* service.setSchedule({
+        projectId,
+        configuration: {
+          enabled: true,
+          branch: (yield* git(["branch", "--show-current"])).stdout.trim(),
+          timeZone: "UTC",
+          timing: { type: "interval", everyMs: 86_400_000 },
+          target: { type: "all" },
+          physicalOnly: true,
+        },
+      });
+      yield* sql`UPDATE qa_ref_schedules SET schedule_json = json_set(schedule_json, '$.nextRunAt', '2000-01-01T00:00:00.000Z')`;
+      yield* tick;
+      const finished = yield* service.subscribe({ projectId }).pipe(
+        Stream.filter((state) => state.schedule?.lastStatus === "passed"),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      assert.sameMembers(
+        finished.recentRuns.map((run) => `${run.suite.id}:${run.lane ?? ""}`),
+        ["unit:", "tablets:samsung"],
+      );
+      assert.isTrue(
+        finished.recentRuns.find((run) => run.lane === "samsung")?.devices?.[0]?.physical,
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("runs a lane per OS version on a device with that version", () =>
     Effect.gen(function* () {
       const versions: QaSuite = {

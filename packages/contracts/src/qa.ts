@@ -115,7 +115,7 @@ export const QaSuite = Schema.Struct({
   devices: Schema.optionalKey(
     Schema.Array(QaDeviceRequirement).check(
       Schema.isMinLength(1),
-      Schema.isMaxLength(4),
+      Schema.isMaxLength(12),
       Schema.makeFilter(
         (devices) => new Set(devices.map(qaDeviceRequirementKey)).size === devices.length,
       ),
@@ -410,6 +410,8 @@ export const QaScheduleConfiguration = Schema.Struct({
     Schema.Struct({ type: Schema.Literals(["all", "affected"]) }),
     Schema.Struct({ type: Schema.Literal("suite"), suiteId: ShortText }),
   ]),
+  /** Leaves out every run that would use a device its suite does not declare `physical`. */
+  physicalOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type QaScheduleConfiguration = typeof QaScheduleConfiguration.Type;
 

@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import {
   decodeQaCiReport,
   QA_CI_REPORT_EXAMPLE,
+  QA_PHYSICAL_ONLY_HINT,
   qaDefaultSchedule,
   qaScheduleLabel,
   qaRunSource,
@@ -111,6 +112,7 @@ export function QaAutomation({
                   ? "All suites"
                   : "Affected suites"}{" "}
               · {schedule.configuration.branch}
+              {schedule.configuration.physicalOnly ? " · Physical devices only" : ""}
             </Text>
             <Text className="text-sm text-foreground-muted">
               Next: {schedule.nextRunAt ? qaWhen(schedule.nextRunAt) : "Paused"}
@@ -290,6 +292,16 @@ function ScheduleEditor({
           <Text>{options.find((item) => item.id === target)?.title ?? "Select suites"} ▾</Text>
         </Pressable>
       </Menu>
+      <Pressable
+        accessibilityRole="checkbox"
+        accessibilityLabel="Physical devices only"
+        accessibilityState={{ checked: value.physicalOnly ?? false }}
+        onPress={() => setValue({ ...value, physicalOnly: !value.physicalOnly })}
+        className="min-h-11 justify-center rounded-lg border border-border-subtle px-3 py-2"
+      >
+        <Text>{value.physicalOnly ? "✓ " : ""}Physical devices only</Text>
+        <Text className="text-xs text-foreground-muted">{QA_PHYSICAL_ONLY_HINT}</Text>
+      </Pressable>
       <View className="flex-row flex-wrap gap-2">
         <Button
           label="At a fixed time"

@@ -414,10 +414,12 @@ it("manages recurring runs and imports CI results in the selected environment", 
   await screen.getByRole("combobox", { name: "Scheduled suites" }).click();
   await page.getByRole("option", { name: "Affected suites", exact: true }).click();
   await screen.getByRole("textbox", { name: "Time zone", exact: true }).fill("Europe/Berlin");
+  await screen.getByRole("checkbox", { name: /^Physical devices only/ }).click();
   await screen.getByRole("button", { name: "Save schedule", exact: true }).click();
   await vi.waitFor(() =>
     expect(state.snapshots.beta?.schedule?.configuration.target.type).toBe("affected"),
   );
+  expect(state.snapshots.beta?.schedule?.configuration.physicalOnly).toBe(true);
   expect(state.snapshots.alpha?.schedule).toBeNull();
   await screen.rerender(
     <SidebarProvider>
